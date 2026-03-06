@@ -2,37 +2,50 @@
 # Stays LEAN. Only active/in-progress state here.
 
 current_phase: "app-integration"
-current_focus: "End-to-end Tauri app testing with live mic"
+current_focus: "Live end-to-end testing with mic + Tauri app"
 
 active_work:
-  - id: "WS-04"
-    name: "Verify transcription works end-to-end in Tauri"
-    status: in_progress
-    notes: "Audio thresholds lowered, thread-safe queue fixed, needs live speech test"
+  - id: "WS-05"
+    name: "Live speech test in Tauri app"
+    status: pending
+    notes: "Turn-based transcript implemented, all bugs resolved, needs real mic validation"
 
 blockers: []
 
 pending_decisions: []
 
 recent_sessions:
-  - id: "session-001"
-    date: "2026-03-05"
-    focus: "Full v2 rebuild: LFM2.5 upgrade + Tauri app"
+  - id: "session-003"
+    date: "2026-03-06"
+    focus: "Turn-based transcript buffering + bug fixes + docs update"
     completed:
-      - "Phases 1-10: Full pipeline + FastAPI + Tauri app + meeting notes"
-    next_recommended: "Download models, install deps, smoke test"
+      - "BUG-001: Question trigger fallthrough (direct generation on extraction failure)"
+      - "BUG-002: Turn-based transcript buffering (TranscriptBuffer + upsert + WebSocket protocol)"
+      - "BUG-003: Session lifecycle for export (keep session alive after stop)"
+      - "Created src/api/transcript_buffer.py (turn accumulation with pause detection)"
+      - "Rewired session.py with turn callbacks and thread-safe queue bridge"
+      - "New WebSocket protocol: transcript_update / transcript_final"
+      - "Rebuilt TranscriptPane with turn-based UI (active indicator, double-click edit)"
+      - "Added 48 new tests (transcript_buffer, transcript_store, session callbacks)"
+      - "Updated all docs: CLAUDE.md, ARCHITECTURE.md, README.md, PROGRESS.yaml"
+    next_recommended: "Test with live speech, verify turns appear correctly in UI"
   - id: "session-002"
     date: "2026-03-05"
     focus: "Debug no-transcription bug in Tauri app"
     completed:
       - "Fixed asyncio.Queue thread-safety (loop.call_soon_threadsafe)"
       - "Moved model loading from event loop to background thread"
-      - "Lowered audio thresholds for MacBook mic (rms 0.005→0.002, peak 0.02→0.01)"
-      - "Replaced all print() with logger in audio_capture.py"
+      - "Lowered audio thresholds for MacBook mic (rms 0.005->0.002, peak 0.02->0.01)"
       - "Added 28 tests (audio_capture, session, transcript_store)"
       - "Added audio health diagnostics + StatusBar loading/warning UI"
     next_recommended: "Test with live speech, verify transcription appears in UI"
+  - id: "session-001"
+    date: "2026-03-05"
+    focus: "Full v2 rebuild: LFM2.5 upgrade + Tauri app"
+    completed:
+      - "Phases 1-10: Full pipeline + FastAPI + Tauri app + meeting notes"
+    next_recommended: "Download models, install deps, smoke test"
 
 completed_summary:
-  total_items: 14
-  total_sessions: 2
+  total_items: 18
+  total_sessions: 3

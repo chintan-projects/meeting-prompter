@@ -1,325 +1,298 @@
-# Meeting Intelligence CLI
+# Meeting Prompter
 
-A real-time meeting assistant that listens to audio, transcribes speech, and answers questions using your documentation. Everything runs locally on your Mac using [LFM2-Audio](https://huggingface.co/LiquidAI/LFM2-Audio-1.5B-GGUF) for transcription and [LFM2-1.2B-RAG](https://huggingface.co/LiquidAI/LFM2-1.2B-RAG) for answer generation.
+Real-time meeting intelligence that transcribes audio, detects questions and topics, retrieves context via ColBERT RAG, and generates mode-aware responses. Runs entirely on Apple Silicon using [LFM2.5-Audio](https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-GGUF) for transcription and [LFM2.5-1.2B-Instruct](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF) for generation. Ships as a native Tauri desktop app with live transcript editing and a CLI mode for headless use.
 
 ![Python](https://img.shields.io/badge/python-3.10+-blue)
+![TypeScript](https://img.shields.io/badge/typescript-5.x-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Quick Start
 
+### Desktop App (Tauri)
+
 ```bash
-# Clone and setup
 git clone <repo-url>
-cd meeting-intelligence-cli
+cd meeting-prompter
+
+# Backend
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Download models (see Models section below)
+# Frontend
+cd app && npm install && cd ..
 
-# Run with your microphone
-python coach.py --mic
+# Launch (starts Python backend + React UI)
+cd app && npm run tauri dev
 ```
 
-Speak a question like *"How does Liquid AI handle edge deployment?"* and watch it generate an answer from your docs.
+### CLI Mode
+
+```bash
+source venv/bin/activate
+
+# Microphone
+python coach.py --mic
+
+# Live meeting (BlackHole virtual audio)
+python coach.py
+
+# Test with audio file
+python coach.py --test audio.wav
+
+# With meeting context (agenda, watch words)
+python coach.py --context meeting_context.yaml
+```
 
 ## Architecture
 
-The system uses a **hybrid RAG pipeline**: extraction for grounding + LFM2-1.2B-RAG for fluent answers.
+The system uses a **three-model pipeline** with four trigger types. Each trigger gets a purpose-built prompt template for generation.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         Audio Pipeline                               │
-│                                                                      │
-│  Microphone → Audio Capture → LFM2-Audio-1.5B → Question Detector   │
-│                 (4s chunks)    (transcription)    (pattern matching) │
-└────────────────────────────────────┬────────────────────────────────┘
-                                     │
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      Hybrid RAG Pipeline                             │
-│                                                                      │
-│  Question ──► ColBERT ──► Sentence Extraction ──► LFM2-1.2B-RAG     │
-│               (top-3)     (grounded context)      (fluent answer)   │
-│                                                                      │
-│  Stage 1: RETRIEVAL        Stage 2: GROUNDING     Stage 3: GENERATION│
-│  - Semantic search         - Score sentences      - ChatML format    │
-│  - Multi-chunk combine     - Extract top-3        - RAG-optimized    │
-│  - Section-aware           - Validate relevance   - Synthesize       │
-└─────────────────────────────────────────────────────────────────────┘
+│                         Audio Pipeline                              │
+│                                                                     │
+│  Microphone ──► Audio Capture ──► LFM2.5-Audio ──► Filter Chain     │
+│                  (4s chunks)      (transcription)   (hallucination  │
+│                                                      + noise)       │
+└──────────────────────────────────────┬──────────────────────────────┘
+                                       │
+                         ┌─────────────┴─────────────┐
+                         │                           │
+                  TranscriptBuffer            ConversationBuffer
+                  (turn accumulation)         (rolling 90s window)
+                         │                           │
+                  Store + WebSocket            Trigger Engine
+                  (transcript_update /    ┌────┬────┬────┐
+                   transcript_final)    ALERT  Q  TOPIC FOLLOW-UP
+                         │                │    │    │    │
+                   Tauri App UI           └────┴────┴────┘
+                   (TranscriptPane)              │
+                                       RAG (ColBERT top-k)
+                                                 │
+                                       Mode-Aware Generator
+                                                 │
+                                       Dashboard / PromptsPane
 ```
 
-### Why This Hybrid Approach?
+### Three-Model Pipeline
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| **Extraction Only** | Fast, no hallucination | Choppy, no synthesis |
-| **Generation Only** | Fluent answers | Hallucination risk |
-| **Hybrid** (our approach) | Best of both | Slightly slower (~500ms) |
+| Model | Size | Stage | Latency |
+|-------|------|-------|---------|
+| LFM2.5-Audio-1.5B | 1.2 GB | Speech-to-text | ~300ms |
+| LFM2-ColBERT-350M | 1.4 GB | Semantic retrieval | ~100ms |
+| LFM2.5-1.2B-Instruct | 700 MB | Mode-aware generation | ~500ms |
 
-**LFM2-1.2B-RAG** is ideal because it's trained on 1M+ multi-turn, multi-document RAG samples. The extraction stage ensures grounding while the generation stage produces natural, conversational responses.
+### Four Trigger Types
 
-### Components
+| Type | Priority | Description | Max Tokens |
+|------|----------|-------------|------------|
+| ALERT | 1 | Watch word detected | 100 |
+| QUESTION | 2 | Direct question in speech | 200 |
+| TOPIC_MATCH | 3 | Discussion matches docs | 100 |
+| FOLLOW_UP | 4 | Pause after topic | 75 |
 
-| Component | Model/Tool | What it does |
-|-----------|------------|--------------|
-| **Audio Capture** | sounddevice | Streams 4-second chunks from mic or BlackHole |
-| **Transcription** | LFM2-Audio-1.5B | Speech-to-text via llama.cpp subprocess (~300ms) |
-| **Hallucination Filter** | Pattern matching | Filters common LFM2-Audio hallucination patterns |
-| **Question Detection** | Regex + scoring | Identifies questions by structure, keywords, and confidence |
-| **Question Buffer** | Time-based | Buffers speech chunks, flushes on 1.5s pause |
-| **RAG Search** | LFM2-ColBERT-350M | Section-aware semantic search, returns top-3 chunks (~100ms) |
-| **Answer Extraction** | Sentence scoring | Extracts relevant sentences for grounding |
-| **Answer Generation** | LFM2-1.2B-RAG | Generates fluent answers from grounded context (~500ms) |
-| **Vibe Check** | Keyword scoring | Detects emotional tone (Excited/Frustrated/etc.) |
+### Turn-Based Transcript
 
-### Why Three Models?
+Raw ASR chunks (~4 seconds each) are accumulated into coherent speech turns via pause detection on the backend. A dual-buffer architecture keeps display and intelligence independent:
 
-- **LFM2-Audio-1.5B** is a multimodal model that directly processes audio waveforms. It runs as a subprocess via the `llama-lfm2-audio` binary.
+- **TranscriptBuffer** accumulates chunks into turns for the UI (2s pause boundary, 30s max duration)
+- **ConversationBuffer** maintains a rolling 90s window for trigger detection
 
-- **LFM2-ColBERT-350M** provides semantic document retrieval. Unlike keyword search, it understands that "neural network alternatives" should match content about "LFM architecture" even without exact word overlap.
+Turns stream to the frontend via WebSocket (`transcript_update` for partial, `transcript_final` for completed) with upsert semantics that preserve user edits.
 
-- **LFM2-1.2B-RAG** is specialized for RAG tasks - trained on 1M+ multi-document QA samples. It generates fluent answers while respecting the provided context. The extraction stage ensures grounding before generation.
+### Hybrid RAG Pipeline
 
-This separation keeps each component focused on what it does best.
+Each trigger feeds through ColBERT semantic retrieval, then a trigger-specific prompt template:
 
----
+1. **Retrieval**: ColBERT top-k with section-aware chunking (400 tokens, 50 overlap)
+2. **Grounding**: Sentence extraction scores and filters relevant context
+3. **Generation**: LFM2.5-1.2B-Instruct with ChatML format, context budget split (30% conversation, 70% RAG)
 
-## RAG: Why ColBERT?
+Fallback chain: ColBERT -> Jaccard keyword search. Generation -> extraction bullets. Extraction -> "no match".
 
-### The Problem with Keyword Search
+## Desktop App
 
-Traditional keyword matching (Jaccard similarity) fails for semantic queries:
+The Tauri app provides a dual-pane interface:
+
+```
+┌─────────────────────────────────────────────────┐
+│ Meeting Prompter    [Recording]   00:12:34       │
+├──────────────────────┬──────────────────────────┤
+│   TRANSCRIPT         │   PROMPTS                │
+│                      │                          │
+│  [12:01]             │  ALERT: "pricing"        │
+│  What about the      │  Our pricing model is... │
+│  deployment timeline │                          │
+│  for Edge SDK?       │  ANSWER                  │
+│  ●                   │  Q: Deployment timeline?  │
+│                      │  Edge SDK ships Q2...    │
+│  [12:02]             │                          │
+│  We're targeting     │  TOPIC: compliance       │
+│  Q2 for the beta     │  SOC2 audit completed... │
+│  release.            │                          │
+│                      │  FOLLOW-UP               │
+│  [12:03]             │  Ask about HIPAA status  │
+│  And compliance?     │                          │
+├──────────────────────┴──────────────────────────┤
+│  Settings  Export Notes  Mic: BlackHole          │
+└─────────────────────────────────────────────────┘
+```
+
+- **Left pane**: Live transcript with turn-based display. Active turns show a pulsing indicator. Double-click finalized turns to edit.
+- **Right pane**: Trigger results color-coded by type and priority-sorted (alerts on top).
+- **Meeting setup**: Configure agenda, watch words, and upload docs before recording.
+- **Meeting notes**: After recording, generate structured notes (summary, decisions, action items) and export to Markdown.
+
+## ColBERT: Why Late Interaction?
+
+Traditional keyword matching fails for semantic queries:
 
 | Query | Keyword Result | ColBERT Result |
 |-------|----------------|----------------|
 | "What is Liquid AI?" | Found | Found (77%) |
-| "neural network alternatives" | **MISS** (no keyword overlap) | **Found (74%)** |
-| "compete with OpenAI" | **MISS** (no keyword overlap) | **Found (76%)** |
+| "neural network alternatives" | **MISS** | **Found (74%)** |
+| "compete with OpenAI" | **MISS** | **Found (76%)** |
 
-### How ColBERT Works
+ColBERT creates **one vector per token** (128-dim) and uses **MaxSim** scoring to find token-level semantic matches. "Neural" matches "model", "alternatives" matches "architecture" -- even without keyword overlap.
 
-ColBERT uses **late interaction** - instead of compressing documents into single vectors, it creates **one vector per token**:
-
-```
-Traditional Embeddings:
-  Document → [single 768-dim vector]
-  Query    → [single 768-dim vector]
-  Score    = cosine_similarity
-
-ColBERT (Late Interaction):
-  Document → [[vec1], [vec2], [vec3], ...] (128-dim per token)
-  Query    → [[vec1], [vec2], [vec3], ...]
-  Score    = MaxSim (find best match for each query token)
-```
-
-**MaxSim** finds semantic connections at the token level. "Neural" matches "model", "alternatives" matches "architecture" - even without exact keyword overlap.
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                   RAGEngine                         │
-│                                                     │
-│  ┌─────────────────┐    ┌─────────────────┐        │
-│  │    ColBERT      │    │    Jaccard      │        │
-│  │   (primary)     │    │   (fallback)    │        │
-│  └────────┬────────┘    └─────────────────┘        │
-│           │                                         │
-│           ▼                                         │
-│  ┌─────────────────┐                               │
-│  │ LFM2-ColBERT    │  • 353M parameters            │
-│  │    -350M        │  • 128-dim per token          │
-│  └────────┬────────┘  • MaxSim scoring             │
-│           │                                         │
-│           ▼                                         │
-│  ┌─────────────────┐                               │
-│  │  PLAID Index    │  • Persisted to disk          │
-│  │                 │  • ~6s load time              │
-│  └─────────────────┘  • ~20MB for 76 chunks        │
-└─────────────────────────────────────────────────────┘
-```
-
-### Section-Aware Chunking
-
-Documents are chunked with awareness of document structure:
-
-1. **Markdown files** are split by `##` and `###` headers first
-2. Each section is then chunked into 400-token segments (ColBERT max is 512)
-3. Section headers are prepended to each chunk for context
-4. 50-token overlap preserves context at boundaries
-
-This ensures that when you ask "What is LEAP?", you get chunks from the LEAP section, not random nearby text.
-
-### Multi-Chunk Retrieval
-
-Instead of returning a single best match, we:
-1. Retrieve top-3 results from ColBERT
-2. Filter to chunks within 80% of top confidence
-3. Combine into richer context for answer extraction
-
-### Fallback
-
-If ColBERT fails to load (missing dependencies, memory pressure), the system falls back to keyword-based Jaccard similarity automatically.
-
-## Usage
-
-### Microphone Mode (easiest way to test)
-
-```bash
-python coach.py --mic
-```
-
-Uses your Mac's built-in microphone. Just speak a question and the CLI will:
-1. Transcribe your speech
-2. Search your docs for relevant context
-3. Generate and display an answer with source citation
-
-### Test with Audio File
-
-```bash
-python coach.py --test audio.wav
-```
-
-Or generate test audio with macOS text-to-speech:
-
-```bash
-say -o test.aiff "What makes Liquid AI different from other AI models?"
-afconvert test.aiff -o test.wav -d LEI16@16000 -f WAVE
-python coach.py --test test.wav
-```
-
-### Live Meeting Mode (Zoom/Meet/Teams)
-
-```bash
-python coach.py
-```
-
-Captures from BlackHole virtual audio device. Requires setup (see below).
-
-### List Audio Devices
-
-```bash
-python coach.py --list-devices
-```
+Documents are chunked with section awareness: split on markdown headers first, then into 400-token segments with 50-token overlap. Section headers prepended to each chunk for retrieval context.
 
 ## Models
 
-### Local Models (download to `models/`)
+### Local Models
 
 | Model | Size | Purpose |
 |-------|------|---------|
-| [LFM2-Audio-1.5B-Q8_0.gguf](https://huggingface.co/LiquidAI/LFM2-Audio-1.5B-GGUF) | 1.2 GB | Speech-to-text |
-| mmproj-audioencoder-LFM2-Audio-1.5B-Q8_0.gguf | 317 MB | Audio encoder |
-| audiodecoder-LFM2-Audio-1.5B-Q8_0.gguf | 358 MB | Audio decoder |
-| [LFM2-1.2B-RAG-Q4_K_M.gguf](https://huggingface.co/LiquidAI/LFM2-1.2B-RAG-GGUF) | 700 MB | RAG answer generation |
+| [LFM2.5-Audio-1.5B-Q4_0.gguf](https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-GGUF) | ~1.2 GB | Speech-to-text (4 files) |
+| [LFM2.5-1.2B-Instruct-Q4_K_M.gguf](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF) | 700 MB | Mode-aware generation |
 
-Also download the llama.cpp runner from [LFM2-Audio runners](https://huggingface.co/LiquidAI/LFM2-Audio-1.5B-GGUF/tree/main/runners) → `runners/macos-arm64/`
+Download to `~/Projects/_models/` (or set `MODELS_DIR` env var). Also need the `llama-liquid-audio-cli` runner binary in `runners/macos-arm64/`.
 
-### HuggingFace Models (auto-downloaded)
+### Auto-Downloaded Models
 
 | Model | Size | Purpose |
 |-------|------|---------|
 | [LFM2-ColBERT-350M](https://huggingface.co/LiquidAI/LFM2-ColBERT-350M) | 1.4 GB | Semantic document retrieval |
 
-ColBERT is downloaded automatically on first run via the `pylate` library. The PLAID index is built once and cached in `data/colbert_index/`.
+ColBERT downloads automatically on first run via `pylate`. The PLAID index is built once and cached in `data/colbert_index/`.
+
+## Project Structure
+
+```
+meeting-prompter/
+├── coach.py                          # CLI entry point
+├── config.yaml                       # Externalized thresholds and settings
+├── lib/
+│   ├── orchestrator.py               # MeetingOrchestrator — pipeline coordinator
+│   ├── config.py                     # Typed dataclass config loader
+│   ├── filters.py                    # Hallucination/noise/normalization
+│   ├── audio_capture.py              # Streaming mic/BlackHole capture
+│   ├── lfm2_wrapper.py               # LFM2.5-Audio subprocess wrapper
+│   ├── answer_extractor.py           # Sentence extraction (grounding fallback)
+│   ├── rag_generator.py              # LFM2.5-1.2B-Instruct wrapper (ChatML)
+│   ├── rag_engine.py                 # ColBERT + Jaccard orchestration
+│   ├── dashboard.py                  # CLI dashboard with trigger coloring
+│   ├── triggers/                     # Multi-mode trigger engine
+│   │   ├── types.py                  # TriggerType enum, Trigger dataclass
+│   │   ├── engine.py                 # Runs all triggers, priority sort
+│   │   ├── question_trigger.py       # Question detection (patterns + keywords)
+│   │   ├── alert_trigger.py          # Watch word scanning with cooldown
+│   │   ├── topic_trigger.py          # ColBERT-backed topic detection
+│   │   └── followup_trigger.py       # Pause-based follow-up suggestions
+│   ├── conversation/                 # Conversation intelligence
+│   │   ├── buffer.py                 # Rolling 90s transcript + triggers
+│   │   └── meeting_context.py        # YAML meeting context loader
+│   ├── generation/                   # Mode-aware generation
+│   │   ├── prompts.py                # ChatML templates per trigger type
+│   │   ├── generator.py              # ModeAwareGenerator
+│   │   └── types.py                  # GenerationResult dataclass
+│   └── colbert/                      # Semantic retrieval
+│       ├── retriever.py              # LFM2-ColBERT-350M + PLAID index
+│       ├── chunker.py                # Section-aware markdown chunking
+│       ├── index_manager.py          # Index persistence/cache
+│       └── normalizer.py             # Sigmoid score normalization
+├── src/api/                          # FastAPI backend (for Tauri app)
+│   ├── main.py                       # Server + WebSocket endpoints
+│   ├── session.py                    # Session lifecycle + queue bridge
+│   ├── transcript_buffer.py          # Turn-based ASR chunk accumulator
+│   ├── transcript_store.py           # Append-only store + edit overlay
+│   ├── notes_generator.py            # Structured notes via LLM
+│   └── routes/
+│       ├── session.py                # Start/stop/status/reindex
+│       ├── transcript.py             # WebSocket transcript stream
+│       ├── prompts.py                # WebSocket trigger results
+│       ├── notes.py                  # Notes generate/export/download
+│       └── context.py                # Meeting context upload
+├── app/                              # Tauri + React frontend
+│   ├── src-tauri/src/lib.rs          # Rust shell, spawns Python backend
+│   ├── src/
+│   │   ├── App.tsx                   # Root layout, WebSocket connections
+│   │   ├── components/
+│   │   │   ├── TranscriptPane.tsx    # Turn-based editable transcript
+│   │   │   ├── PromptsPane.tsx       # Live trigger results
+│   │   │   ├── StatusBar.tsx         # Session controls, audio health
+│   │   │   ├── MeetingSetup.tsx      # Pre-meeting context config
+│   │   │   └── NoteEditor.tsx        # Post-meeting notes editor
+│   │   ├── hooks/
+│   │   │   ├── useWebSocket.ts       # WS connection + reconnect
+│   │   │   └── useTranscript.ts      # Transcript state with upsert
+│   │   └── styles/global.css         # Dark theme, pulse animation
+│   └── package.json
+├── tests/                            # 76 tests across 5 files
+│   ├── test_audio_capture.py
+│   ├── test_transcript_buffer.py
+│   ├── test_transcript_store.py
+│   ├── test_session.py
+│   └── conftest.py
+├── models/                           # Symlink to ~/Projects/_models
+├── runners/                          # llama.cpp binaries (gitignored)
+├── docs/                             # Source documents for RAG
+└── data/colbert_index/               # PLAID index cache (gitignored)
+```
 
 ## Live Meeting Setup (BlackHole)
 
 To capture audio from video calls:
 
 1. Install BlackHole: `brew install blackhole-2ch`
-
-2. Create Multi-Output Device:
-   - Open Audio MIDI Setup (Applications > Utilities)
-   - Click + > Create Multi-Output Device
-   - Check both BlackHole 2ch and your speakers
-
+2. Create Multi-Output Device in Audio MIDI Setup (check both BlackHole 2ch and speakers)
 3. Set your meeting app's speaker to "Multi-Output Device"
-
-4. Run: `python coach.py`
+4. Run: `python coach.py` (CLI) or launch the Tauri app
 
 ## Adding Your Own Docs
 
-Drop PDF or Markdown files in `docs/`. The CLI loads all documents at startup.
+Drop PDF or Markdown files in `docs/`. The system loads all documents at startup and builds a ColBERT index.
 
 ```bash
 cp your-product-docs.pdf docs/
+rm -rf data/colbert_index/   # Force re-index
 python coach.py --mic
-```
-
-## Example Output
-
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  MEETING INTELLIGENCE AGENT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-? QUESTION:
-   How does Liquid AI handle edge deployment?
-
-ANSWER:
-   Liquid AI models are optimized for edge devices with 2x faster
-   inference and 90% less memory usage compared to traditional
-   transformer architectures.
-
-Source: LiquidAI_Technical_Whitepaper.pdf
-Confidence: [########............] 40%
-Vibe: Engaged
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Listening for next question... (Ctrl+C to stop)
-```
-
-## Project Structure
-
-```
-meeting-intelligence-cli/
-├── coach.py                  # Main entry point
-├── lib/
-│   ├── lfm2_wrapper.py       # LFM2-Audio subprocess wrapper
-│   ├── audio_capture.py      # Streaming audio capture (with level detection)
-│   ├── question_detector.py  # Question pattern matching + scoring
-│   ├── question_buffer.py    # Time-based question buffering
-│   ├── answer_extractor.py   # Sentence extraction for grounding
-│   ├── rag_generator.py      # LFM2-1.2B-RAG answer generation
-│   ├── hybrid_answerer.py    # Two-stage pipeline (extraction → generation)
-│   ├── rag_engine.py         # Document search (ColBERT + fallback)
-│   ├── vibe_check.py         # Tone detection
-│   └── colbert/              # Semantic retrieval module
-│       ├── __init__.py
-│       ├── retriever.py      # ColBERT model + PLAID index
-│       ├── chunker.py        # Section-aware document chunking
-│       ├── index_manager.py  # Index persistence/cache
-│       └── normalizer.py     # MaxSim score normalization
-├── models/                   # GGUF model files
-├── runners/                  # llama.cpp binaries
-├── docs/                     # Your documentation (PDF + Markdown)
-├── data/                     # Generated index files (gitignored)
-│   └── colbert_index/        # PLAID index cache
-└── output/                   # Transcription logs
 ```
 
 ## Requirements
 
 - macOS with Apple Silicon (M1/M2/M3/M4)
-- 16GB+ RAM (ColBERT ~1.5GB + LFM2-Audio ~2GB + LFM2-RAG ~1GB = ~4.5GB total)
+- 16GB+ RAM (~4.5GB for all three models)
 - Python 3.10+
+- Node.js 18+ and Rust (for Tauri app)
 
 ## Troubleshooting
 
-**No audio detected**: Check that your mic is working (`--list-devices`) or that BlackHole is configured correctly for meeting mode.
+**No audio detected**: Check mic with `--list-devices` or verify BlackHole config for meeting mode.
 
-**Model not found**: Ensure all GGUF files are in `models/` and the runner binary is in `runners/macos-arm64/`.
+**Model not found**: Ensure GGUF files are in `models/` (or `MODELS_DIR`) and `llama-liquid-audio-cli` is in `runners/macos-arm64/`.
 
-**Garbled transcriptions**: LFM2-Audio sometimes hallucinates on background noise. The system filters common patterns, but noisy environments may cause issues.
+**Garbled transcriptions**: LFM2.5-Audio can hallucinate on background noise. The hallucination filter catches common patterns, but noisy environments may cause issues.
 
-**Wrong answers returned**: If answers seem unrelated to questions, delete `data/colbert_index/` and restart to rebuild the index with section-aware chunking.
+**Wrong answers**: Delete `data/colbert_index/` and restart to rebuild the index.
 
-**ColBERT not loading**: If you see "using Jaccard fallback", check that `pylate` is installed (`pip install pylate`). On 8GB Macs, set `RAG_USE_FALLBACK=1` to use lighter keyword search.
+**ColBERT not loading**: Check `pylate` installation. On 8GB Macs, set `RAG_USE_FALLBACK=1` for keyword search.
 
-**Slow first startup**: First run downloads the ColBERT model (~1.4GB) and builds the PLAID index (~30-60s). Subsequent runs load from cache (~6s).
+**Slow first startup**: First run downloads ColBERT (~1.4GB) and builds the PLAID index (~30-60s). Subsequent runs load from cache (~6s).
+
+**Tauri build errors**: Ensure Rust toolchain and Node.js 18+ are installed. Run `cd app && npm install` to install frontend dependencies.
 
 ## License
 

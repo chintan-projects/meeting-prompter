@@ -56,4 +56,36 @@ completed_items:
     date: "2026-03-05"
     notes: "28 tests across 3 files, replaced print() with logger"
 
+  - id: "WS-04"
+    name: "Turn-based transcript buffering (BUG-002 proper fix)"
+    date: "2026-03-06"
+    notes: "TranscriptBuffer accumulates ASR chunks into turns via pause detection, WebSocket protocol split, upsert store, rebuilt TranscriptPane"
+    files:
+      - "src/api/transcript_buffer.py"
+      - "src/api/transcript_store.py"
+      - "src/api/session.py"
+      - "src/api/routes/transcript.py"
+      - "app/src/hooks/useTranscript.ts"
+      - "app/src/App.tsx"
+      - "app/src/components/TranscriptPane.tsx"
+      - "app/src/styles/global.css"
+      - "tests/test_transcript_buffer.py"
+      - "tests/test_transcript_store.py"
+      - "tests/test_session.py"
+  - id: "BUG-001-FIX"
+    name: "Question trigger fallthrough fix"
+    date: "2026-03-06"
+    notes: "Fall through to direct generation when extraction fails"
+    files: ["lib/generation/generator.py"]
+  - id: "BUG-003-FIX"
+    name: "Export notes session lifecycle fix"
+    date: "2026-03-06"
+    notes: "Keep session alive after stop so transcript data available for export"
+    files: ["src/api/routes/session.py"]
+  - id: "DOCS-UPDATE"
+    name: "Documentation update for v2 architecture"
+    date: "2026-03-06"
+    notes: "Updated CLAUDE.md, ARCHITECTURE.md, README.md, PROGRESS.yaml with turn-based transcript, Tauri app, full file reference"
+    files: ["CLAUDE.md", "ARCHITECTURE.md", "README.md", "PROGRESS.yaml"]
+
 sessions: []

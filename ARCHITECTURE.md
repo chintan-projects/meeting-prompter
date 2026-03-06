@@ -562,27 +562,159 @@ Prepending section headers to chunks dramatically improves retrieval for "What i
 
 ---
 
-## 18. File Reference
+## 18. Turn-Based Transcript Architecture (v2)
 
-| File | Purpose |
-|------|---------|
-| `coach.py` | Main orchestration, hallucination filter |
-| `lib/audio_capture.py` | Microphone streaming, silence detection |
-| `lib/lfm2_wrapper.py` | LFM2-Audio subprocess management |
-| `lib/question_buffer.py` | Time-based speech buffering |
-| `lib/question_detector.py` | Multi-factor question scoring |
-| `lib/answer_extractor.py` | Sentence extraction for grounding |
-| `lib/rag_generator.py` | LFM2-1.2B-RAG wrapper with ChatML |
-| `lib/hybrid_answerer.py` | Two-stage pipeline orchestration |
-| `lib/rag_engine.py` | ColBERT + Jaccard fallback |
-| `lib/colbert/retriever.py` | ColBERT model + PLAID index |
-| `lib/colbert/chunker.py` | Section-aware document chunking |
-| `lib/colbert/normalizer.py` | Sigmoid score normalization |
-| `lib/vibe_check.py` | Emotional tone detection |
+### Problem: Raw ASR Chunks Create Unreadable Transcripts
+
+LFM2.5-Audio processes audio in ~4-second chunks. Storing and displaying each chunk individually produces a fragmented, choppy transcript — each line is a partial phrase rather than a coherent thought.
+
+A naive frontend fix (grouping by time gaps) was insufficient because:
+- It didn't produce semantically meaningful groupings
+- The frontend had no knowledge of speech patterns
+- It couldn't handle real-time updates cleanly (groups would shift as new chunks arrived)
+
+### Solution: Backend Turn Accumulation
+
+Speech turns are accumulated on the **backend**, where the ASR pipeline has timing information and can detect pauses. The architecture introduces a new `TranscriptBuffer` layer between the ASR output and the transcript store.
+
+```
+Audio Chunk → LFM2.5-Audio → text
+                                │
+                    ┌───────────┴───────────┐
+                    │                       │
+            TranscriptBuffer         ConversationBuffer
+            (for display)            (for trigger detection)
+                    │                       │
+              on_update / on_final    Trigger Engine
+                    │
+            TranscriptStore.upsert()
+                    │
+            WebSocket push
+            (transcript_update / transcript_final)
+                    │
+            useTranscript.upsertSegment()
+                    │
+            TranscriptPane (paragraph blocks)
+```
+
+### Key Components
+
+| Component | File | Role |
+|-----------|------|------|
+| `TranscriptBuffer` | `src/api/transcript_buffer.py` | Accumulates raw chunks into turns. Detects boundaries via pause (2s) or max duration (30s). Fires `on_update` and `on_final` callbacks. |
+| `TranscriptStore.upsert()` | `src/api/transcript_store.py` | Creates or updates a segment by ID. Turns are upserted on each update (text grows), then marked final. Edit overlay preserved. |
+| `Session._on_turn_*` | `src/api/session.py` | Bridges buffer callbacks → asyncio queue → WebSocket via `loop.call_soon_threadsafe`. |
+| WebSocket protocol | `src/api/routes/transcript.py` | `transcript_update` (partial turn) and `transcript_final` (completed turn). Late-connecting clients receive existing turns on connect. |
+| `useTranscript` | `app/src/hooks/useTranscript.ts` | React hook with upsert semantics — finds by turn ID and updates, or creates new. Preserves user edits. |
+| `TranscriptPane` | `app/src/components/TranscriptPane.tsx` | Renders turns as timestamped paragraphs. Active turns show pulsing blue indicator. Finalized turns are clean static text. Double-click to edit. |
+
+### Turn Lifecycle
+
+```
+Chunk 1 arrives → TranscriptBuffer creates turn-1 (active)
+    → on_update callback → Store.upsert(turn-1, "Hello") → WS: transcript_update
+
+Chunk 2 arrives (within 2s) → extends turn-1
+    → on_update callback → Store.upsert(turn-1, "Hello world") → WS: transcript_update
+
+2s silence detected → turn-1 finalized
+    → on_final callback → Store.upsert(turn-1, "Hello world", is_final=True) → WS: transcript_final
+
+Chunk 3 arrives → new turn-2 created
+```
+
+### Dual Buffer Design
+
+Two independent buffers receive the same raw chunks for different purposes:
+- **TranscriptBuffer**: Optimized for display (simple pause-based turn boundaries)
+- **ConversationBuffer**: Optimized for intelligence (question scoring, trigger evaluation, rolling 90s window)
+
+They don't share state. This separation keeps each focused on its purpose.
+
+### Speaker Identification (Planned)
+
+The `speaker` field exists on `Turn`, `TranscriptSegment`, and in the WebSocket protocol, but is currently unused. When speaker diarization is added, it will populate this field and the UI will render speaker labels above turn blocks.
 
 ---
 
-## 19. Evolution Timeline
+## 19. File Reference
+
+### Core Pipeline (lib/)
+
+| File | Purpose |
+|------|---------|
+| `coach.py` | CLI entry point, args, startup |
+| `lib/orchestrator.py` | MeetingOrchestrator — central pipeline coordinator |
+| `lib/config.py` | Typed dataclass config loader |
+| `lib/filters.py` | Hallucination/noise/normalization filters |
+| `lib/audio_capture.py` | Microphone streaming, silence detection |
+| `lib/lfm2_wrapper.py` | LFM2.5-Audio subprocess management |
+| `lib/answer_extractor.py` | Sentence extraction for grounding |
+| `lib/rag_generator.py` | LFM2.5-1.2B-Instruct wrapper with ChatML |
+| `lib/rag_engine.py` | ColBERT + Jaccard fallback |
+| `lib/dashboard.py` | CLI dashboard with trigger-type coloring |
+| `lib/colbert/retriever.py` | ColBERT model + PLAID index |
+| `lib/colbert/chunker.py` | Section-aware document chunking |
+| `lib/colbert/normalizer.py` | Sigmoid score normalization |
+
+### Trigger Engine (lib/triggers/)
+
+| File | Purpose |
+|------|---------|
+| `lib/triggers/types.py` | TriggerType enum, Trigger dataclass |
+| `lib/triggers/engine.py` | Orchestrator: runs all triggers, priority sort |
+| `lib/triggers/question_trigger.py` | Question detection (patterns + keywords) |
+| `lib/triggers/alert_trigger.py` | Watch word scanning with cooldown |
+| `lib/triggers/topic_trigger.py` | ColBERT-backed topic detection |
+| `lib/triggers/followup_trigger.py` | Pause-based follow-up suggestions |
+
+### Conversation Intelligence (lib/conversation/)
+
+| File | Purpose |
+|------|---------|
+| `lib/conversation/buffer.py` | Rolling 90s transcript + trigger routing |
+| `lib/conversation/meeting_context.py` | YAML meeting context loader |
+
+### Mode-Aware Generation (lib/generation/)
+
+| File | Purpose |
+|------|---------|
+| `lib/generation/prompts.py` | ChatML prompt templates per trigger type |
+| `lib/generation/generator.py` | ModeAwareGenerator — trigger-routed generation |
+| `lib/generation/types.py` | GenerationResult dataclass |
+
+### FastAPI Backend (src/api/)
+
+| File | Purpose |
+|------|---------|
+| `src/api/main.py` | FastAPI server + WebSocket endpoints |
+| `src/api/session.py` | Session manager (bridges audio pipeline → WebSocket) |
+| `src/api/transcript_buffer.py` | Turn-based ASR chunk accumulator |
+| `src/api/transcript_store.py` | Append-only transcript with edit overlay + upsert |
+| `src/api/notes_generator.py` | Structured meeting notes via LLM |
+| `src/api/routes/session.py` | Session start/stop/status/reindex endpoints |
+| `src/api/routes/transcript.py` | WebSocket transcript stream (turn updates + edits) |
+| `src/api/routes/prompts.py` | WebSocket trigger results stream |
+| `src/api/routes/notes.py` | Notes generate/export/save/download |
+| `src/api/routes/context.py` | Meeting context upload |
+
+### Tauri + React Frontend (app/)
+
+| File | Purpose |
+|------|---------|
+| `app/src-tauri/src/lib.rs` | Rust shell: spawns Python backend, manages lifecycle |
+| `app/src/App.tsx` | Root component, layout, WebSocket connections |
+| `app/src/components/TranscriptPane.tsx` | Left pane: turn-based editable transcript |
+| `app/src/components/PromptsPane.tsx` | Right pane: live trigger results |
+| `app/src/components/StatusBar.tsx` | Session controls, audio health |
+| `app/src/components/MeetingSetup.tsx` | Pre-meeting context config dialog |
+| `app/src/components/NoteEditor.tsx` | Post-meeting structured notes editor |
+| `app/src/hooks/useWebSocket.ts` | WebSocket connection + reconnect hook |
+| `app/src/hooks/useTranscript.ts` | Transcript state with turn-based upsert |
+
+---
+
+## 20. Evolution Timeline
 
 ```
 Phase 1: Basic Pipeline

@@ -15,13 +15,14 @@ bugs:
 
   - id: "BUG-002"
     severity: medium
-    component: "src/api/transcript_buffer.py, app/src/components/TranscriptPane.tsx"
+    component: "src/api/transcript_buffer.py, src/api/session.py"
     status: resolved
     reported_in: "2026-03-06"
     resolved_in: "2026-03-06"
     title: "Transcripts display as raw chunks instead of discrete sentences"
     repro: "Speak full sentences — each audio chunk shows as separate block"
-    fix: "Turn-based transcript buffering on backend: TranscriptBuffer accumulates ASR chunks into speech turns via pause detection, streams partial/final updates over WebSocket, frontend renders turns as clean paragraphs with active turn indicator"
+    root_cause: "Initial gap-based turn detection used wall-clock timestamps between add_chunk calls, but ASR chunks arrive ~3.5s apart even during continuous speech (pipeline cadence artifact, not a real pause)"
+    fix: "Silence-based turn boundaries: TranscriptBuffer no longer uses time gaps between chunks. Turn finalization is driven by on_silence() events from audio capture layer. Audio-level silence is wired from audio capture through session to TranscriptBuffer. The _silence_seen flag bridges silence events to the next add_chunk call."
 
   - id: "BUG-003"
     severity: medium

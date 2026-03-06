@@ -88,4 +88,14 @@ completed_items:
     notes: "Updated CLAUDE.md, ARCHITECTURE.md, README.md, PROGRESS.yaml with turn-based transcript, Tauri app, full file reference"
     files: ["CLAUDE.md", "ARCHITECTURE.md", "README.md", "PROGRESS.yaml"]
 
-sessions: []
+  - id: "WS-05"
+    name: "Silence-based turn boundary fix"
+    date: "2026-03-06"
+    notes: "Gap-based detection broken by pipeline cadence; switched to on_silence events from audio capture"
+    files: ["src/api/transcript_buffer.py", "src/api/session.py", "tests/test_transcript_buffer.py"]
+
+sessions:
+  - id: "session-001"
+    date: "2026-03-05"
+    focus: "Full v2 rebuild: LFM2.5 upgrade + Tauri app"
+    completed: ["Phases 1-10: Full pipeline + FastAPI + Tauri app + meeting notes"]

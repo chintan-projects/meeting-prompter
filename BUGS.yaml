@@ -1,0 +1,14 @@
+# Bug Tracker — Captured via /log-bug, fixed via /fix-bug.
+# Severity: critical > high > medium > low
+# Status: open > investigating > fix_in_progress > resolved > wont_fix
+
+bugs: []
+# Example entry:
+# bugs:
+#   - id: "BUG-001"
+#     severity: medium
+#     component: "src/api/handler.py"
+#     status: open
+#     reported_in: "2025-03-03"
+#     title: "Timeout on large inputs"
+#     repro: "Send input > 2000 chars"

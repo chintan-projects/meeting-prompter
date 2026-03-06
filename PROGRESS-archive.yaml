@@ -1,0 +1,47 @@
+# Progress Archive — NOT loaded into context automatically.
+# Completed work and old session logs live here.
+
+completed_items:
+  - id: "P1"
+    name: "Phase 1: Model Infrastructure (LFM2 → LFM2.5)"
+    date: "2026-03-05"
+    files: ["lib/lfm2_wrapper.py", "lib/rag_generator.py", "coach.py"]
+  - id: "P2"
+    name: "Phase 2: Config Externalization"
+    date: "2026-03-05"
+    files: ["config.yaml", "lib/config.py"]
+  - id: "P3"
+    name: "Phase 3: Trigger Engine (4 trigger types)"
+    date: "2026-03-05"
+    files: ["lib/triggers/types.py", "lib/triggers/engine.py", "lib/triggers/question_trigger.py", "lib/triggers/alert_trigger.py", "lib/triggers/topic_trigger.py", "lib/triggers/followup_trigger.py"]
+  - id: "P4"
+    name: "Phase 4: Conversation Intelligence"
+    date: "2026-03-05"
+    files: ["lib/conversation/buffer.py", "lib/conversation/meeting_context.py"]
+  - id: "P5"
+    name: "Phase 5: Mode-Aware Generation"
+    date: "2026-03-05"
+    files: ["lib/generation/prompts.py", "lib/generation/generator.py", "lib/generation/types.py"]
+  - id: "P6"
+    name: "Phase 6: CLI Dashboard Update"
+    date: "2026-03-05"
+    files: ["lib/dashboard.py"]
+  - id: "P7"
+    name: "Phase 7: Cleanup (split coach.py, delete dead code)"
+    date: "2026-03-05"
+    files: ["lib/orchestrator.py", "lib/filters.py", "coach.py"]
+    deleted: ["lib/answer_generator.py", "lib/vibe_check.py", "lib/question_detector.py", "lib/question_buffer.py", "lib/hybrid_answerer.py"]
+  - id: "P8"
+    name: "Phase 8: FastAPI Backend"
+    date: "2026-03-05"
+    files: ["src/api/main.py", "src/api/session.py", "src/api/transcript_store.py", "src/api/routes/"]
+  - id: "P9"
+    name: "Phase 9: Tauri + React Frontend"
+    date: "2026-03-05"
+    files: ["app/src/App.tsx", "app/src/components/", "app/src/hooks/", "app/src-tauri/"]
+  - id: "P10"
+    name: "Phase 10: Meeting Notes Features"
+    date: "2026-03-05"
+    files: ["src/api/notes_generator.py", "app/src/components/NoteEditor.tsx"]
+
+sessions: []

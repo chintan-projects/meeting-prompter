@@ -96,6 +96,15 @@ class RefinerConfig:
 
 
 @dataclass
+class SpeakerConfig:
+    """Configuration for energy-based speaker attribution."""
+
+    enabled: bool = True
+    similarity_threshold: float = 0.6
+    ema_alpha: float = 0.3
+
+
+@dataclass
 class PathsConfig:
     docs_dir: str = "docs"
     output_dir: str = "output"
@@ -112,6 +121,7 @@ class AppConfig:
     normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
     triggers: TriggerConfig = field(default_factory=TriggerConfig)
     refiner: RefinerConfig = field(default_factory=RefinerConfig)
+    speaker: SpeakerConfig = field(default_factory=SpeakerConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
 
 
@@ -168,5 +178,6 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         normalization=_build_dataclass(NormalizationConfig, raw.get("normalization")),
         triggers=_build_dataclass(TriggerConfig, raw.get("triggers")),
         refiner=_build_dataclass(RefinerConfig, raw.get("refiner")),
+        speaker=_build_dataclass(SpeakerConfig, raw.get("speaker")),
         paths=_build_dataclass(PathsConfig, raw.get("paths")),
     )

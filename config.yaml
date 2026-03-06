@@ -59,6 +59,11 @@ refiner:
   min_words_to_refine: 5    # skip LFM cleanup for very short turns
   max_tokens_ratio: 1.5     # max output tokens = input words * ratio
 
+speaker:
+  enabled: true
+  similarity_threshold: 0.6  # below this, assign new speaker label
+  ema_alpha: 0.3             # exponential moving average smoothing for profiles
+
 paths:
   docs_dir: "docs"
   output_dir: "output"

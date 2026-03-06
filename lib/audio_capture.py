@@ -11,8 +11,9 @@ import queue
 import tempfile
 import threading
 import time
+from collections import deque
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Deque, Dict, List, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -74,6 +75,10 @@ class AudioCapture:
         # Session recording — accumulates all raw audio
         self._session_audio: List[np.ndarray] = []
         self._recording_lock = threading.Lock()
+
+        # Per-chunk audio features for speaker attribution
+        self._chunk_features: Deque[Dict[str, float]] = deque(maxlen=50)
+        self._features_lock = threading.Lock()
 
     def _audio_callback(
         self,
@@ -169,7 +174,7 @@ class AudioCapture:
 
         # Log first 3 chunks + every 10th to monitor levels
         if self._total_chunks <= 3 or self._total_chunks % 10 == 0:
-            logger.info(
+            logger.debug(
                 "Audio level: rms=%.6f peak=%.4f %s (chunk %d)",
                 rms,
                 peak,
@@ -190,6 +195,43 @@ class AudioCapture:
             "queue_size": self._chunk_queue.qsize(),
         }
 
+    @staticmethod
+    def compute_chunk_features(audio_data: np.ndarray) -> Dict[str, float]:
+        """Compute audio features for speaker attribution.
+
+        Args:
+            audio_data: 1D float32 audio array.
+
+        Returns:
+            Dict with 'rms' (root mean square energy) and 'zcr' (zero-crossing rate).
+            Returns zeros for empty or invalid input.
+        """
+        if audio_data.size == 0:
+            return {"rms": 0.0, "zcr": 0.0}
+
+        flat = audio_data.flatten().astype(np.float32)
+        rms = float(np.sqrt(np.mean(flat**2)))
+        # Zero-crossing rate: fraction of adjacent samples with sign change
+        if flat.size > 1:
+            signs = np.sign(flat)
+            sign_changes = np.abs(np.diff(signs))
+            zcr = float(np.mean(sign_changes > 0))
+        else:
+            zcr = 0.0
+        return {"rms": rms, "zcr": zcr}
+
+    def get_recent_features(self, since_timestamp: float) -> List[Dict[str, float]]:
+        """Get chunk features recorded since a given timestamp.
+
+        Args:
+            since_timestamp: Unix timestamp. Returns features after this time.
+
+        Returns:
+            List of feature dicts with 'rms', 'zcr', and 'timestamp'.
+        """
+        with self._features_lock:
+            return [f for f in self._chunk_features if f.get("timestamp", 0) >= since_timestamp]
+
     def _process_chunk(self, chunk: np.ndarray, timestamp: float) -> None:
         """Process a single audio chunk: record, write temp WAV, call callback.
 
@@ -199,6 +241,12 @@ class AudioCapture:
         try:
             # Track audio metrics (diagnostics only)
             self._update_audio_metrics(chunk)
+
+            # Compute and store features for speaker attribution
+            features = self.compute_chunk_features(chunk)
+            features["timestamp"] = timestamp
+            with self._features_lock:
+                self._chunk_features.append(features)
 
             # Accumulate for session recording
             with self._recording_lock:

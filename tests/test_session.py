@@ -210,6 +210,114 @@ class TestTurnCallbacks:
         assert merged[0]["text"] == "hello world"
 
 
+class TestSpeakerAttribution:
+    """Tests for speaker tracker integration in _on_turn_final."""
+
+    @pytest.mark.asyncio
+    async def test_speaker_label_set_when_tracker_active(self) -> None:
+        """When speaker tracker is active, turn.speaker should be set."""
+        from lib.speaker_tracker import SpeakerTracker
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        # Wire up speaker tracker + mock orchestrator audio
+        session._speaker_tracker = SpeakerTracker()
+        mock_orch = MagicMock()
+        mock_orch.audio.get_recent_features.return_value = [
+            {"rms": 0.05, "zcr": 0.15, "timestamp": 100.0},
+        ]
+        session._orchestrator = mock_orch
+
+        turn = Turn(
+            id="turn-1", text="hello world testing",
+            start_timestamp=99.0, end_timestamp=102.0, is_final=True,
+        )
+        session._on_turn_final(turn)
+
+        assert turn.speaker == "Speaker 1"
+        await asyncio.sleep(0.01)
+        msg = session._transcript_queue.get_nowait()
+        assert msg["speaker"] == "Speaker 1"
+
+    @pytest.mark.asyncio
+    async def test_speaker_label_empty_without_tracker(self) -> None:
+        """Without speaker tracker, turn.speaker stays empty."""
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+        session._speaker_tracker = None
+
+        turn = Turn(
+            id="turn-1", text="hello world testing",
+            start_timestamp=99.0, end_timestamp=102.0, is_final=True,
+        )
+        session._on_turn_final(turn)
+
+        assert turn.speaker == ""
+
+    @pytest.mark.asyncio
+    async def test_speaker_attribution_error_doesnt_crash(self) -> None:
+        """If feature retrieval raises, turn still emits without speaker."""
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+        session._speaker_tracker = MagicMock()
+        mock_orch = MagicMock()
+        mock_orch.audio.get_recent_features.side_effect = RuntimeError("bad audio")
+        session._orchestrator = mock_orch
+
+        turn = Turn(
+            id="turn-1", text="still works fine",
+            start_timestamp=99.0, end_timestamp=102.0, is_final=True,
+        )
+        session._on_turn_final(turn)
+
+        await asyncio.sleep(0.01)
+        msg = session._transcript_queue.get_nowait()
+        assert msg["type"] == "transcript_final"
+        assert msg["text"] == "still works fine"
+
+    @pytest.mark.asyncio
+    async def test_multiple_speakers_get_different_labels(self) -> None:
+        """Different audio features should produce different speaker labels."""
+        from lib.speaker_tracker import SpeakerTracker
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+        session._speaker_tracker = SpeakerTracker()
+        mock_orch = MagicMock()
+        session._orchestrator = mock_orch
+
+        # Speaker A — low energy
+        mock_orch.audio.get_recent_features.return_value = [
+            {"rms": 0.02, "zcr": 0.05, "timestamp": 100.0},
+        ]
+        turn_a = Turn(
+            id="turn-a", text="speaker a",
+            start_timestamp=99.0, end_timestamp=102.0, is_final=True,
+        )
+        session._on_turn_final(turn_a)
+
+        # Speaker B — high energy (very different)
+        mock_orch.audio.get_recent_features.return_value = [
+            {"rms": 0.08, "zcr": 0.25, "timestamp": 105.0},
+        ]
+        turn_b = Turn(
+            id="turn-b", text="speaker b",
+            start_timestamp=104.0, end_timestamp=107.0, is_final=True,
+        )
+        session._on_turn_final(turn_b)
+
+        assert turn_a.speaker != turn_b.speaker
+        assert turn_a.speaker == "Speaker 1"
+        assert turn_b.speaker == "Speaker 2"
+
+
 class TestOrchestratorCallbacks:
     """Tests for orchestrator callback wiring."""
 

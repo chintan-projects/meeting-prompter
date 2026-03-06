@@ -7,6 +7,11 @@ import { NoteEditor } from "./components/NoteEditor";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useTranscript } from "./hooks/useTranscript";
 
+const TRANSCRIPT_WIDTH_KEY = "meeting-prompter:transcript-width";
+const DEFAULT_TRANSCRIPT_WIDTH = 380;
+const MIN_TRANSCRIPT_WIDTH = 200;
+const MAX_TRANSCRIPT_WIDTH_RATIO = 0.6; // max 60% of viewport
+
 const API_BASE = "http://127.0.0.1:8420";
 const WS_BASE = "ws://127.0.0.1:8420";
 
@@ -28,6 +33,11 @@ function App() {
   const [elapsed, setElapsed] = useState(0);
   const [meetingTitle, setMeetingTitle] = useState("");
   const [transcriptCollapsed, setTranscriptCollapsed] = useState(false);
+  const [transcriptWidth, setTranscriptWidth] = useState(() => {
+    const saved = localStorage.getItem(TRANSCRIPT_WIDTH_KEY);
+    return saved ? Number(saved) : DEFAULT_TRANSCRIPT_WIDTH;
+  });
+  const isDraggingRef = useRef(false);
   const [promptResults, setPromptResults] = useState<PromptResult[]>([]);
   const [showNotes, setShowNotes] = useState(false);
   const promptIdRef = useRef(0);
@@ -86,6 +96,55 @@ function App() {
     const interval = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(interval);
   }, [isRunning]);
+
+  // Resizable pane drag handling — listeners stored in ref for cleanup
+  const dragListenersRef = useRef<{
+    move: ((e: MouseEvent) => void) | null;
+    up: (() => void) | null;
+  }>({ move: null, up: null });
+
+  const handleDragStart = useCallback(() => {
+    isDraggingRef.current = true;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const handleDragMove = (e: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+      const maxWidth = window.innerWidth * MAX_TRANSCRIPT_WIDTH_RATIO;
+      const clamped = Math.max(MIN_TRANSCRIPT_WIDTH, Math.min(e.clientX, maxWidth));
+      setTranscriptWidth(clamped);
+    };
+
+    const handleDragEnd = () => {
+      isDraggingRef.current = false;
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      window.removeEventListener("mousemove", handleDragMove);
+      window.removeEventListener("mouseup", handleDragEnd);
+      dragListenersRef.current = { move: null, up: null };
+      // Persist to localStorage
+      setTranscriptWidth((w) => {
+        localStorage.setItem(TRANSCRIPT_WIDTH_KEY, String(w));
+        return w;
+      });
+    };
+
+    // Store refs so cleanup effect can remove if component unmounts mid-drag
+    dragListenersRef.current = { move: handleDragMove, up: handleDragEnd };
+    window.addEventListener("mousemove", handleDragMove);
+    window.addEventListener("mouseup", handleDragEnd);
+  }, []);
+
+  // Cleanup drag listeners on unmount (prevents leaked listeners if unmounted mid-drag)
+  useEffect(() => {
+    return () => {
+      const { move, up } = dragListenersRef.current;
+      if (move) window.removeEventListener("mousemove", move);
+      if (up) window.removeEventListener("mouseup", up);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+  }, []);
 
   const startSession = async (audioDevice: string) => {
     try {
@@ -178,7 +237,15 @@ function App() {
           collapsed={transcriptCollapsed}
           onToggle={() => setTranscriptCollapsed((c) => !c)}
           onEdit={handleEditSegment}
+          width={transcriptWidth}
         />
+        {!transcriptCollapsed && (
+          <div
+            style={styles.resizeHandle}
+            onMouseDown={handleDragStart}
+            title="Drag to resize"
+          />
+        )}
         <PromptsPane results={promptResults} />
       </div>
 
@@ -203,6 +270,14 @@ function App() {
 const styles: Record<string, React.CSSProperties> = {
   app: { display: "flex", flexDirection: "column", height: "100vh" },
   main: { display: "flex", flex: 1, overflow: "hidden" },
+  resizeHandle: {
+    width: 4,
+    cursor: "col-resize",
+    background: "transparent",
+    flexShrink: 0,
+    transition: "background 0.15s ease",
+    zIndex: 10,
+  },
   notesBtn: {
     position: "fixed",
     bottom: 20,

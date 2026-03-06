@@ -6,6 +6,7 @@ interface TranscriptPaneProps {
   collapsed: boolean;
   onToggle: () => void;
   onEdit: (id: string, text: string) => void;
+  width: number;
 }
 
 /**
@@ -21,6 +22,7 @@ export function TranscriptPane({
   collapsed,
   onToggle,
   onEdit,
+  width,
 }: TranscriptPaneProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [pinBottom, setPinBottom] = useState(true);
@@ -66,7 +68,7 @@ export function TranscriptPane({
   }
 
   return (
-    <div style={styles.pane}>
+    <div style={{ ...styles.pane, width }}>
       <div style={styles.header}>
         <span style={styles.collapseHandle} onClick={onToggle}>
           &blacktriangleleft;

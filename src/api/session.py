@@ -20,6 +20,7 @@ from typing import Optional
 from lib.config import AppConfig, load_config
 from lib.conversation.meeting_context import MeetingContext, load_meeting_context
 from lib.generation.types import GenerationResult
+from lib.speaker_tracker import SpeakerTracker
 from lib.text_refiner import TextRefiner
 from lib.triggers.types import Trigger, TriggerType
 
@@ -61,6 +62,7 @@ class Session:
 
         self._orchestrator: Optional[object] = None
         self._text_refiner: Optional[TextRefiner] = None
+        self._speaker_tracker: Optional[SpeakerTracker] = None
         self._thread: Optional["threading.Thread"] = None
         self._running = False
         self._start_time: float = 0.0
@@ -147,7 +149,7 @@ class Session:
         Feeds the text into the TranscriptBuffer (which handles turn
         assembly and fires _on_turn_update / _on_turn_final).
         """
-        logger.info("[pipeline] Valid speech: %r", text[:80])
+        logger.debug("[pipeline] Valid speech: %r", text[:80])
         self._transcript_buffer.add_chunk(text, timestamp)
 
     def _on_silence_detected(self, timestamp: float) -> None:
@@ -204,9 +206,19 @@ class Session:
     def _on_turn_final(self, turn: Turn) -> None:
         """Called when a turn is finalized (pause detected).
 
-        Emits transcript_final (raw text) immediately, then runs the
-        text refiner and emits transcript_polished if the text changed.
+        Assigns speaker label via energy features, emits transcript_final
+        (raw text) immediately, then runs the text refiner and emits
+        transcript_polished if the text changed.
         """
+        # Speaker attribution — fetch audio features for this turn's time range
+        if self._speaker_tracker and self._orchestrator and hasattr(self._orchestrator, "audio"):
+            try:
+                features = self._orchestrator.audio.get_recent_features(turn.start_timestamp)
+                speaker = self._speaker_tracker.on_turn_features(features)
+                turn.speaker = speaker
+            except Exception as e:
+                logger.warning("Speaker attribution failed: %s", e)
+
         # Emit raw finalization immediately
         self.transcript.upsert(
             seg_id=turn.id,
@@ -280,6 +292,22 @@ class Session:
                     else 5,
                 )
                 logger.info("Text refiner enabled (sharing LFM2.5-Instruct instance)")
+
+            # Create speaker tracker for attribution
+            speaker_config = getattr(self.config, "speaker", None)
+            speaker_enabled = getattr(speaker_config, "enabled", True) if speaker_config else True
+            if speaker_enabled:
+                self._speaker_tracker = SpeakerTracker(
+                    similarity_threshold=(
+                        getattr(speaker_config, "similarity_threshold", 0.6)
+                        if speaker_config
+                        else 0.6
+                    ),
+                    ema_alpha=(
+                        getattr(speaker_config, "ema_alpha", 0.3) if speaker_config else 0.3
+                    ),
+                )
+                logger.info("Speaker tracker enabled (energy-based attribution)")
 
             self._loading = False
             logger.info("Models loaded, starting audio capture...")

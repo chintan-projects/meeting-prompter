@@ -52,6 +52,12 @@ body {
   background: var(--text-muted);
 }
 
+/* Resize handle between panes */
+div[title="Drag to resize"]:hover {
+  background: var(--accent-blue) !important;
+  opacity: 0.5;
+}
+
 /* Live turn indicator pulse animation */
 @keyframes pulse {
   0%, 100% { opacity: 1; }

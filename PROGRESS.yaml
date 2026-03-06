@@ -8,26 +8,34 @@ active_work:
   - id: "WS-07"
     name: "Live speech test in Tauri app"
     status: pending
-    notes: "Full pipeline redesign complete — queue-based audio, text refiner, two-level filters. Needs real mic validation."
+    notes: "Pipeline complete with speaker attribution. Needs real mic validation."
 
 blockers: []
 
 pending_decisions: []
 
 recent_sessions:
+  - id: "session-006"
+    date: "2026-03-06"
+    focus: "Logging, resizable panes, energy-based speaker attribution"
+    completed:
+      - "Hot-path logging downgraded to debug (session.py, audio_capture.py)"
+      - "Resizable transcript/prompt panes with drag handle (localStorage persistence)"
+      - "Energy-based speaker attribution (SpeakerTracker with RMS+ZCR, EMA profiles)"
+      - "SpeakerConfig in config.yaml with configurable threshold/alpha"
+      - "All speaker tracker params extracted from hardcoded values"
+      - "Error handling around speaker attribution in pipeline thread"
+      - "172 tests passing (31 new), TypeScript strict passes"
+    next_recommended: "Test with live speech — verify speaker labels appear on turn changes"
   - id: "session-005"
     date: "2026-03-06"
     focus: "Pipeline architecture redesign — robust transcription"
     completed:
       - "Queue-based audio capture (bounded queue, single worker, no data loss)"
       - "Removed audio level gating — all audio reaches ASR"
-      - "Two-level filtering: is_hallucination_only (transcript) vs is_noise (triggers)"
-      - "Orchestrator callback interface (replaces monkey-patching)"
-      - "Text refiner (LFM2.5-Instruct, shared Llama instance, polishes finalized turns)"
-      - "Session WAV recording on stop"
-      - "Frontend handles transcript_polished WebSocket messages"
+      - "Two-level filtering, orchestrator callbacks, text refiner, session WAV recording"
       - "141 tests passing (59 new), TypeScript strict passes"
-    next_recommended: "Test with live speech — verify no data loss, polish visible, short utterances show"
+    next_recommended: "Test with live speech"
   - id: "session-004"
     date: "2026-03-06"
     focus: "Fix broken turn boundaries — silence-based detection"
@@ -35,14 +43,7 @@ recent_sessions:
       - "Switched to silence-event-driven boundaries (on_silence from audio capture)"
       - "Rewrote 30 tests for silence-based boundary model (82 total, all pass)"
     next_recommended: "Test with live speech"
-  - id: "session-003"
-    date: "2026-03-06"
-    focus: "Turn-based transcript buffering + bug fixes + docs update"
-    completed:
-      - "BUG-001/002/003 resolved, TranscriptBuffer + upsert + WebSocket protocol"
-      - "Rebuilt TranscriptPane, added 48 tests, updated all docs"
-    next_recommended: "Test with live speech"
 
 completed_summary:
-  total_items: 26
-  total_sessions: 5
+  total_items: 29
+  total_sessions: 6

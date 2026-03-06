@@ -199,6 +199,84 @@ class TestSessionRecording:
         assert out.stat().st_size > 0
 
 
+class TestChunkFeatures:
+    """Tests for per-chunk audio feature extraction."""
+
+    def test_compute_chunk_features_silence(self) -> None:
+        """Silent audio should have near-zero RMS and ZCR."""
+        silence = np.zeros(16000, dtype=np.float32)
+        features = AudioCapture.compute_chunk_features(silence)
+        assert features["rms"] == pytest.approx(0.0, abs=1e-8)
+        assert features["zcr"] == pytest.approx(0.0, abs=1e-8)
+
+    def test_compute_chunk_features_sine(self) -> None:
+        """Sine wave should have non-zero RMS and high ZCR."""
+        t = np.linspace(0, 1, 16000, dtype=np.float32)
+        sine = 0.1 * np.sin(2 * np.pi * 440 * t)
+        features = AudioCapture.compute_chunk_features(sine)
+        assert features["rms"] > 0.05
+        assert features["zcr"] > 0.01
+
+    def test_feature_deque_stores_with_timestamp(self, capture: AudioCapture) -> None:
+        """Features should be stored with timestamps in the deque."""
+        chunk = np.full(64000, 0.05, dtype=np.float32)
+        capture._update_audio_metrics(chunk)
+        features = AudioCapture.compute_chunk_features(chunk)
+        features["timestamp"] = 100.0
+        with capture._features_lock:
+            capture._chunk_features.append(features)
+
+        result = capture.get_recent_features(99.0)
+        assert len(result) == 1
+        assert result[0]["timestamp"] == 100.0
+        assert result[0]["rms"] > 0
+
+    def test_get_recent_features_filters_by_timestamp(self, capture: AudioCapture) -> None:
+        """get_recent_features should only return features after given timestamp."""
+        for ts in [10.0, 20.0, 30.0, 40.0]:
+            with capture._features_lock:
+                capture._chunk_features.append({"rms": 0.05, "zcr": 0.1, "timestamp": ts})
+
+        recent = capture.get_recent_features(25.0)
+        assert len(recent) == 2
+        assert recent[0]["timestamp"] == 30.0
+        assert recent[1]["timestamp"] == 40.0
+
+    def test_feature_deque_bounded(self) -> None:
+        """Feature deque should not exceed maxlen."""
+        cap = AudioCapture(device="test")
+        for i in range(60):
+            with cap._features_lock:
+                cap._chunk_features.append({"rms": 0.01, "zcr": 0.01, "timestamp": float(i)})
+        assert len(cap._chunk_features) == 50  # maxlen=50
+
+    def test_compute_chunk_features_empty_array(self) -> None:
+        """Empty array should return zeros without errors."""
+        empty = np.array([], dtype=np.float32)
+        features = AudioCapture.compute_chunk_features(empty)
+        assert features["rms"] == 0.0
+        assert features["zcr"] == 0.0
+
+    def test_compute_chunk_features_single_sample(self) -> None:
+        """Single sample array should return RMS but zero ZCR."""
+        single = np.array([0.5], dtype=np.float32)
+        features = AudioCapture.compute_chunk_features(single)
+        assert features["rms"] == pytest.approx(0.5, abs=0.01)
+        assert features["zcr"] == 0.0
+
+    def test_compute_chunk_features_2d_array(self) -> None:
+        """2D array should be flattened and handled correctly."""
+        stereo = np.full((16000, 2), 0.05, dtype=np.float32)
+        features = AudioCapture.compute_chunk_features(stereo)
+        assert features["rms"] == pytest.approx(0.05, abs=0.001)
+        assert "zcr" in features
+
+    def test_get_recent_features_empty_deque(self, capture: AudioCapture) -> None:
+        """get_recent_features on empty deque should return empty list."""
+        result = capture.get_recent_features(0.0)
+        assert result == []
+
+
 class TestStop:
     """Tests for stop() behavior."""
 

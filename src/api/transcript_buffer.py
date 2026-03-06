@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TURN_PAUSE = 2.0
 DEFAULT_MAX_TURN_DURATION = 30.0
-DEFAULT_MIN_TURN_WORDS = 2
+DEFAULT_MIN_TURN_WORDS = 0
 
 
 @dataclass
@@ -196,18 +196,13 @@ class TranscriptBuffer:
         self._silence_seen = False
 
     def _finalize_active(self) -> Optional[Turn]:
-        """Finalize the active turn and move it to the finalized list."""
+        """Finalize the active turn and move it to the finalized list.
+
+        All turns are emitted regardless of length. Short utterances
+        like "Yeah." or "Okay." are valid speech and should reach the UI.
+        """
         turn = self._active_turn
         if turn is None:
-            return None
-
-        word_count = len(turn.text.split())
-        if word_count < self._min_turn_words:
-            logger.debug(
-                "Discarding short turn %s: %r (%d words)",
-                turn.id, turn.text, word_count,
-            )
-            self._active_turn = None
             return None
 
         turn.is_final = True
@@ -216,7 +211,7 @@ class TranscriptBuffer:
 
         logger.debug(
             "Finalized %s: %r (%d chunks, %d words)",
-            turn.id, turn.text[:80], turn.chunk_count, word_count,
+            turn.id, turn.text[:80], turn.chunk_count, len(turn.text.split()),
         )
 
         if self._on_final:

@@ -1,7 +1,12 @@
 """Text filters — hallucination detection, noise filtering, normalization.
 
-Extracted from coach.py. Used by the orchestrator to clean transcribed text
-before feeding it into the trigger engine and generation pipeline.
+Two filter levels:
+- is_hallucination_only(): catches ASR model artifacts only. Used for
+  the transcript display path — lets short valid speech through.
+- is_noise(): stricter filter for the trigger pipeline. Catches filler
+  words and non-substantive speech to avoid firing triggers on "Yeah."
+
+Normalization is a light pass for text cleanup (duplicates, mishearings).
 """
 import re
 from typing import List
@@ -108,12 +113,35 @@ def is_hallucination(text: str) -> bool:
     return False
 
 
+def is_hallucination_only(text: str) -> bool:
+    """Light filter for transcript display — catches only ASR model artifacts.
+
+    Does NOT filter by word count or filler words. Short valid speech
+    like "Yeah.", "I know.", "Exactly." passes through. Only catches
+    patterns that indicate the model hallucinated on silence/noise.
+
+    Use this for the transcript display path where showing all speech
+    (including short utterances) is preferred.
+    """
+    text = text.strip()
+    if not text:
+        return True
+
+    return is_hallucination(text)
+
+
 def is_noise(text: str) -> bool:
-    """Check if text is filler words, noise, or hallucination."""
+    """Strict filter for the trigger pipeline — catches filler and noise.
+
+    Filters short utterances, filler words, and hallucinations. Use this
+    for the trigger/intelligence pipeline where only substantive speech
+    should trigger RAG lookups and generation.
+    """
     text_lower = text.lower().strip()
     words = text_lower.split()
 
-    if len(words) < 3:
+    # Empty text is noise
+    if not words:
         return True
 
     if is_hallucination(text):

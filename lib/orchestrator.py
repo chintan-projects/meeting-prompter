@@ -6,21 +6,22 @@ Central class that wires together:
 - RAG retrieval → mode-aware generation
 - Dashboard display
 
-Extracted from coach.py to keep the entry point lean.
+Exposes callback hooks (on_transcription, on_silence_detected,
+on_trigger_result) so the API Session can observe pipeline events
+without monkey-patching process_chunk.
 """
 import logging
 import os
 import time
-from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, List, Optional
 
 from lib.audio_capture import AudioCapture
 from lib.config import AppConfig
 from lib.conversation.buffer import ConversationBuffer
 from lib.conversation.meeting_context import MeetingContext, load_meeting_context
 from lib.dashboard import Dashboard, display_header, display_status
-from lib.filters import is_noise, normalize_text
+from lib.filters import is_hallucination_only, is_noise, normalize_text
 from lib.generation.generator import ModeAwareGenerator
 from lib.generation.types import GenerationResult
 from lib.lfm2_wrapper import LFM2Wrapper
@@ -37,6 +38,11 @@ AUDIO_MODELS_DIR = MODELS_DIR / "LFM2.5-Audio-1.5B-GGUF"
 RUNNER_DIR = BASE_DIR / "runners" / "macos-arm64"
 OUTPUT_FILE = BASE_DIR / "output" / "live_analytics.txt"
 
+# Type aliases for callback signatures
+TranscriptionCallback = Callable[[str, float], None]
+SilenceCallback = Callable[[float], None]
+TriggerResultCallback = Callable[[Trigger, GenerationResult], None]
+
 
 def _resolve_rag_model(config: AppConfig) -> Path:
     """Resolve RAG model path with LFM2.5 → LFM2 fallback."""
@@ -52,12 +58,13 @@ class MeetingOrchestrator:
     """Real-time meeting intelligence pipeline.
 
     Coordinates audio capture, transcription, trigger detection,
-    RAG retrieval, and mode-aware generation. Thread-safe.
+    RAG retrieval, and mode-aware generation.
 
-    Args:
-        config: Application configuration.
-        audio_device: Audio input device name.
-        meeting_context_path: Optional path to meeting_context.yaml.
+    Callback hooks allow external consumers (like the API Session) to
+    observe pipeline events without overriding methods:
+    - on_transcription(text, timestamp): valid speech transcribed
+    - on_silence_detected(timestamp): ASR returned empty/hallucination
+    - on_trigger_result(trigger, result): trigger fired with a result
     """
 
     def __init__(
@@ -68,6 +75,11 @@ class MeetingOrchestrator:
     ) -> None:
         self.config = config
         display_header()
+
+        # --- Callback hooks (set by Session or other consumers) ---
+        self.on_transcription: Optional[TranscriptionCallback] = None
+        self.on_silence_detected: Optional[SilenceCallback] = None
+        self.on_trigger_result: Optional[TriggerResultCallback] = None
 
         # Load meeting context if provided
         self.meeting_context: Optional[MeetingContext] = None
@@ -114,9 +126,8 @@ class MeetingOrchestrator:
         )
         display_status("Generation ready")
 
-        # Audio capture
+        # Audio capture (no on_silence — silence driven by ASR output now)
         self.audio = AudioCapture(device=audio_device)
-        self.audio.on_silence = self._on_silence
 
         # Dashboard
         self.dashboard = Dashboard()
@@ -141,40 +152,58 @@ class MeetingOrchestrator:
             logger.info("Session ended after %d chunks", self.chunk_count)
 
     def process_chunk(self, audio_path: Path, timestamp: Optional[float] = None) -> None:
-        """Process a single audio chunk through the full pipeline."""
+        """Process a single audio chunk through the full pipeline.
+
+        Silence detection is now driven by ASR output: if the model
+        returns empty text or a hallucination, we treat it as silence.
+        """
         timestamp = timestamp or time.time()
 
         try:
             # 1. Transcribe
             text = self.lfm2.transcribe(audio_path)
 
-            # 2. Skip empty/error transcriptions
+            # 2. Handle empty/error results as silence
             if not text or text.startswith("["):
+                self._notify_silence(timestamp)
                 triggers = self.buffer.force_flush()
                 self._handle_triggers(triggers)
                 return
 
-            # 3. Filter noise/hallucinations
-            if is_noise(text):
+            # 3. Handle hallucinations as silence
+            if is_hallucination_only(text):
+                self._notify_silence(timestamp)
                 triggers = self.buffer.force_flush()
                 self._handle_triggers(triggers)
                 return
 
             self.chunk_count += 1
 
-            # 4. Feed into conversation buffer → triggers
-            triggers = self.buffer.add_chunk(text, timestamp)
-            self._handle_triggers(triggers)
+            # 4. Notify callback of valid transcription
+            if self.on_transcription:
+                self.on_transcription(text, timestamp)
 
-            # 5. Update dashboard transcript preview
+            # 5. Feed into conversation buffer → triggers
+            #    (use strict is_noise filter for trigger pipeline only)
+            if not is_noise(text):
+                triggers = self.buffer.add_chunk(text, timestamp)
+                self._handle_triggers(triggers)
+            else:
+                # Short/filler speech: still valid transcription (callback
+                # fired above), but don't feed trigger pipeline
+                logger.debug("Filler speech, skipping triggers: %r", text[:60])
+
+            # 6. Update dashboard transcript preview
             self.dashboard.set_transcript_preview(text)
             self.dashboard.render()
 
         except Exception as e:
             logger.error("Error processing chunk: %s", e)
 
-    def _on_silence(self, timestamp: float) -> None:
-        """Called when silence detected in audio stream."""
+    def _notify_silence(self, timestamp: float) -> None:
+        """Notify silence via callback and conversation buffer."""
+        if self.on_silence_detected:
+            self.on_silence_detected(timestamp)
         triggers = self.buffer.on_silence(timestamp)
         self._handle_triggers(triggers)
 
@@ -186,6 +215,10 @@ class MeetingOrchestrator:
                 self.dashboard.add_result(result)
                 self.dashboard.render()
 
+                # Notify callback
+                if self.on_trigger_result:
+                    self.on_trigger_result(trigger, result)
+
                 # Record Q&A for conversation memory
                 if trigger.type == TriggerType.QUESTION:
                     self.buffer.add_qa_pair(trigger.text, result.answer)
@@ -195,29 +228,24 @@ class MeetingOrchestrator:
 
     def _process_trigger(self, trigger: Trigger) -> Optional[GenerationResult]:
         """Run RAG retrieval and generation for a single trigger."""
-        # Normalize text for better RAG matching
         query_text = normalize_text(trigger.text)
 
-        # RAG retrieval
         rag_context, confidence, source_file = self.rag.query(query_text)
 
-        # Skip if RAG confidence too low
         if confidence < self.config.detection.rag_confidence_minimum:
             logger.debug(
                 "Skipping %s trigger: low RAG confidence %.2f",
-                trigger.type.value, confidence,
+                trigger.type.value,
+                confidence,
             )
             return None
 
-        # Get conversation context
         conversation = self.buffer.get_recent_context()
 
-        # Add meeting context if available
         if self.meeting_context:
             meeting_info = self.meeting_context.as_prompt_context()
             conversation = f"{meeting_info}\n\n{conversation}"
 
-        # Generate
         result = self.generator.process_trigger(
             trigger=trigger,
             rag_context=rag_context,

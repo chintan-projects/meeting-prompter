@@ -1,8 +1,13 @@
-"""Tests for lib.audio_capture — audio level detection and health tracking."""
+"""Tests for lib.audio_capture — queue-based processing and health tracking."""
+import queue
+import threading
+import time
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pytest
 
-from lib.audio_capture import AudioCapture
+from lib.audio_capture import AudioCapture, _STOP_SENTINEL
 
 
 @pytest.fixture
@@ -11,35 +16,32 @@ def capture() -> AudioCapture:
     return AudioCapture(device="test-device", sample_rate=16000, chunk_duration=4.0)
 
 
-class TestCheckAudioLevel:
-    """Tests for _check_audio_level threshold logic."""
+class TestUpdateAudioMetrics:
+    """Tests for _update_audio_metrics threshold logic."""
 
     def test_silence_returns_false(self, capture: AudioCapture) -> None:
         """All-zero audio should be below threshold."""
         silence = np.zeros(64000, dtype=np.float32)
-        assert capture._check_audio_level(silence) is False
+        assert capture._update_audio_metrics(silence) is False
 
     def test_speech_returns_true(self, capture: AudioCapture) -> None:
         """Loud audio should be above threshold."""
-        # Sine wave at 0.1 amplitude — well above RMS=0.002 and peak=0.01
         t = np.linspace(0, 1, 16000, dtype=np.float32)
         speech = 0.1 * np.sin(2 * np.pi * 440 * t)
-        assert capture._check_audio_level(speech) is True
+        assert capture._update_audio_metrics(speech) is True
 
     def test_low_noise_below_threshold(self, capture: AudioCapture) -> None:
         """Very low amplitude noise should be filtered."""
         noise = np.random.randn(16000).astype(np.float32) * 0.0005
-        assert capture._check_audio_level(noise) is False
+        assert capture._update_audio_metrics(noise) is False
 
     def test_rms_threshold_boundary(self, capture: AudioCapture) -> None:
-        """Audio below RMS threshold should be filtered."""
-        # RMS=0.001 is below the 0.002 threshold
+        """Audio below RMS threshold should be classified as silence."""
         below = np.full(16000, 0.001, dtype=np.float32)
-        assert capture._check_audio_level(below) is False
+        assert capture._update_audio_metrics(below) is False
 
-        # RMS=0.02 with peak=0.02 — above both thresholds
         above = np.full(16000, 0.02, dtype=np.float32)
-        assert capture._check_audio_level(above) is True
+        assert capture._update_audio_metrics(above) is True
 
 
 class TestAudioHealth:
@@ -50,13 +52,15 @@ class TestAudioHealth:
         health = capture.get_audio_health()
         assert health["total_chunks"] == 0
         assert health["speech_chunks"] == 0
-        assert health["all_silent"] is False  # Not enough chunks yet
+        assert health["all_silent"] is False
+        assert health["dropped_chunks"] == 0
+        assert health["queue_size"] == 0
 
     def test_all_silent_after_threshold(self, capture: AudioCapture) -> None:
         """all_silent should be True after >3 silent chunks."""
         silence = np.zeros(16000, dtype=np.float32)
         for _ in range(5):
-            capture._check_audio_level(silence)
+            capture._update_audio_metrics(silence)
 
         health = capture.get_audio_health()
         assert health["total_chunks"] == 5
@@ -69,8 +73,8 @@ class TestAudioHealth:
         speech = np.full(16000, 0.1, dtype=np.float32)
 
         for _ in range(4):
-            capture._check_audio_level(silence)
-        capture._check_audio_level(speech)
+            capture._update_audio_metrics(silence)
+        capture._update_audio_metrics(speech)
 
         health = capture.get_audio_health()
         assert health["total_chunks"] == 5
@@ -80,8 +84,134 @@ class TestAudioHealth:
     def test_last_rms_peak_updated(self, capture: AudioCapture) -> None:
         """last_rms and last_peak should track most recent chunk."""
         loud = np.full(16000, 0.5, dtype=np.float32)
-        capture._check_audio_level(loud)
+        capture._update_audio_metrics(loud)
 
         health = capture.get_audio_health()
         assert health["last_rms"] == pytest.approx(0.5, abs=0.01)
         assert health["last_peak"] == pytest.approx(0.5, abs=0.01)
+
+
+class TestChunkQueue:
+    """Tests for queue-based chunk processing."""
+
+    def test_queue_created_with_correct_size(self) -> None:
+        """Queue should be bounded to the specified size."""
+        cap = AudioCapture(device="test", queue_size=10)
+        assert cap._chunk_queue.maxsize == 10
+
+    def test_worker_processes_chunks_sequentially(self) -> None:
+        """Worker thread processes chunks in FIFO order."""
+        cap = AudioCapture(device="test", sample_rate=16000)
+        processed: list = []
+
+        def fake_callback(path, ts):  # type: ignore[no-untyped-def]
+            processed.append(ts)
+
+        cap.callback = fake_callback
+        cap.running = True
+
+        # Start worker
+        cap._worker_thread = threading.Thread(target=cap._worker_loop, daemon=True)
+        cap._worker_thread.start()
+
+        # Enqueue 5 chunks
+        for i in range(5):
+            chunk = np.zeros(64000, dtype=np.float32)
+            cap._chunk_queue.put((chunk, float(i)))
+
+        # Signal stop and wait
+        cap._chunk_queue.put(_STOP_SENTINEL)
+        cap._worker_thread.join(timeout=5.0)
+
+        assert processed == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+    def test_worker_drains_on_stop(self) -> None:
+        """Worker drains remaining chunks after receiving stop sentinel."""
+        cap = AudioCapture(device="test", sample_rate=16000)
+        processed: list = []
+
+        def fake_callback(path, ts):  # type: ignore[no-untyped-def]
+            processed.append(ts)
+
+        cap.callback = fake_callback
+        cap.running = False  # Already stopped
+
+        # Pre-load queue with chunks then sentinel
+        chunk = np.zeros(64000, dtype=np.float32)
+        cap._chunk_queue.put((chunk, 10.0))
+        cap._chunk_queue.put((chunk, 20.0))
+        cap._chunk_queue.put(_STOP_SENTINEL)
+        cap._chunk_queue.put((chunk, 30.0))  # After sentinel
+
+        # Run worker (it will stop at sentinel, then drain remaining)
+        cap._worker_loop()
+
+        # Should process chunks before sentinel + drain after
+        assert 10.0 in processed
+        assert 20.0 in processed
+        assert 30.0 in processed
+
+    def test_queue_full_increments_dropped(self, capture: AudioCapture) -> None:
+        """When queue is full, dropped_chunks counter should increment."""
+        small_cap = AudioCapture(device="test", queue_size=2)
+
+        chunk = np.zeros(64000, dtype=np.float32)
+        # Fill the queue
+        small_cap._chunk_queue.put((chunk, 1.0))
+        small_cap._chunk_queue.put((chunk, 2.0))
+
+        # This should fail and increment dropped
+        try:
+            small_cap._chunk_queue.put_nowait((chunk, 3.0))
+        except queue.Full:
+            small_cap._dropped_chunks += 1
+
+        assert small_cap._dropped_chunks == 1
+
+
+class TestSessionRecording:
+    """Tests for session WAV recording."""
+
+    def test_session_audio_accumulates(self, capture: AudioCapture) -> None:
+        """Session audio list should grow with each processed chunk."""
+        assert len(capture._session_audio) == 0
+
+        chunk = np.ones(16000, dtype=np.float32) * 0.1
+        with capture._recording_lock:
+            capture._session_audio.append(chunk)
+
+        assert len(capture._session_audio) == 1
+
+    def test_save_recording_empty(self, capture: AudioCapture, tmp_path) -> None:
+        """Saving with no audio should return False."""
+        result = capture.save_recording(tmp_path / "test.wav")
+        assert result is False
+
+    def test_save_recording_with_audio(self, capture: AudioCapture, tmp_path) -> None:
+        """Saving with audio should write WAV and return True."""
+        chunk = np.ones(16000, dtype=np.float32) * 0.1
+        capture._session_audio.append(chunk)
+
+        out = tmp_path / "session.wav"
+        result = capture.save_recording(out)
+        assert result is True
+        assert out.exists()
+        assert out.stat().st_size > 0
+
+
+class TestStop:
+    """Tests for stop() behavior."""
+
+    def test_stop_sets_running_false(self, capture: AudioCapture) -> None:
+        """stop() should set running to False."""
+        capture.running = True
+        capture.stop()
+        assert capture.running is False
+
+    def test_stop_sends_sentinel(self, capture: AudioCapture) -> None:
+        """stop() should put sentinel on the queue."""
+        capture.running = True
+        capture.stop()
+        # Check sentinel was enqueued
+        item = capture._chunk_queue.get_nowait()
+        assert item is _STOP_SENTINEL

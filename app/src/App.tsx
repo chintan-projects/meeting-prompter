@@ -48,14 +48,18 @@ function App() {
           is_final: boolean;
           speaker: string;
         };
-        if (msg.type === "transcript_update" || msg.type === "transcript_final") {
+        if (
+          msg.type === "transcript_update" ||
+          msg.type === "transcript_final" ||
+          msg.type === "transcript_polished"
+        ) {
           upsertSegment({
             id: msg.id,
             text: msg.text,
             timestamp: msg.timestamp,
             end_timestamp: msg.end_timestamp ?? msg.timestamp,
             speaker: msg.speaker ?? "",
-            is_final: msg.is_final ?? msg.type === "transcript_final",
+            is_final: msg.is_final ?? msg.type !== "transcript_update",
           });
         }
       },

@@ -191,35 +191,50 @@ class TestFlush:
         buf = TranscriptBuffer()
         assert buf.flush() is None
 
-    def test_flush_discards_short_turns(self) -> None:
-        buf = TranscriptBuffer(min_turn_words=3)
+    def test_flush_keeps_short_turns(self) -> None:
+        """Short turns are now emitted — no min_words discard."""
+        buf = TranscriptBuffer()
         buf.add_chunk("hi", timestamp=100.0)
         result = buf.flush()
-        assert result is None
-        assert buf.active_turn is None
+        assert result is not None
+        assert result.text == "hi"
+        assert result.is_final is True
 
 
-class TestMinWords:
-    """Test minimum word threshold for turn finalization."""
+class TestMinWordsDisabled:
+    """Verify that min_turn_words=0 (default) emits all turns."""
 
-    def test_short_turn_discarded_on_silence(self) -> None:
-        buf = TranscriptBuffer(turn_pause=2.0, min_turn_words=3)
+    def test_short_turn_emitted_on_silence(self) -> None:
+        """Short turns are now emitted, not discarded."""
+        buf = TranscriptBuffer(turn_pause=2.0)
         buf.add_chunk("ok", timestamp=100.0)
-        # Silence triggers finalization attempt, but turn too short -> discarded
         buf.on_silence(timestamp=103.0)
-        assert buf.active_turn is None
-        assert len(buf._finalized_turns) == 0
 
-        turn = buf.add_chunk("now a longer sentence here", timestamp=106.0)
-        assert turn is not None
-        assert turn.id == "turn-2"
+        assert len(buf._finalized_turns) == 1
+        assert buf._finalized_turns[0].text == "ok"
+        assert buf._finalized_turns[0].is_final is True
 
-    def test_long_enough_turn_kept(self) -> None:
-        buf = TranscriptBuffer(turn_pause=2.0, min_turn_words=2)
+    def test_single_word_turn_emitted(self) -> None:
+        buf = TranscriptBuffer(turn_pause=2.0)
+        buf.add_chunk("Yeah", timestamp=100.0)
+        buf.on_silence(timestamp=103.0)
+        assert len(buf._finalized_turns) == 1
+        assert buf._finalized_turns[0].text == "Yeah"
+
+    def test_long_enough_turn_also_kept(self) -> None:
+        buf = TranscriptBuffer(turn_pause=2.0)
         buf.add_chunk("hello world", timestamp=100.0)
         buf.on_silence(timestamp=103.0)
         assert len(buf._finalized_turns) == 1
         assert buf._finalized_turns[0].text == "hello world"
+
+    def test_explicit_min_words_no_longer_gates(self) -> None:
+        """min_turn_words param exists for compat but _finalize_active no longer checks it."""
+        buf = TranscriptBuffer(turn_pause=2.0, min_turn_words=3)
+        buf.add_chunk("ok", timestamp=100.0)
+        buf.on_silence(timestamp=103.0)
+        # Short turns are emitted regardless
+        assert len(buf._finalized_turns) == 1
 
 
 class TestCallbacks:
@@ -253,6 +268,18 @@ class TestCallbacks:
         assert len(finals) == 1
         assert finals[0].id == "turn-1"
         assert finals[0].is_final is True
+
+    def test_on_final_fires_for_short_turns(self) -> None:
+        """Short turns now fire on_final callback (no discard)."""
+        finals: List[Turn] = []
+        buf = TranscriptBuffer(
+            turn_pause=2.0,
+            on_final=lambda t: finals.append(t),
+        )
+        buf.add_chunk("ok", timestamp=100.0)
+        buf.on_silence(timestamp=103.0)
+        assert len(finals) == 1
+        assert finals[0].text == "ok"
 
 
 class TestAllTurns:
@@ -320,7 +347,6 @@ class TestRealisticPipeline:
         buf = TranscriptBuffer(
             turn_pause=2.0,
             max_turn_duration=30.0,
-            min_turn_words=2,
             on_final=lambda t: finals.append(t),
         )
 

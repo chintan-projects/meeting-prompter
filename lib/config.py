@@ -87,6 +87,15 @@ class TriggerConfig:
 
 
 @dataclass
+class RefinerConfig:
+    """Configuration for the LFM-based text refiner."""
+
+    enabled: bool = True
+    min_words_to_refine: int = 5
+    max_tokens_ratio: float = 1.5
+
+
+@dataclass
 class PathsConfig:
     docs_dir: str = "docs"
     output_dir: str = "output"
@@ -102,6 +111,7 @@ class AppConfig:
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
     triggers: TriggerConfig = field(default_factory=TriggerConfig)
+    refiner: RefinerConfig = field(default_factory=RefinerConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
 
 
@@ -157,5 +167,6 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         chunking=_build_dataclass(ChunkingConfig, raw.get("chunking")),
         normalization=_build_dataclass(NormalizationConfig, raw.get("normalization")),
         triggers=_build_dataclass(TriggerConfig, raw.get("triggers")),
+        refiner=_build_dataclass(RefinerConfig, raw.get("refiner")),
         paths=_build_dataclass(PathsConfig, raw.get("paths")),
     )

@@ -2,21 +2,15 @@
 # Stays LEAN. Only active/in-progress state here.
 
 current_phase: "app-integration"
-current_focus: "Tauri app setup and testing"
+current_focus: "End-to-end Tauri app testing with live mic"
 
 active_work:
-  - id: "WS-02"
-    name: "Download LFM2.5 models & build runner"
-    status: pending
-    notes: "Need LFM2.5-Audio GGUF + build llama-liquid-audio-cli from PR #18641"
-  - id: "WS-03"
-    name: "npm install & tauri dev smoke test"
-    status: pending
-    notes: "cd app && npm install && npm run tauri dev"
+  - id: "WS-04"
+    name: "Verify transcription works end-to-end in Tauri"
+    status: in_progress
+    notes: "Audio thresholds lowered, thread-safe queue fixed, needs live speech test"
 
-blockers:
-  - "LFM2.5-Audio-1.5B-GGUF not yet downloaded"
-  - "llama-liquid-audio-cli not yet built from llama.cpp PR #18641"
+blockers: []
 
 pending_decisions: []
 
@@ -25,13 +19,20 @@ recent_sessions:
     date: "2026-03-05"
     focus: "Full v2 rebuild: LFM2.5 upgrade + Tauri app"
     completed:
-      - "Phases 1-7: Pipeline (models, config, triggers, conversation, generation, dashboard, cleanup)"
-      - "Phase 8: FastAPI backend with WebSocket endpoints"
-      - "Phase 9: Tauri + React dual-pane desktop app"
-      - "Phase 10: Post-meeting structured notes with LLM generation"
-      - "Deleted 5 dead/deprecated files, updated CLAUDE.md"
-    next_recommended: "Download LFM2.5 models, build runner, npm install, smoke test"
+      - "Phases 1-10: Full pipeline + FastAPI + Tauri app + meeting notes"
+    next_recommended: "Download models, install deps, smoke test"
+  - id: "session-002"
+    date: "2026-03-05"
+    focus: "Debug no-transcription bug in Tauri app"
+    completed:
+      - "Fixed asyncio.Queue thread-safety (loop.call_soon_threadsafe)"
+      - "Moved model loading from event loop to background thread"
+      - "Lowered audio thresholds for MacBook mic (rms 0.005→0.002, peak 0.02→0.01)"
+      - "Replaced all print() with logger in audio_capture.py"
+      - "Added 28 tests (audio_capture, session, transcript_store)"
+      - "Added audio health diagnostics + StatusBar loading/warning UI"
+    next_recommended: "Test with live speech, verify transcription appears in UI"
 
 completed_summary:
-  total_items: 10
-  total_sessions: 1
+  total_items: 14
+  total_sessions: 2

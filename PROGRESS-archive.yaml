@@ -43,5 +43,17 @@ completed_items:
     name: "Phase 10: Meeting Notes Features"
     date: "2026-03-05"
     files: ["src/api/notes_generator.py", "app/src/components/NoteEditor.tsx"]
+  - id: "WS-01"
+    name: "Toolchain + model download + Tauri smoke test"
+    date: "2026-03-05"
+    notes: "Node, Rust, Python 3.11 venv, LFM2.5 models, pre-built runner"
+  - id: "WS-02"
+    name: "Fix no-transcription bug (3 root causes)"
+    date: "2026-03-05"
+    notes: "asyncio.Queue thread-safety, background model loading, audio thresholds"
+  - id: "WS-03"
+    name: "Test infrastructure + print→logger cleanup"
+    date: "2026-03-05"
+    notes: "28 tests across 3 files, replaced print() with logger"
 
 sessions: []

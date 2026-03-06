@@ -5,25 +5,36 @@ current_phase: "app-integration"
 current_focus: "Live end-to-end testing with mic + Tauri app"
 
 active_work:
-  - id: "WS-06"
+  - id: "WS-07"
     name: "Live speech test in Tauri app"
     status: pending
-    notes: "Silence-based turn boundaries implemented, needs real mic validation"
+    notes: "Full pipeline redesign complete — queue-based audio, text refiner, two-level filters. Needs real mic validation."
 
 blockers: []
 
 pending_decisions: []
 
 recent_sessions:
+  - id: "session-005"
+    date: "2026-03-06"
+    focus: "Pipeline architecture redesign — robust transcription"
+    completed:
+      - "Queue-based audio capture (bounded queue, single worker, no data loss)"
+      - "Removed audio level gating — all audio reaches ASR"
+      - "Two-level filtering: is_hallucination_only (transcript) vs is_noise (triggers)"
+      - "Orchestrator callback interface (replaces monkey-patching)"
+      - "Text refiner (LFM2.5-Instruct, shared Llama instance, polishes finalized turns)"
+      - "Session WAV recording on stop"
+      - "Frontend handles transcript_polished WebSocket messages"
+      - "141 tests passing (59 new), TypeScript strict passes"
+    next_recommended: "Test with live speech — verify no data loss, polish visible, short utterances show"
   - id: "session-004"
     date: "2026-03-06"
     focus: "Fix broken turn boundaries — silence-based detection"
     completed:
-      - "Root-caused gap-based turn detection failure (pipeline cadence > turn_pause)"
       - "Switched to silence-event-driven boundaries (on_silence from audio capture)"
-      - "Wired audio-level silence to TranscriptBuffer via session.py"
       - "Rewrote 30 tests for silence-based boundary model (82 total, all pass)"
-    next_recommended: "Test with live speech, verify multi-chunk turns display correctly"
+    next_recommended: "Test with live speech"
   - id: "session-003"
     date: "2026-03-06"
     focus: "Turn-based transcript buffering + bug fixes + docs update"
@@ -31,14 +42,7 @@ recent_sessions:
       - "BUG-001/002/003 resolved, TranscriptBuffer + upsert + WebSocket protocol"
       - "Rebuilt TranscriptPane, added 48 tests, updated all docs"
     next_recommended: "Test with live speech"
-  - id: "session-002"
-    date: "2026-03-05"
-    focus: "Debug no-transcription bug in Tauri app"
-    completed:
-      - "Fixed asyncio.Queue thread-safety, background model loading, audio thresholds"
-      - "Added 28 tests, audio health diagnostics, StatusBar UI"
-    next_recommended: "Test with live speech"
 
 completed_summary:
-  total_items: 19
-  total_sessions: 4
+  total_items: 26
+  total_sessions: 5

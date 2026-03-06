@@ -94,8 +94,48 @@ completed_items:
     notes: "Gap-based detection broken by pipeline cadence; switched to on_silence events from audio capture"
     files: ["src/api/transcript_buffer.py", "src/api/session.py", "tests/test_transcript_buffer.py"]
 
+  - id: "WS-06"
+    name: "Pipeline architecture redesign for robust transcription"
+    date: "2026-03-06"
+    notes: "Queue-based audio (no data loss), removed audio gating, two-level filters, callback-based orchestrator, text refiner, session WAV recording, transcript_polished WebSocket message"
+    files:
+      - "lib/audio_capture.py"
+      - "lib/filters.py"
+      - "lib/orchestrator.py"
+      - "lib/text_refiner.py (NEW)"
+      - "lib/config.py"
+      - "src/api/session.py"
+      - "src/api/transcript_buffer.py"
+      - "app/src/App.tsx"
+      - "config.yaml"
+      - "tests/test_audio_capture.py"
+      - "tests/test_transcript_buffer.py"
+      - "tests/test_session.py"
+      - "tests/test_text_refiner.py (NEW)"
+      - "tests/test_filters.py (NEW)"
+
 sessions:
   - id: "session-001"
     date: "2026-03-05"
     focus: "Full v2 rebuild: LFM2.5 upgrade + Tauri app"
     completed: ["Phases 1-10: Full pipeline + FastAPI + Tauri app + meeting notes"]
+  - id: "session-002"
+    date: "2026-03-05"
+    focus: "Debug no-transcription bug in Tauri app"
+    completed:
+      - "Fixed asyncio.Queue thread-safety, background model loading, audio thresholds"
+      - "Added 28 tests, audio health diagnostics, StatusBar UI"
+  - id: "session-003"
+    date: "2026-03-06"
+    focus: "Turn-based transcript buffering + bug fixes + docs update"
+    completed:
+      - "BUG-001/002/003 resolved, TranscriptBuffer + upsert + WebSocket protocol"
+      - "Rebuilt TranscriptPane, added 48 tests, updated all docs"
+  - id: "session-004"
+    date: "2026-03-06"
+    focus: "Fix broken turn boundaries — silence-based detection"
+    completed:
+      - "Root-caused gap-based turn detection failure (pipeline cadence > turn_pause)"
+      - "Switched to silence-event-driven boundaries (on_silence from audio capture)"
+      - "Wired audio-level silence to TranscriptBuffer via session.py"
+      - "Rewrote 30 tests for silence-based boundary model (82 total, all pass)"

@@ -18,3 +18,11 @@ llama-cpp-python>=0.3.0
 
 # ColBERT embeddings for semantic RAG
 pylate>=1.0.0
+
+# Configuration
+pyyaml>=6.0
+
+# API server (for Tauri app backend)
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6

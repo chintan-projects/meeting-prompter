@@ -49,3 +49,12 @@ archive*
 data/colbert_index/
 data/*.json
 data/*.db
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/agent-memory-local/
+PROGRESS-full-backup.yaml
+
+# Tauri app build artifacts
+app/node_modules/
+app/dist/
+app/src-tauri/target/

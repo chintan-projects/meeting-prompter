@@ -1,0 +1,60 @@
+# meeting-prompter configuration
+# All thresholds and model settings in one place.
+
+audio:
+  chunk_duration: 4.0       # seconds per audio chunk
+  sample_rate: 16000         # Hz
+  overlap: 0.5               # seconds overlap between chunks
+  rms_threshold: 0.005       # minimum RMS for speech detection
+  peak_threshold: 0.02       # minimum peak for speech detection
+  device_default: "BlackHole 2ch"
+  device_mic: "MacBook Pro Microphone"
+
+models:
+  audio:
+    version: "2.5"           # "2.5" or "2.0" for fallback
+    system_prompt: "Perform ASR."
+    timeout: 30
+  generation:
+    n_ctx: 4096              # context window (LFM2.5 supports 32K, 4K is conservative)
+    max_tokens: 200
+    temperature: 0.0
+    top_p: 1.0
+    max_context_chars: 6000  # was 1500 with LFM2
+    max_question_chars: 500  # was 200 with LFM2
+  retrieval:
+    top_k: 5                 # number of chunks to retrieve (was 3)
+
+buffer:
+  pause_threshold: 1.5       # seconds of silence to trigger flush
+  max_buffer_time: 8.0       # max seconds before forced flush
+  min_words: 4               # minimum words for valid question
+  confidence_threshold: 0.3  # minimum question confidence
+  min_start_score: 0.1       # minimum score to start buffering
+
+detection:
+  question_score_threshold: 0.25
+  rag_confidence_minimum: 0.30
+  extraction_confidence_minimum: 0.25
+
+chunking:
+  target_tokens: 400         # target chunk size for ColBERT
+  overlap_tokens: 50         # overlap between chunks
+  min_tokens: 30             # minimum chunk size
+
+normalization:
+  sigmoid_center: 25.0       # ColBERT score center for sigmoid
+  sigmoid_scale: 5.0         # ColBERT score scale for sigmoid
+
+triggers:
+  question_score_threshold: 0.25
+  topic_match_threshold: 0.50
+  topic_cooldown_seconds: 30.0
+  followup_pause_threshold: 3.0
+  followup_rag_threshold: 0.40
+  watch_words: []            # populated per-meeting via meeting_context.yaml
+
+paths:
+  docs_dir: "docs"
+  output_dir: "output"
+  index_dir: "data/colbert_index"

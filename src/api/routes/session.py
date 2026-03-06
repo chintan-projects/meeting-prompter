@@ -1,10 +1,12 @@
-"""Session management routes — start/stop/status."""
+"""Session management routes — start/stop/status/reindex."""
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
 from src.api.session import Session
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/session", tags=["session"])
 
 # Module-level session singleton (one active session at a time)
@@ -54,25 +56,34 @@ async def list_devices() -> dict:
 
 @router.post("/start")
 async def start_session(req: StartRequest) -> dict:
-    """Start a new meeting session."""
+    """Start a new meeting session.
+
+    Creates a fresh session each time so transcript/RAG state is clean.
+    The previous session (if any) is discarded.
+    """
+    global _session
     session = get_session()
     if session.is_running:
         raise HTTPException(status_code=409, detail="Session already running")
-    session.start(audio_device=req.audio_device)
+    # Create a fresh session for a new recording
+    _session = Session()
+    _session.start(audio_device=req.audio_device)
     return {"status": "started", "audio_device": req.audio_device}
 
 
 @router.post("/stop")
 async def stop_session() -> dict:
-    """Stop the current meeting session."""
-    global _session
+    """Stop the current meeting session.
+
+    Keeps the session object alive so transcript data remains
+    available for export/notes generation. A new session is only
+    created when the user starts a new recording.
+    """
     session = get_session()
     if not session.is_running:
         raise HTTPException(status_code=409, detail="No session running")
     elapsed = session.elapsed_seconds
     session.stop()
-    # Reset singleton so next start gets a fresh session
-    _session = None
     return {"status": "stopped", "elapsed_seconds": elapsed}
 
 
@@ -82,3 +93,24 @@ async def session_status() -> StatusResponse:
     session = get_session()
     status = session.get_status()
     return StatusResponse(**status)
+
+
+@router.post("/reindex")
+async def reindex_documents() -> dict:
+    """Force-rebuild the ColBERT index from docs/ directory.
+
+    Call this after adding or removing files from docs/ to ensure
+    the RAG engine picks up changes without restarting the app.
+    """
+    session = get_session()
+    if session.is_running and session._orchestrator:
+        rag = session._orchestrator.rag
+        if rag.is_using_colbert:
+            logger.info("Rebuilding ColBERT index...")
+            rag.rebuild_index()
+            chunk_count = len(rag._colbert._chunks_metadata) if rag._colbert else 0
+            logger.info("ColBERT index rebuilt: %d chunks", chunk_count)
+            return {"status": "reindexed", "chunk_count": chunk_count}
+        else:
+            return {"status": "error", "detail": "ColBERT not active, using Jaccard fallback"}
+    return {"status": "error", "detail": "No active session with models loaded"}

@@ -1,27 +1,21 @@
-"""RAG Answer Generator using LFM2-1.2B-RAG model.
+"""RAG Answer Generator using LFM2.5-1.2B-Instruct (or LFM2-1.2B-RAG fallback).
 
-This module provides LLM-based answer generation using the LFM2-1.2B-RAG model,
-which is specifically trained for RAG (Retrieval-Augmented Generation) tasks.
-
-The model uses ChatML format and is optimized for:
-- Following provided context strictly
-- Generating concise, factual answers
-- Multi-turn conversations with document context
+Uses ChatML format with a system message for grounded answer generation.
+LFM2.5-1.2B-Instruct has 32K context and strong instruction following (IFEval 86.23).
 """
 
+import logging
 from pathlib import Path
 from typing import Optional
 
 from llama_cpp import Llama
 
+logger = logging.getLogger(__name__)
 
-# ChatML prompt template for LFM2-1.2B-RAG
-# The model was trained on 1M+ multi-turn, multi-document RAG samples
-RAG_PROMPT_TEMPLATE = """<|im_start|>user
-Use the following context to answer the question. Be concise and direct.
-Only use information from the provided context. If the context doesn't contain
-the answer, say so.
-
+# ChatML prompt with system message — LFM2.5-Instruct handles system messages well
+RAG_PROMPT_TEMPLATE = """<|im_start|>system
+You are a meeting intelligence assistant. Answer questions using ONLY the provided context. Be concise and direct (2-3 sentences max). If the context does not contain the answer, say "I don't have that information in my documents."<|im_end|>
+<|im_start|>user
 CONTEXT:
 {context}
 
@@ -31,28 +25,26 @@ QUESTION: {question}<|im_end|>
 
 
 class RAGAnswerGenerator:
-    """
-    Generates answers using LFM2-1.2B-RAG with grounded context.
+    """Generates answers using an LFM model with grounded RAG context.
 
-    This generator is designed to work with pre-extracted context from
-    the retrieval stage. It uses the ChatML format expected by LFM2-1.2B-RAG.
-
-    Attributes:
-        model_path: Path to the GGUF model file
-        n_ctx: Context window size (default 2048)
-        llm: Loaded Llama model instance (lazy loaded)
+    Args:
+        model_path: Path to the GGUF model file.
+        n_ctx: Context window size (default 4096 for LFM2.5, was 2048 for LFM2).
+        max_context_chars: Max characters of RAG context to include (default 6000).
+        max_question_chars: Max characters for the question (default 500).
     """
 
-    def __init__(self, model_path: Path, n_ctx: int = 2048):
-        """
-        Initialize the RAG answer generator.
-
-        Args:
-            model_path: Path to LFM2-1.2B-RAG GGUF model
-            n_ctx: Context window size (default 2048 tokens)
-        """
+    def __init__(
+        self,
+        model_path: Path,
+        n_ctx: int = 4096,
+        max_context_chars: int = 6000,
+        max_question_chars: int = 500,
+    ) -> None:
         self.model_path = model_path
         self.n_ctx = n_ctx
+        self.max_context_chars = max_context_chars
+        self.max_question_chars = max_question_chars
         self.llm: Optional[Llama] = None
 
     def load(self) -> None:
@@ -91,31 +83,21 @@ class RAGAnswerGenerator:
         context: str,
         max_tokens: int = 200,
     ) -> str:
-        """
-        Generate an answer from question and grounded context.
-
-        Uses the ChatML format expected by LFM2-1.2B-RAG:
-        - <|im_start|>user ... <|im_end|>
-        - <|im_start|>assistant ...
+        """Generate an answer from question and grounded context.
 
         Args:
-            question: The user's question
-            context: Pre-extracted/grounded context from retrieval
-            max_tokens: Maximum tokens in response (default 200)
+            question: The user's question.
+            context: Pre-extracted/grounded context from retrieval.
+            max_tokens: Maximum tokens in response (default 200).
 
         Returns:
-            Generated answer string, or error message on failure
+            Generated answer string, or error message on failure.
         """
         self.load()
-        self._reset_state()  # Reset before each generation to prevent KV cache issues
+        self._reset_state()
 
-        # Truncate inputs to fit context window
-        # Leave room for prompt template and generation
-        max_context_chars = 1500
-        max_question_chars = 200
-
-        truncated_context = context[:max_context_chars]
-        truncated_question = question[:max_question_chars]
+        truncated_context = context[: self.max_context_chars]
+        truncated_question = question[: self.max_question_chars]
 
         # Build prompt using ChatML format
         prompt = RAG_PROMPT_TEMPLATE.format(
@@ -150,18 +132,11 @@ class RAGAnswerGenerator:
             return answer
 
         except Exception as e:
-            print(f"[RAG Generator] Error: {e}")
+            logger.error("RAG generation error: %s", e)
             return "[Let me get back to you on that]"
 
     def _clean_answer(self, answer: str) -> str:
-        """
-        Clean up generated answer.
-
-        Handles common issues like:
-        - Trailing incomplete sentences
-        - Excessive whitespace
-        - Repetitive content
-        """
+        """Clean up generated answer: trailing sentences, whitespace."""
         if not answer:
             return answer
 
@@ -180,11 +155,15 @@ class RAGAnswerGenerator:
         return answer
 
 
-def test_rag_generator():
+def test_rag_generator() -> None:
     """Test the RAG generator with sample context."""
-    from pathlib import Path
+    import os
 
-    model_path = Path("models/LFM2-1.2B-RAG-Q4_K_M.gguf")
+    models_dir = Path(os.environ.get("MODELS_DIR", "models"))
+    model_path = models_dir / "LFM2.5-1.2B-Instruct-Q4_K_M.gguf"
+    if not model_path.exists():
+        # Fallback to legacy model
+        model_path = models_dir / "LFM2-1.2B-RAG-Q4_K_M.gguf"
     if not model_path.exists():
         print(f"Model not found: {model_path}")
         return

@@ -57,23 +57,74 @@ class TestThreadSafePut:
         assert [it["seq"] for it in items] == list(range(10))
 
 
-class TestEnqueueTranscript:
-    """Tests for _enqueue_transcript pushing to the transcript queue."""
+class TestTurnCallbacks:
+    """Tests for turn-based callbacks pushing to the transcript queue."""
 
     @pytest.mark.asyncio
-    async def test_enqueue_transcript_message_format(self) -> None:
-        """Enqueued message should have correct structure."""
+    async def test_on_turn_update_message_format(self) -> None:
+        """Turn update should push transcript_update to the queue."""
         session = Session()
         session._loop = asyncio.get_running_loop()
 
-        session._enqueue_transcript("seg-1", "hello world", 123.456)
+        from src.api.transcript_buffer import Turn
+
+        turn = Turn(
+            id="turn-1", text="hello world",
+            start_timestamp=123.456, end_timestamp=123.456,
+        )
+        session._on_turn_update(turn)
 
         await asyncio.sleep(0.01)
         msg = session._transcript_queue.get_nowait()
-        assert msg["type"] == "transcript"
-        assert msg["id"] == "seg-1"
+        assert msg["type"] == "transcript_update"
+        assert msg["id"] == "turn-1"
         assert msg["text"] == "hello world"
         assert msg["timestamp"] == 123.456
+        assert msg["is_final"] is False
+
+    @pytest.mark.asyncio
+    async def test_on_turn_final_message_format(self) -> None:
+        """Turn finalization should push transcript_final to the queue."""
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        from src.api.transcript_buffer import Turn
+
+        turn = Turn(
+            id="turn-1", text="complete sentence here",
+            start_timestamp=100.0, end_timestamp=105.0, is_final=True,
+        )
+        session._on_turn_final(turn)
+
+        await asyncio.sleep(0.01)
+        msg = session._transcript_queue.get_nowait()
+        assert msg["type"] == "transcript_final"
+        assert msg["id"] == "turn-1"
+        assert msg["is_final"] is True
+        assert msg["end_timestamp"] == 105.0
+
+    @pytest.mark.asyncio
+    async def test_turn_update_upserts_into_store(self) -> None:
+        """Turn update should upsert into the transcript store."""
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        from src.api.transcript_buffer import Turn
+
+        turn = Turn(
+            id="turn-1", text="hello",
+            start_timestamp=100.0, end_timestamp=100.0,
+        )
+        session._on_turn_update(turn)
+        assert session.transcript.segment_count == 1
+
+        # Update the same turn
+        turn.text = "hello world"
+        turn.end_timestamp = 101.0
+        session._on_turn_update(turn)
+        assert session.transcript.segment_count == 1  # Still 1, upserted
+        merged = session.transcript.get_merged()
+        assert merged[0]["text"] == "hello world"
 
 
 class TestSessionLifecycle:

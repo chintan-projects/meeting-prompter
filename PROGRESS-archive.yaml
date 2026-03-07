@@ -145,6 +145,30 @@ completed_items:
       - "tests/test_speaker_tracker.py"
       - "tests/test_session.py"
 
+  - id: "WS-10"
+    name: "Dual-stream source-based speaker attribution (Tier 1)"
+    date: "2026-03-06"
+    notes: "Replaced spectral attribution with dual-stream source separation. Mic→You, System→Others. Deleted speaker_tracker.py, audio_features.py. Chat-bubble UI. 163 tests."
+    files:
+      - "src/api/session.py (REWRITE)"
+      - "src/api/transcript_buffer.py"
+      - "src/api/routes/session.py"
+      - "lib/audio_capture.py"
+      - "lib/config.py"
+      - "config.yaml"
+      - "app/src/hooks/useTranscript.ts"
+      - "app/src/components/TranscriptPane.tsx (REWRITE)"
+      - "app/src/components/MeetingSetup.tsx (REWRITE)"
+      - "app/src/App.tsx"
+      - "docs/speaker-attribution.md (NEW)"
+      - "tests/test_session.py"
+      - "tests/test_transcript_buffer.py"
+      - "tests/test_audio_capture.py"
+    deleted:
+      - "lib/speaker_tracker.py"
+      - "lib/audio_features.py"
+      - "tests/test_speaker_tracker.py"
+
 sessions:
   - id: "session-001"
     date: "2026-03-05"
@@ -184,3 +208,22 @@ sessions:
     completed:
       - "Hot-path logging to debug, resizable panes, RMS+ZCR speaker attribution"
       - "172 tests passing (31 new), TypeScript strict passes"
+  - id: "session-007"
+    date: "2026-03-06"
+    focus: "Headless orchestrator + spectral speaker attribution"
+    completed:
+      - "Headless mode, 11-feature spectral vectors, scale-normalized cosine similarity"
+      - "177 tests passing (5 new), TypeScript strict passes"
+  - id: "session-008"
+    date: "2026-03-06"
+    focus: "Speaker attribution research + dual-stream architecture plan"
+    completed:
+      - "Deep research into production diarization (Zoom, Teams, wave-apple, pyannote, diart)"
+      - "Created docs/speaker-attribution.md with three-tier progression"
+      - "Approved Tier 1 implementation plan"
+  - id: "session-009"
+    date: "2026-03-06"
+    focus: "Tier 1 dual-stream source-based speaker attribution"
+    completed:
+      - "Dual-stream audio: mic (You) + system (Others), deterministic attribution"
+      - "Deleted speaker_tracker + audio_features, chat-bubble UI, 163 tests pass"

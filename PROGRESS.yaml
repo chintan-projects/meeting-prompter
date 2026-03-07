@@ -2,43 +2,43 @@
 # Stays LEAN. Only active/in-progress state here.
 
 current_phase: "app-integration"
-current_focus: "Live end-to-end testing with mic + Tauri app"
+current_focus: "Live end-to-end testing with dual-stream audio"
 
 active_work:
-  - id: "WS-07"
-    name: "Live speech test in Tauri app"
+  - id: "WS-10"
+    name: "Live dual-stream test in Tauri app"
     status: pending
-    notes: "Spectral speaker attribution + headless mode ready. Needs real mic validation."
+    notes: "Tier 1 dual-stream attribution implemented. Needs real mic + BlackHole validation."
 
 blockers: []
 
 pending_decisions: []
 
 recent_sessions:
+  - id: "session-009"
+    date: "2026-03-06"
+    focus: "Tier 1 dual-stream source-based speaker attribution"
+    completed:
+      - "Dual-stream audio: mic (You) + system (Others), deterministic attribution"
+      - "Deleted speaker_tracker + audio_features, chat-bubble UI, 163 tests pass"
+      - "Cleaned up SpeakerConfig from config.yaml and lib/config.py"
+    next_recommended: "Live test with mic + BlackHole — verify You/Others labels work"
+  - id: "session-008"
+    date: "2026-03-06"
+    focus: "Speaker attribution research + dual-stream architecture plan"
+    completed:
+      - "Deep research into production diarization (Zoom, Teams, wave-apple, pyannote, diart)"
+      - "Created docs/speaker-attribution.md with three-tier progression"
+      - "Approved Tier 1 implementation plan"
+    next_recommended: "Implement Tier 1 dual-stream source separation"
   - id: "session-007"
     date: "2026-03-06"
     focus: "Headless orchestrator + spectral speaker attribution"
     completed:
-      - "Headless mode suppresses CLI dashboard in Tauri (logger.info instead)"
-      - "11-feature spectral vectors (MFCCs, centroid, bandwidth, rolloff) via scipy"
-      - "Scale-normalized cosine similarity fixes all-Speaker-1 bug"
+      - "Headless mode, 11-feature spectral vectors, scale-normalized cosine similarity"
       - "177 tests passing (5 new), TypeScript strict passes"
-    next_recommended: "Test with live speech — verify speaker labels differentiate voices"
-  - id: "session-006"
-    date: "2026-03-06"
-    focus: "Logging, resizable panes, energy-based speaker attribution"
-    completed:
-      - "Hot-path logging to debug, resizable panes, RMS+ZCR speaker attribution"
-      - "172 tests passing (31 new), TypeScript strict passes"
-    next_recommended: "Test with live speech"
-  - id: "session-005"
-    date: "2026-03-06"
-    focus: "Pipeline architecture redesign — robust transcription"
-    completed:
-      - "Queue-based audio, orchestrator callbacks, text refiner, session WAV recording"
-      - "141 tests passing (59 new), TypeScript strict passes"
     next_recommended: "Test with live speech"
 
 completed_summary:
-  total_items: 30
-  total_sessions: 7
+  total_items: 32
+  total_sessions: 9

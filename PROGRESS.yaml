@@ -2,19 +2,28 @@
 # Stays LEAN. Only active/in-progress state here.
 
 current_phase: "app-integration"
-current_focus: "Live end-to-end testing with dual-stream + diarization + rename"
+current_focus: "Prompt experience overhaul complete — live tested on mic"
 
 active_work:
-  - id: "WS-12"
-    name: "Live dual-stream + Tier 2 diarization test"
+  - id: "WS-14"
+    name: "Live dual-stream test (mic + BlackHole)"
     status: pending
-    notes: "Tier 1 + Tier 2 + rename implemented. Needs real mic + BlackHole validation."
+    notes: "Mic-only tested and working. Needs Zoom/Teams call for dual-stream + diarization validation."
 
 blockers: []
 
 pending_decisions: []
 
 recent_sessions:
+  - id: "session-013"
+    date: "2026-03-07"
+    focus: "Prompt experience overhaul — coaching voice, dead-end suppression, intelligence panel"
+    completed:
+      - "F-202 dead-end suppression (generator + session layers), F-203 context surfacing, F-206 coaching voice prompts"
+      - "Intelligence panel: pin/dismiss, persistence tiers, visual hierarchy, auto-dismiss timers"
+      - "Config externalization (min_answer_length, dismiss timers), WebSocket send-after-close fix"
+      - "313 Python tests (30 new), TypeScript strict passes, live mic test verified"
+    next_recommended: "Live dual-stream test with Zoom/Teams call — verify diarization + intelligence panel together"
   - id: "session-012"
     date: "2026-03-07"
     focus: "Click-to-rename speaker labels (Tier 3 lite)"
@@ -30,13 +39,7 @@ recent_sessions:
       - "SpeakerDiarizer with ECAPA-TDNN, async relabeling, multi-speaker colors"
       - "274 tests passing, 16 frontend tests, TypeScript strict passes"
     next_recommended: "Live test with diarization.enabled=true, verify Speaker A/B/C labels"
-  - id: "session-010"
-    date: "2026-03-06"
-    focus: "Thread-safe LLM, F-103/104 polish, F-105/106 implementation"
-    completed:
-      - "Thread-safe RAGAnswerGenerator, F-103/104/105/106, 241 tests"
-    next_recommended: "Live test with mic + BlackHole — verify full flow end-to-end"
 
 completed_summary:
-  total_items: 40
-  total_sessions: 12
+  total_items: 46
+  total_sessions: 13

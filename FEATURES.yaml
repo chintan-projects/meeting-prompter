@@ -125,7 +125,7 @@ workstreams:
 
       - id: F-202
         name: "Kill dead-end responses"
-        status: backlog
+        status: done
         effort: S
         description: >
           Never show "I don't have that information in my documents."
@@ -138,7 +138,7 @@ workstreams:
 
       - id: F-203
         name: "Context surfacing mode"
-        status: backlog
+        status: done
         effort: L
         description: >
           When discussion matches docs, surface a specific fact — not a
@@ -167,7 +167,7 @@ workstreams:
 
       - id: F-205
         name: "Proactive nudge mode"
-        status: backlog
+        status: in_progress
         effort: L
         description: >
           Detect opportunity moments: decision points, contradictions with
@@ -181,7 +181,7 @@ workstreams:
 
       - id: F-206
         name: "Prompt template rewrite for 1.2B model"
-        status: backlog
+        status: done
         effort: M
         description: >
           Current prompts too verbose for LFM2.5-1.2B-Instruct. Shorter,

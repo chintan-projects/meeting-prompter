@@ -127,6 +127,7 @@ class MeetingOrchestrator:
             model_path=rag_model,
             max_context_chars=config.models.generation.max_context_chars,
             min_extraction_confidence=config.detection.extraction_confidence_minimum,
+            min_answer_length=config.triggers.min_answer_length,
         )
         self._status("Generation ready")
 

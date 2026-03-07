@@ -24,22 +24,32 @@ class TriggerType(Enum):
 
     @property
     def label(self) -> str:
-        """Human-readable label for display."""
+        """Human-readable label for display (coaching-oriented)."""
         return {
-            TriggerType.ALERT: "ALERT",
-            TriggerType.QUESTION: "QUESTION",
-            TriggerType.TOPIC_MATCH: "TOPIC",
-            TriggerType.FOLLOW_UP: "FOLLOW-UP",
+            TriggerType.ALERT: "HEADS UP",
+            TriggerType.QUESTION: "ANSWER",
+            TriggerType.TOPIC_MATCH: "FYI",
+            TriggerType.FOLLOW_UP: "SUGGEST",
         }[self]
 
     @property
     def emoji(self) -> str:
-        """Emoji prefix for CLI display."""
+        """Emoji prefix for display."""
         return {
-            TriggerType.ALERT: "\U0001f534",       # red circle
-            TriggerType.QUESTION: "\U0001f4ac",     # speech bubble
-            TriggerType.TOPIC_MATCH: "\U0001f4cb",  # clipboard
-            TriggerType.FOLLOW_UP: "\u2753",        # question mark
+            TriggerType.ALERT: "\u26a0\ufe0f",     # warning sign
+            TriggerType.QUESTION: "\U0001f4a1",     # light bulb
+            TriggerType.TOPIC_MATCH: "\U0001f4cc",  # pushpin
+            TriggerType.FOLLOW_UP: "\U0001f4ac",    # speech bubble
+        }[self]
+
+    @property
+    def persistence(self) -> str:
+        """Auto-dismiss tier: persistent (user dismisses), standard (90s), ephemeral (45s)."""
+        return {
+            TriggerType.ALERT: "persistent",
+            TriggerType.QUESTION: "persistent",
+            TriggerType.TOPIC_MATCH: "ephemeral",
+            TriggerType.FOLLOW_UP: "standard",
         }[self]
 
 

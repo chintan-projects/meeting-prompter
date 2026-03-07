@@ -98,7 +98,7 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8420
 rm -rf data/colbert_index/
 
 # Tests
-pytest                                       # All tests (283 tests)
+pytest                                       # All tests (313 tests)
 pytest tests/test_transcript_buffer.py -v    # Buffer tests only
 cd app && npx tsc --noEmit                   # TypeScript check
 ```
@@ -150,20 +150,20 @@ Two independent buffers receive the same raw chunks:
 - **TranscriptBuffer**: For display (turn accumulation → UI)
 - **ConversationBuffer**: For intelligence (trigger detection → RAG → generation)
 
-### Trigger Types (priority order)
+### Intelligence Modes (priority order)
 
-| Type | Priority | Description | Max Tokens |
-|------|----------|-------------|------------|
-| ALERT | 1 | Watch word detected | 100 |
-| QUESTION | 2 | Direct question in speech | 200 |
-| TOPIC_MATCH | 3 | Discussion matches docs | 100 |
-| FOLLOW_UP | 4 | Pause after topic | 75 |
+| Mode | Label | Persona | Max Tokens | Persistence |
+|------|-------|---------|------------|-------------|
+| ALERT | HEADS UP | Direct alert — what you need to know now | 100 | persistent |
+| QUESTION | ANSWER | Concise answer + optional coaching suffix | 200 | persistent |
+| TOPIC_MATCH | FYI | Surface new fact from docs (not conversation echo) | 100 | ephemeral (45s) |
+| FOLLOW_UP | SUGGEST | Coaching nudge — "Ask about...", "Mention that..." | 75 | standard (90s) |
 
 ### Key Design Decisions
 
 - **Turn-based transcript buffering**: Backend accumulates raw ASR chunks into speech turns via pause detection. Frontend receives coherent paragraphs, not fragmented chunks.
 - **Dual buffer architecture**: TranscriptBuffer (display) and ConversationBuffer (triggers) operate independently on the same chunk stream.
-- **4 trigger types** replace single question detection. Each gets a purpose-built prompt template.
+- **4 intelligence modes** with coaching voice persona. Dead-end suppression (F-202): empty/low-quality answers silently filtered at generator and session layers. Persistence tiers control auto-dismiss (configurable in config.yaml).
 - **Rolling 90s transcript window** provides conversation context for generation.
 - **Context budget split**: 30% conversation, 70% RAG context in prompts.
 - **Two-stage question pipeline**: extraction grounding → generation. Falls through to direct generation when extraction confidence is low.
@@ -180,8 +180,9 @@ Two independent buffers receive the same raw chunks:
 - Server → Client: `{"type": "transcript_final", "id": "turn-1", "text": "...", "timestamp": ..., "end_timestamp": ..., "is_final": true}`
 - Client → Server: `{"type": "edit", "id": "turn-1", "text": "corrected text"}`
 
-**`/ws/prompts`** — Trigger results:
-- Server → Client: `{"type": "prompt", "trigger_type": "question", "trigger_text": "...", "answer": "...", "confidence": 0.75, "method": "hybrid", "latency_ms": 480, "source": "ColBERT + hybrid"}`
+**`/ws/prompts`** — Intelligence results with display metadata:
+- Server → Client: `{"type": "prompt", "trigger_type": "question", "trigger_text": "...", "answer": "...", "confidence": 0.75, "method": "hybrid", "latency_ms": 480, "source": "ColBERT + hybrid", "persistence": "persistent", "dismiss_ms": 0, "display_label": "ANSWER", "display_emoji": "💡"}`
+- Dead-end results (`no_match`, `no_context`, `suppressed`, or empty answer) are filtered server-side and never sent to the client.
 
 ### Fallback Chains
 
@@ -201,7 +202,7 @@ Models in `~/Projects/_models/` (shared). Set `MODELS_DIR` env var to override.
 
 All thresholds externalized to `config.yaml`. Loader: `lib/config.py` with typed dataclasses. Falls back to defaults if no YAML present.
 
-Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question_score_threshold=0.25, topic_match_threshold=0.50, turn_pause=2.0s, max_turn_duration=30s, watch_words configurable per meeting.
+Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question_score_threshold=0.25, topic_match_threshold=0.50, turn_pause=2.0s, max_turn_duration=30s, watch_words configurable per meeting. Intelligence panel: min_answer_length=10, dismiss_persistent_ms=0, dismiss_standard_ms=90000, dismiss_ephemeral_ms=45000.
 
 ## Conventions
 
@@ -211,4 +212,4 @@ Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question
 - Thread safety: `threading.Lock()` in ConversationBuffer, `loop.call_soon_threadsafe` for queue bridge
 - All files under 300 lines
 - `logging` module throughout (no `print()` in lib/)
-- 283 Python tests, 16 frontend tests, TypeScript strict mode
+- 313 Python tests, 16 frontend tests, TypeScript strict mode

@@ -84,14 +84,18 @@ The system uses a **three-model pipeline** with four trigger types and **dual-st
 | LFM2-ColBERT-350M | 1.4 GB | Semantic retrieval | ~100ms |
 | LFM2.5-1.2B-Instruct | 700 MB | Mode-aware generation | ~500ms |
 
-### Four Trigger Types
+### Four Intelligence Modes
 
-| Type | Priority | Description | Max Tokens |
-|------|----------|-------------|------------|
-| ALERT | 1 | Watch word detected | 100 |
-| QUESTION | 2 | Direct question in speech | 200 |
-| TOPIC_MATCH | 3 | Discussion matches docs | 100 |
-| FOLLOW_UP | 4 | Pause after topic | 75 |
+The system operates as a **meeting coach**, not an FAQ bot. Each mode has a distinct voice, persistence tier, and visual style:
+
+| Mode | Label | Emoji | What It Does | Persistence |
+|------|-------|-------|-------------|-------------|
+| ALERT | HEADS UP | :warning: | Key term detected — states what you need to know **right now** | Persistent (manual dismiss) |
+| QUESTION | ANSWER | :bulb: | Answers a question heard in conversation, with optional coaching suffix | Persistent (manual dismiss) |
+| TOPIC_MATCH | FYI | :pushpin: | Surfaces a **new** fact from your docs that hasn't been mentioned yet | Ephemeral (45s auto-dismiss) |
+| FOLLOW_UP | SUGGEST | :speech_balloon: | Coaching nudge — what to say or ask next ("Ask about...", "Mention that...") | Standard (90s auto-dismiss) |
+
+Dead-end suppression: if the system can't produce a useful answer (empty result, low confidence, no matching context), it stays silent rather than showing "I don't have that information."
 
 ### Dual-Stream Speaker Attribution
 
@@ -125,38 +129,104 @@ Fallback chain: ColBERT -> Jaccard keyword search. Generation -> extraction bull
 
 ## Desktop App
 
-The Tauri app provides a dual-pane interface with resizable panels, keyboard shortcuts, and post-meeting notes export:
+The Tauri app provides a dual-pane interface: live transcript on the left, intelligence panel on the right.
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ Meeting Prompter    ● Recording   00:12:34               │
-├────────────────────────┬────────────────────────────────┤
-│   TRANSCRIPT           │   PROMPTS                      │
-│                        │                                │
-│  [12:01] You           │  ALERT: "pricing"              │
-│  What about the        │  Our pricing model is...       │
-│  deployment timeline   │                                │
-│  for Edge SDK?         │  ANSWER                        │
-│  ●                     │  Q: Deployment timeline?        │
-│                        │  Edge SDK ships Q2...          │
-│  [12:02] Alice         │                                │
-│  We're targeting       │  TOPIC: compliance             │
-│  Q2 for the beta       │  SOC2 audit completed...       │
-│  release.              │                                │
-│                        │  FOLLOW-UP                     │
-│  [12:03] Speaker B     │  Ask about HIPAA status        │
-│  And compliance?       │                                │
-├────────────────────────┴────────────────────────────────┤
-│  ⌘R Record  ⌘P Pause  ⌘T Transcript  Export Notes       │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ Meeting Prompter    ● Recording   00:12:34                    │
+├──────────────────────────┬───────────────────────────────────┤
+│   TRANSCRIPT             │   INTELLIGENCE               (3) │
+│                          │                                   │
+│  [12:01] You             │  ⚠️ HEADS UP            75% 📌 ✕ │
+│  What about the          │  "pricing"                        │
+│  deployment timeline     │  Competitor quoted $2M last       │
+│  for Edge SDK?           │  quarter; your offer is $1.5M.    │
+│  ●                       │  📎 context/competitive.md        │
+│                          │                                   │
+│  [12:02] Alice           │  💡 ANSWER               82% 📌  │
+│  We're targeting         │  Q: Deployment timeline?          │
+│  Q2 for the beta         │  Edge SDK ships Q2 2024 for       │
+│  release.                │  mobile and web.                  │
+│                          │  You could mention: the March     │
+│  [12:03] Speaker B       │  milestone for the Edge SDK.      │
+│  And compliance?         │  📎 context/roadmap.md            │
+│                          │                                   │
+│                          │  📌 FYI                    60%    │
+│                          │  pricing model                    │
+│                          │  SOC2 Type II completed Jan       │
+│                          │  2024 — not yet raised.           │
+│                          │  📎 context/compliance.md         │
+│                          │                                   │
+│                          │  💬 SUGGEST                50% 📌 │
+│                          │  migration approach               │
+│                          │  Ask about their preferred        │
+│                          │  migration timeline for the       │
+│                          │  data layer.                      │
+│                          │  📎 context/migration.md          │
+├──────────────────────────┴───────────────────────────────────┤
+│  ⌘R Record  ⌘P Pause  ⌘T Transcript  ⌘N Notes               │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-- **Left pane**: Live transcript with speaker labels (You/Speaker A/B/C). Active turns show a pulsing indicator. Double-click finalized turns to edit. Click speaker labels to rename.
-- **Right pane**: Trigger results color-coded by type and priority-sorted (alerts on top).
-- **Resizable**: Drag the divider between panes. Width persists across sessions.
-- **Meeting setup**: Configure agenda, watch words, participants, and select audio devices before recording.
-- **Meeting notes**: After recording, generate structured notes (summary, decisions, action items) and export to Markdown or copy to clipboard.
-- **Keyboard shortcuts**: `Cmd+R` toggle recording, `Cmd+P` pause/resume, `Cmd+T` toggle transcript, `Cmd+N` toggle notes, `Escape` close modals.
+### Transcript Pane (Left)
+
+- Live transcript with speaker labels (You / Speaker A / Speaker B / etc.)
+- Active turn shows a pulsing dot indicator
+- Double-click any finalized turn to edit the text
+- Click any speaker label to rename it (e.g. "Speaker A" to "Alice")
+- Resizable: drag the divider between panes (width persists across sessions)
+
+### Intelligence Panel (Right)
+
+The right pane acts as a **meeting coach** — not an FAQ bot. It provides four kinds of interventions, each with distinct behavior:
+
+**Card anatomy**: Every card shows the mode label + emoji, the trigger text (what was detected), the response, a confidence score, pin/dismiss controls, and the source document.
+
+**Card types**:
+
+- **HEADS UP** (amber border) — A watch word was detected. Direct and urgent. "Competitor quoted $2M last quarter; your offer is $1.5M." Stays on screen until you dismiss it.
+- **ANSWER** (blue border) — A question was heard in conversation. Concise factual answer with an optional coaching suffix ("You could mention: ..."). Stays on screen until you dismiss it.
+- **FYI** (gray border, compact) — Discussion matches your docs. Surfaces a **new** fact not yet mentioned in conversation — not a summary of what's being said. Auto-dismisses after 45 seconds.
+- **SUGGEST** (purple border, italic) — Coaching nudge during a natural pause. Starts with an action verb: "Ask about...", "Mention that...", or "Clarify whether...". Auto-dismisses after 90 seconds.
+
+**Pin and dismiss**:
+
+- Click 📌 on any card to **pin** it — pinned cards appear in a dedicated section at the top and never auto-dismiss
+- Click ✕ on persistent or pinned cards to **dismiss** them from view
+- Ephemeral and standard cards auto-dismiss based on their timer, unless pinned
+
+**Dead-end suppression**: If the system can't produce a useful answer (empty result, no matching context, answer too short), the card is silently suppressed. You never see "I don't have that information."
+
+**Empty state**: When no intelligence is active, the panel shows: *"Listening for questions, topics, and opportunities to help."*
+
+### Meeting Setup
+
+Before recording, a setup dialog lets you configure:
+- **Audio devices**: Select microphone (your voice) and system audio device (remote participants via BlackHole)
+- **Meeting title**: Optional label shown in the status bar
+- **Watch words**: Terms that trigger HEADS UP alerts (e.g. competitor names, pricing terms)
+- **Agenda items**: Topics to track during the meeting
+- **Participants**: Expected attendees
+
+Quick Start bypasses setup with default devices for fast iteration.
+
+### Post-Meeting Notes
+
+After stopping a recording, click **Export Notes** (or `Cmd+N`) to generate structured meeting notes:
+- Summary of the discussion
+- Key decisions made
+- Action items (attributed to speakers)
+- Export to Markdown or copy to clipboard
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Cmd+R` | Toggle recording (start/stop) |
+| `Cmd+P` | Pause / resume session |
+| `Cmd+T` | Toggle transcript pane visibility |
+| `Cmd+N` | Toggle notes editor (after recording) |
+| `Escape` | Close active modal (notes or setup) |
 
 ## ColBERT: Why Late Interaction?
 
@@ -246,7 +316,7 @@ meeting-prompter/
 │   │   ├── App.tsx                   # Root layout, WebSocket connections
 │   │   ├── components/
 │   │   │   ├── TranscriptPane.tsx    # Turn-based transcript + speaker rename
-│   │   │   ├── PromptsPane.tsx       # Live trigger results
+│   │   │   ├── PromptsPane.tsx       # Intelligence panel (pin/dismiss, persistence tiers)
 │   │   │   ├── StatusBar.tsx         # Session controls, audio health
 │   │   │   ├── MeetingSetup.tsx      # Pre-meeting config + device selection
 │   │   │   └── NoteEditor.tsx        # Post-meeting notes editor
@@ -256,7 +326,7 @@ meeting-prompter/
 │   │   │   └── useKeyboardShortcuts.ts # Global keyboard shortcut handler
 │   │   └── styles/global.css         # Dark theme, pulse animation
 │   └── package.json
-├── tests/                            # 283 Python tests across 9 files
+├── tests/                            # 313 Python tests across 10 files
 │   ├── test_audio_capture.py         # Dual-stream capture + health diagnostics
 │   ├── test_transcript_buffer.py     # Turn accumulation, boundaries
 │   ├── test_transcript_store.py      # Append, upsert, edit, rename, export

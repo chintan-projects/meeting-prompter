@@ -4,6 +4,7 @@ Replaces hybrid_answerer.py with trigger-type-aware generation:
 - Selects prompt template by TriggerType
 - Context budget: 30% conversation, 70% RAG context
 - Keeps extraction fallback from answer_extractor.py
+- Suppresses dead-end responses (F-202): empty/near-empty → "suppressed"
 """
 import logging
 import time
@@ -71,10 +72,12 @@ class ModeAwareGenerator:
         max_context_chars: int = 6000,
         min_extraction_confidence: float = 0.25,
         use_generation: bool = True,
+        min_answer_length: int = 10,
     ) -> None:
         self.max_context_chars = max_context_chars
         self.min_extraction_confidence = min_extraction_confidence
         self.use_generation = use_generation
+        self.min_answer_length = min_answer_length
         self._generator: Optional[RAGAnswerGenerator] = None
 
         if use_generation:
@@ -113,6 +116,16 @@ class ModeAwareGenerator:
             result = self._process_question(trigger, rag_text, conv_text, start)
         else:
             result = self._process_other(trigger, rag_text, conv_text, start)
+
+        # F-202: Suppress dead-end responses — silence is better than "I can't help"
+        if not result.answer or len(result.answer.strip()) < self.min_answer_length:
+            return GenerationResult(
+                answer="",
+                trigger_type=trigger.type,
+                confidence=result.confidence,
+                method="suppressed",
+                latency_ms=_elapsed_ms(start),
+            )
 
         return result
 

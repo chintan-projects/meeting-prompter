@@ -30,11 +30,41 @@ async def prompts_ws(ws: WebSocket) -> None:
     session = get_session()
     logger.info("Prompts WebSocket connected")
 
+    closed = asyncio.Event()
+
+    async def send_loop() -> None:
+        try:
+            while not closed.is_set():
+                msg = await session._prompt_queue.get()
+                if closed.is_set():
+                    break
+                await ws.send_json(msg)
+        except (WebSocketDisconnect, asyncio.CancelledError, RuntimeError):
+            pass
+
+    async def recv_loop() -> None:
+        """Wait for client disconnect."""
+        try:
+            while True:
+                await ws.receive_text()
+        except (WebSocketDisconnect, asyncio.CancelledError):
+            pass
+        finally:
+            closed.set()
+
+    sender = asyncio.create_task(send_loop())
+    receiver = asyncio.create_task(recv_loop())
+
     try:
-        while True:
-            msg = await session._prompt_queue.get()
-            await ws.send_json(msg)
-    except (WebSocketDisconnect, asyncio.CancelledError):
+        done, pending = await asyncio.wait(
+            [sender, receiver], return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+    except WebSocketDisconnect:
         pass
     finally:
+        closed.set()
+        sender.cancel()
+        receiver.cancel()
         logger.info("Prompts WebSocket disconnected")

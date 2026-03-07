@@ -41,13 +41,17 @@ async def transcript_ws(ws: WebSocket) -> None:
             **seg_data,
         })
 
+    closed = asyncio.Event()
+
     # Task to send transcript turns from queue
     async def send_loop() -> None:
         try:
-            while True:
+            while not closed.is_set():
                 msg = await session._transcript_queue.get()
+                if closed.is_set():
+                    break
                 await ws.send_json(msg)
-        except asyncio.CancelledError:
+        except (WebSocketDisconnect, asyncio.CancelledError, RuntimeError):
             pass
 
     # Task to receive edits from client
@@ -67,15 +71,23 @@ async def transcript_ws(ws: WebSocket) -> None:
                         session.rename_speaker(old_speaker, new_speaker)
         except (WebSocketDisconnect, asyncio.CancelledError):
             pass
+        finally:
+            closed.set()
 
     sender = asyncio.create_task(send_loop())
     receiver = asyncio.create_task(recv_loop())
 
     try:
-        await asyncio.gather(sender, receiver)
+        # When recv_loop exits (client disconnect), cancel the sender
+        done, pending = await asyncio.wait(
+            [sender, receiver], return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
     except WebSocketDisconnect:
         pass
     finally:
+        closed.set()
         sender.cancel()
         receiver.cancel()
         logger.info("Transcript WebSocket disconnected")

@@ -58,3 +58,4 @@ PROGRESS-full-backup.yaml
 app/node_modules/
 app/dist/
 app/src-tauri/target/
+output/

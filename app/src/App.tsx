@@ -26,6 +26,10 @@ interface PromptResult {
   latency_ms: number;
   source: string;
   receivedAt: number;
+  persistence: "persistent" | "standard" | "ephemeral";
+  dismiss_ms: number;
+  display_label: string;
+  display_emoji: string;
 }
 
 interface MeetingConfig {
@@ -50,8 +54,18 @@ function App() {
   });
   const isDraggingRef = useRef(false);
   const [promptResults, setPromptResults] = useState<PromptResult[]>([]);
+  const [pinnedIds, setPinnedIds] = useState<Set<number>>(new Set());
+  const [dismissedIds, setDismissedIds] = useState<Set<number>>(new Set());
   const [showNotes, setShowNotes] = useState(false);
   const promptIdRef = useRef(0);
+
+  const handlePinPrompt = useCallback((id: number) => {
+    setPinnedIds((prev) => new Set(prev).add(id));
+  }, []);
+
+  const handleDismissPrompt = useCallback((id: number) => {
+    setDismissedIds((prev) => new Set(prev).add(id));
+  }, []);
 
   const { segments, upsertSegment, editSegment } = useTranscript();
 
@@ -321,7 +335,13 @@ function App() {
             title="Drag to resize"
           />
         )}
-        <PromptsPane results={promptResults} />
+        <PromptsPane
+          results={promptResults}
+          pinnedIds={pinnedIds}
+          dismissedIds={dismissedIds}
+          onPin={handlePinPrompt}
+          onDismiss={handleDismissPrompt}
+        />
       </div>
 
       {showSetup && (

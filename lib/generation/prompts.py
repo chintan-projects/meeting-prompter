@@ -1,19 +1,19 @@
-"""Prompt templates per trigger type.
+"""Prompt templates per trigger type — coaching voice.
 
 Each trigger type gets a purpose-built prompt that:
-- Includes conversation context for relevance
-- Limits output length appropriately
-- Instructs the model on the expected response style
+- Uses a "meeting coach" persona (not encyclopedic assistant)
+- Varies tone by intervention mode (factual, coaching, alerting)
+- Keeps output short for the 1.2B model
+- Never says "I don't have that information" (dead-ends suppressed upstream)
 
 All prompts use ChatML format for LFM2.5-Instruct.
 """
 
-# --- Question: direct answer with grounded context ---
+# --- Answer: concise factual response with optional coaching suffix ---
 QUESTION_SYSTEM = (
-    "You are a meeting intelligence assistant. Answer the question using ONLY "
-    "the provided context. Be concise and direct (2-3 sentences max). "
-    "If the context does not contain the answer, say "
-    '"I don\'t have that information in my documents."'
+    "You are a meeting coach. Answer concisely using the provided context. "
+    "Two sentences max. If useful, add a practical suggestion on a new line "
+    "starting with 'You could mention:'"
 )
 
 QUESTION_PROMPT = """<|im_start|>system
@@ -32,11 +32,11 @@ QUESTION: {text}<|im_end|>
 QUESTION_MAX_TOKENS = 200
 
 
-# --- Topic brief: short key-fact surfacing ---
+# --- FYI: surface NEW info from docs, don't echo the conversation ---
 TOPIC_SYSTEM = (
-    "You are a meeting intelligence assistant. The discussion has touched on a "
-    "topic that matches your documents. Provide a brief, relevant fact from the "
-    "context that would be useful right now. One to two sentences max."
+    "You are a meeting coach. Share ONE specific fact from the documents that "
+    "has not been mentioned in the conversation yet. Add something new — do not "
+    "summarize what is being discussed. One sentence."
 )
 
 TOPIC_PROMPT = """<|im_start|>system
@@ -55,11 +55,11 @@ TOPIC DETECTED: {text}<|im_end|>
 TOPIC_MAX_TOKENS = 100
 
 
-# --- Follow-up: suggest one follow-up point ---
+# --- Suggest: coaching nudge — what to say or ask next ---
 FOLLOWUP_SYSTEM = (
-    "You are a meeting intelligence assistant. Based on the recent conversation "
-    "and your documents, suggest ONE specific follow-up point or question that "
-    "would be valuable to raise. Keep it to one sentence."
+    "You are a meeting coach. Suggest what the user should say or ask next. "
+    "Start with an action verb: 'Ask about...', 'Mention that...', or "
+    "'Clarify whether...'. One sentence max."
 )
 
 FOLLOWUP_PROMPT = """<|im_start|>system
@@ -78,11 +78,10 @@ DISCUSSION POINT: {text}<|im_end|>
 FOLLOWUP_MAX_TOKENS = 75
 
 
-# --- Alert: relevant context for watch word ---
+# --- Heads Up: key term flagged — what the user needs to know now ---
 ALERT_SYSTEM = (
-    "You are a meeting intelligence assistant. A watch word was detected in the "
-    "conversation. Provide the most relevant information from your documents "
-    "about this topic. Be concise (1-2 sentences)."
+    "You are a meeting coach. A key term was just mentioned. State what the "
+    "user needs to know right now. One to two sentences. Be direct."
 )
 
 ALERT_PROMPT = """<|im_start|>system
@@ -94,7 +93,7 @@ RECENT CONVERSATION:
 CONTEXT:
 {context}
 
-WATCH WORD DETECTED: {text}<|im_end|>
+KEY TERM DETECTED: {text}<|im_end|>
 <|im_start|>assistant
 """
 

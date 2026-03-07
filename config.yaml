@@ -57,6 +57,10 @@ triggers:
   followup_pause_threshold: 3.0
   followup_rag_threshold: 0.40
   watch_words: []            # populated per-meeting via meeting_context.yaml
+  min_answer_length: 10      # suppress answers shorter than this (F-202)
+  dismiss_persistent_ms: 0   # 0 = no auto-dismiss (Answer, Heads Up)
+  dismiss_standard_ms: 90000 # Suggest cards auto-dismiss (ms)
+  dismiss_ephemeral_ms: 45000 # FYI cards auto-dismiss (ms)
 
 refiner:
   enabled: true

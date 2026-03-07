@@ -253,9 +253,23 @@ class Session:
     def _on_trigger_result(self, trigger: Trigger, result: GenerationResult) -> None:
         """Called when a trigger fires and produces a generation result.
 
+        F-202: Suppresses dead-end responses — never show empty answers or
+        "no_match"/"no_context"/"suppressed" results to the user.
+
         Note: Q&A memory is handled by the orchestrator's _handle_triggers —
         no duplicate add_qa_pair here.
         """
+        # F-202: Suppress dead-end responses — silence beats "I can't help"
+        _dead_end_methods = {"no_match", "no_context", "suppressed"}
+        if not result.answer or result.method in _dead_end_methods:
+            logger.debug(
+                "[trigger] %s suppressed (method=%s, answer_len=%d)",
+                trigger.type.value,
+                result.method,
+                len(result.answer) if result.answer else 0,
+            )
+            return
+
         logger.info(
             "[trigger] %s → %s (conf=%.2f, %dms)",
             trigger.type.value,
@@ -273,6 +287,15 @@ class Session:
             "timestamp": time.time(),
         })
 
+        # Resolve auto-dismiss duration from config
+        _dismiss_ms_map = {
+            "persistent": self.config.triggers.dismiss_persistent_ms,
+            "standard": self.config.triggers.dismiss_standard_ms,
+            "ephemeral": self.config.triggers.dismiss_ephemeral_ms,
+        }
+        persistence = trigger.type.persistence
+        dismiss_ms = _dismiss_ms_map.get(persistence, 90_000)
+
         self._thread_safe_put(self._prompt_queue, {
             "type": "prompt",
             "trigger_type": trigger.type.value,
@@ -282,6 +305,10 @@ class Session:
             "method": result.method,
             "latency_ms": result.latency_ms,
             "source": result.source,
+            "persistence": persistence,
+            "dismiss_ms": dismiss_ms,
+            "display_label": trigger.type.label,
+            "display_emoji": trigger.type.emoji,
         })
 
     # --- Turn callbacks (called from TranscriptBuffer in pipeline thread) ---

@@ -1,0 +1,305 @@
+# meeting-prompter — Feature Pipeline
+# Organized by workstream. Priority: V1 > V1.5 > V2 > V3
+# Status: backlog | planned | in_progress | done
+# Effort: S (hours) | M (1-2 days) | L (3-5 days) | XL (1+ week)
+
+workstreams:
+
+  # ─── WORKSTREAM 1: Core Meeting Experience ───────────────────────
+  # Priority: V1 — this is the product. Nail transcription, notes,
+  # speaker detection, and summarization before anything else.
+
+  core_meeting:
+    name: "Core Meeting Experience"
+    phase: V1
+    description: >
+      The foundational loop: capture audio → transcribe → attribute speakers →
+      build turns → generate notes → export. Must feel polished and trustworthy
+      before prompting or diarization matter.
+
+    features:
+      - id: F-101
+        name: "Speaker-attributed meeting notes"
+        status: done
+        effort: M
+        description: >
+          Notes generator groups output by speaker: "Your talking points" vs
+          "What others said". Action items extracted per-speaker. Summary
+          includes who said what, not just what was said.
+        depends_on: []
+        files:
+          - src/api/notes_generator.py
+          - lib/generation/prompts.py
+
+      - id: F-102
+        name: "Full-metadata export (JSON + Markdown)"
+        status: done
+        effort: S
+        description: >
+          export_markdown() includes source field. New export_json() returns
+          segments with all metadata (id, text, speaker, source, timestamps,
+          is_final). API endpoint GET /transcript/export?format=json|md.
+        depends_on: []
+        files:
+          - src/api/transcript_store.py
+          - src/api/routes/transcript.py
+
+      - id: F-103
+        name: "Meeting setup flow polish"
+        status: done
+        effort: M
+        description: >
+          MeetingSetup dialog: select audio devices (mic + system), load
+          meeting context YAML, set watch words, preview audio levels before
+          starting. Currently bare-bones.
+        depends_on: []
+        files:
+          - app/src/components/MeetingSetup.tsx
+          - src/api/routes/session.py
+
+      - id: F-104
+        name: "Keyboard shortcuts and session controls"
+        status: done
+        effort: S
+        description: >
+          Pause/resume session, mark action item on current turn, toggle
+          prompts pane visibility. Keyboard-driven workflow for power users.
+        depends_on: []
+        files:
+          - app/src/App.tsx
+          - app/src/components/StatusBar.tsx
+
+      - id: F-105
+        name: "Transcript quality: refiner tuning + turn boundary polish"
+        status: backlog
+        effort: M
+        description: >
+          Audit text refiner output quality on real meetings. Tune turn pause
+          threshold (currently 2s) and max turn duration (30s) based on real
+          conversation patterns. Ensure polished text doesn't lose meaning.
+        depends_on: []
+        files:
+          - lib/text_refiner.py
+          - src/api/transcript_buffer.py
+
+      - id: F-106
+        name: "Post-meeting summary generation"
+        status: backlog
+        effort: M
+        description: >
+          After session stop, generate a structured summary: key decisions,
+          action items (with owners from speaker labels), topics discussed,
+          open questions. Uses full transcript, not rolling 90s window.
+        depends_on: [F-101]
+        files:
+          - src/api/notes_generator.py
+          - app/src/components/NoteEditor.tsx
+
+  # ─── WORKSTREAM 2: Prompting System Redesign ─────────────────────
+  # Priority: V1 but AFTER core meeting experience is solid.
+  # Current system fires on syntax, not intent. Needs product rethink.
+
+  prompting:
+    name: "Prompting System Redesign"
+    phase: V1
+    description: >
+      Replace trigger-type thinking with intervention-mode thinking.
+      Current 4 categories (QUESTION, TOPIC, ALERT, FOLLOW_UP) are
+      engineering categories. Users need: context surfacing, question
+      enrichment, proactive nudges. Defer until core meeting experience
+      informs what users actually need.
+
+    features:
+      - id: F-201
+        name: "Rhetorical question detection"
+        status: backlog
+        effort: M
+        description: >
+          Detect self-answering patterns ("Can you do that? Yeah."),
+          confirmations ("Right?", "Okay?"), and rhetorical forms
+          ("Don't we already...?"). Suppress question trigger for these.
+          Currently fires at 90% on conversational confirmations.
+        depends_on: []
+        files:
+          - lib/triggers/question_trigger.py
+
+      - id: F-202
+        name: "Kill dead-end responses"
+        status: backlog
+        effort: S
+        description: >
+          Never show "I don't have that information in my documents."
+          Either surface something useful (related context, suggest a
+          better question) or stay silent. Dead-ends destroy trust.
+        depends_on: []
+        files:
+          - lib/generation/generator.py
+          - lib/generation/prompts.py
+
+      - id: F-203
+        name: "Context surfacing mode"
+        status: backlog
+        effort: L
+        description: >
+          When discussion matches docs, surface a specific fact — not a
+          paraphrase of what's being discussed. Current TOPIC trigger
+          generates summaries of the conversation rather than adding new
+          information from docs.
+        depends_on: [F-202]
+        files:
+          - lib/triggers/topic_trigger.py
+          - lib/generation/prompts.py
+
+      - id: F-204
+        name: "Question enrichment mode"
+        status: backlog
+        effort: L
+        description: >
+          When a real question is detected and docs have relevant context,
+          answer it. When docs don't match, suggest a better-framed
+          question based on what the docs do contain. Replace binary
+          "answer or nothing" with a spectrum of helpfulness.
+        depends_on: [F-201, F-202]
+        files:
+          - lib/triggers/question_trigger.py
+          - lib/generation/generator.py
+          - lib/generation/prompts.py
+
+      - id: F-205
+        name: "Proactive nudge mode"
+        status: backlog
+        effort: L
+        description: >
+          Detect opportunity moments: decision points, contradictions with
+          docs, gaps in discussion that docs could fill. "You might want
+          to ask about X" or "The docs mention Y which is relevant here."
+          Replaces current FOLLOW_UP trigger.
+        depends_on: [F-203, F-204]
+        files:
+          - lib/triggers/followup_trigger.py
+          - lib/triggers/engine.py
+
+      - id: F-206
+        name: "Prompt template rewrite for 1.2B model"
+        status: backlog
+        effort: M
+        description: >
+          Current prompts too verbose for LFM2.5-1.2B-Instruct. Shorter,
+          more directive templates. Tone variation by intervention mode
+          (factual for context, suggestive for nudges). Adaptive context
+          budget (shrink RAG when low-confidence, grow conversation).
+        depends_on: [F-203, F-204, F-205]
+        files:
+          - lib/generation/prompts.py
+
+      - id: F-207
+        name: "Evaluate all signals, not first-match"
+        status: backlog
+        effort: M
+        description: >
+          Current engine returns first trigger that fires. Redesign to
+          evaluate all signals, score by relevance + confidence, and
+          pick the highest-value intervention. May surface multiple
+          interventions ranked by usefulness.
+        depends_on: [F-203, F-204, F-205]
+        files:
+          - lib/triggers/engine.py
+
+  # ─── WORKSTREAM 3: Speaker Attribution ───────────────────────────
+  # Priority: V1.5+ — Tier 1 (You/Others) is done. Tier 2/3 are
+  # enhancements that depend on packaging decisions.
+
+  speaker_attribution:
+    name: "Speaker Attribution (Tier 2+)"
+    phase: V1.5
+    description: >
+      Tier 1 (dual-stream You/Others) is complete. Tier 2 adds neural
+      diarization for multi-speaker on system audio. Tier 3 adds named
+      speaker enrollment. Both require model delivery decisions.
+      See docs/speaker-attribution.md.
+
+    features:
+      - id: F-301
+        name: "Tier 2: Neural diarization on system audio"
+        status: backlog
+        effort: XL
+        description: >
+          Add diart/pyannote for speaker clustering on the system audio
+          stream. Distinguish remote participants beyond "Others". Requires
+          PyTorch or CoreML runtime decision. ~2 GB model download.
+          Mutable attribution constraint already in place.
+        depends_on: []
+        files:
+          - lib/audio_capture.py
+          - src/api/session.py
+          - src/api/transcript_store.py
+
+      - id: F-302
+        name: "Tier 3: Speaker enrollment + verification"
+        status: backlog
+        effort: XL
+        description: >
+          Pre-register voice profiles. Each speaker says a sentence at
+          meeting start, extract embedding, store as named profile.
+          Compare segments against enrolled profiles during meeting.
+        depends_on: [F-301]
+        files:
+          - new: lib/speaker_enrollment.py
+          - app/src/components/MeetingSetup.tsx
+
+  # ─── WORKSTREAM 4: Packaging & Distribution ─────────────────────
+  # Priority: V1 ship — gates on core experience being ready.
+  # See docs/packaging-strategy.md.
+
+  packaging:
+    name: "Packaging & Distribution"
+    phase: V1
+    description: >
+      Native Mac app build pipeline, code signing, model bundling,
+      App Store submission. Premature until core product experience
+      is right. See docs/packaging-strategy.md for model delivery tiers.
+
+    features:
+      - id: F-401
+        name: "Tauri build pipeline"
+        status: backlog
+        effort: L
+        description: >
+          Production Tauri build: compile Rust shell, bundle Python
+          backend (or replace with native inference), sign llama.cpp
+          binary, produce .dmg for distribution.
+        depends_on: []
+        files:
+          - app/src-tauri/
+
+      - id: F-402
+        name: "Model bundling + first-run experience"
+        status: backlog
+        effort: L
+        description: >
+          Bundle core model pack (~1.9 GB) in app. First-run should
+          work immediately — no download step. Optional model packs
+          downloadable from settings.
+        depends_on: [F-401]
+        files:
+          - app/src-tauri/
+
+      - id: F-403
+        name: "Code signing + notarization"
+        status: backlog
+        effort: M
+        description: >
+          Apple Developer signing for app + llama.cpp binary.
+          Notarization for Gatekeeper. Entitlements for microphone
+          access and audio capture.
+        depends_on: [F-401]
+
+      - id: F-404
+        name: "App Store submission"
+        status: backlog
+        effort: M
+        description: >
+          App Store listing, screenshots, privacy policy, review
+          submission. Sandboxing compliance. BlackHole dependency
+          documented in listing.
+        depends_on: [F-401, F-402, F-403]

@@ -15,13 +15,22 @@ blockers: []
 pending_decisions: []
 
 recent_sessions:
+  - id: "session-010"
+    date: "2026-03-06"
+    focus: "Thread-safe LLM, F-103/104 polish, F-105/106 implementation"
+    completed:
+      - "Thread-safe RAGAnswerGenerator.generate_text() — replaced monkey-patch lock"
+      - "F-103 Meeting Setup + F-104 Keyboard Shortcuts + Pause/Resume"
+      - "F-105 Config-driven buffer params + refiner latency logging"
+      - "F-106 Post-meeting summary: context + trigger history in notes generation"
+      - "241 tests passing (78 new), TypeScript strict passes"
+    next_recommended: "Live test with mic + BlackHole — verify full flow end-to-end"
   - id: "session-009"
     date: "2026-03-06"
     focus: "Tier 1 dual-stream source-based speaker attribution"
     completed:
       - "Dual-stream audio: mic (You) + system (Others), deterministic attribution"
       - "Deleted speaker_tracker + audio_features, chat-bubble UI, 163 tests pass"
-      - "Cleaned up SpeakerConfig from config.yaml and lib/config.py"
     next_recommended: "Live test with mic + BlackHole — verify You/Others labels work"
   - id: "session-008"
     date: "2026-03-06"
@@ -29,16 +38,8 @@ recent_sessions:
     completed:
       - "Deep research into production diarization (Zoom, Teams, wave-apple, pyannote, diart)"
       - "Created docs/speaker-attribution.md with three-tier progression"
-      - "Approved Tier 1 implementation plan"
     next_recommended: "Implement Tier 1 dual-stream source separation"
-  - id: "session-007"
-    date: "2026-03-06"
-    focus: "Headless orchestrator + spectral speaker attribution"
-    completed:
-      - "Headless mode, 11-feature spectral vectors, scale-normalized cosine similarity"
-      - "177 tests passing (5 new), TypeScript strict passes"
-    next_recommended: "Test with live speech"
 
 completed_summary:
-  total_items: 32
-  total_sessions: 9
+  total_items: 38
+  total_sessions: 10

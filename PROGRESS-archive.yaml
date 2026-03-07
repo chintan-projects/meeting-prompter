@@ -294,3 +294,32 @@ sessions:
       - "Multi-speaker color cycling in TranscriptPane (6-color palette)"
       - "Frontend vitest infrastructure + useKeyboardShortcuts tests (16 tests)"
       - "274 Python tests passing (33 new), 16 frontend tests, TypeScript strict passes"
+
+  - id: "WS-13"
+    name: "Click-to-rename speaker labels (Tier 3 lite)"
+    date: "2026-03-07"
+    notes: "Click speaker label → inline rename → bulk update all segments. Name mapping persists for future diarizer results. Stable color assignments across renames."
+    files:
+      - "src/api/transcript_store.py"
+      - "src/api/session.py"
+      - "src/api/routes/transcript.py"
+      - "app/src/components/TranscriptPane.tsx"
+      - "app/src/App.tsx"
+      - "tests/test_transcript_store.py"
+      - "tests/test_session.py"
+
+  - id: "session-009"
+    date: "2026-03-06"
+    focus: "Tier 1 dual-stream source-based speaker attribution"
+    completed:
+      - "Dual-stream audio: mic (You) + system (Others), 163 tests pass"
+
+  - id: "session-012"
+    date: "2026-03-07"
+    focus: "Click-to-rename speaker labels (Tier 3 lite)"
+    completed:
+      - "TranscriptStore.rename_speaker() — bulk rename with affected IDs"
+      - "Session.rename_speaker() — name mapping for future diarizer results"
+      - "WebSocket rename_speaker handler + TranscriptPane inline rename UI"
+      - "Stable color map via useRef<Map> — survives renames"
+      - "283 Python tests (9 new), 16 frontend tests, TypeScript strict passes"

@@ -2,28 +2,33 @@
 # Stays LEAN. Only active/in-progress state here.
 
 current_phase: "app-integration"
-current_focus: "Live end-to-end testing with dual-stream + diarization"
+current_focus: "Live end-to-end testing with dual-stream + diarization + rename"
 
 active_work:
   - id: "WS-12"
     name: "Live dual-stream + Tier 2 diarization test"
     status: pending
-    notes: "Tier 1 + Tier 2 implemented. Needs real mic + BlackHole validation."
+    notes: "Tier 1 + Tier 2 + rename implemented. Needs real mic + BlackHole validation."
 
 blockers: []
 
 pending_decisions: []
 
 recent_sessions:
+  - id: "session-012"
+    date: "2026-03-07"
+    focus: "Click-to-rename speaker labels (Tier 3 lite)"
+    completed:
+      - "TranscriptStore.rename_speaker(), Session name mapping, WebSocket handler"
+      - "TranscriptPane inline rename UI + stable color map"
+      - "283 Python tests (9 new), 16 frontend tests, TypeScript strict passes"
+    next_recommended: "Live test with mic + BlackHole — verify rename + diarization flow"
   - id: "session-011"
     date: "2026-03-06"
     focus: "Tier 2 neural speaker diarization implementation"
     completed:
-      - "SpeakerDiarizer with ECAPA-TDNN embeddings + online centroid clustering"
-      - "Async speaker relabeling in session pipeline (zero transcription latency)"
-      - "Multi-speaker color cycling in TranscriptPane (6-color palette)"
-      - "Frontend vitest infrastructure + useKeyboardShortcuts tests"
-      - "274 tests passing (33 new), 16 frontend tests, TypeScript strict passes"
+      - "SpeakerDiarizer with ECAPA-TDNN, async relabeling, multi-speaker colors"
+      - "274 tests passing, 16 frontend tests, TypeScript strict passes"
     next_recommended: "Live test with diarization.enabled=true, verify Speaker A/B/C labels"
   - id: "session-010"
     date: "2026-03-06"
@@ -31,13 +36,7 @@ recent_sessions:
     completed:
       - "Thread-safe RAGAnswerGenerator, F-103/104/105/106, 241 tests"
     next_recommended: "Live test with mic + BlackHole — verify full flow end-to-end"
-  - id: "session-009"
-    date: "2026-03-06"
-    focus: "Tier 1 dual-stream source-based speaker attribution"
-    completed:
-      - "Dual-stream audio: mic (You) + system (Others), 163 tests pass"
-    next_recommended: "Live test with mic + BlackHole — verify You/Others labels work"
 
 completed_summary:
-  total_items: 39
-  total_sessions: 11
+  total_items: 40
+  total_sessions: 12

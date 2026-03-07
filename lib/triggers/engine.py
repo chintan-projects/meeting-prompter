@@ -4,23 +4,16 @@ Central coordination point for the four trigger types. Called by the
 conversation buffer on each transcribed chunk.
 """
 import logging
-from typing import List, Optional, Protocol
+from typing import List, Optional
 
 from lib.config import TriggerConfig
-from .types import Trigger, TriggerType
+from .types import RAGQueryable, Trigger, TriggerType
 from .question_trigger import QuestionTrigger
 from .alert_trigger import AlertTrigger
 from .topic_trigger import TopicTrigger
 from .followup_trigger import FollowUpTrigger
 
 logger = logging.getLogger(__name__)
-
-
-class RAGQueryable(Protocol):
-    """Protocol for RAG engines that support querying."""
-
-    def query(self, text: str) -> tuple:
-        ...
 
 
 class TriggerEngine:

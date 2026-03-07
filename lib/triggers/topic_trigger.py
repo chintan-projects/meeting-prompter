@@ -7,10 +7,10 @@ proactive information surfacing before a question is asked.
 import logging
 import re
 import time
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, Optional
 
 from lib.config import TriggerConfig
-from .types import Trigger, TriggerType
+from .types import RAGQueryable, Trigger, TriggerType
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +33,6 @@ _STOP_WORDS = frozenset([
     'know', 'like', 'just', 'get', 'got', 'make', 'made', 'really',
     'right', 'well', 'yeah', 'okay', 'sure', 'thing', 'things',
 ])
-
-
-class RAGQueryable(Protocol):
-    """Protocol for RAG engines that support querying."""
-
-    def query(self, text: str) -> tuple:
-        """Query RAG and return (context, confidence, source)."""
-        ...
 
 
 class TopicTrigger:

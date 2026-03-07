@@ -1,7 +1,7 @@
 """Trigger type definitions for multi-mode meeting intelligence."""
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict
+from typing import Any, Dict, Protocol, Tuple
 
 
 class TriggerType(Enum):
@@ -77,3 +77,11 @@ class Trigger:
     def priority(self) -> int:
         """Priority derived from trigger type."""
         return self.type.priority
+
+
+class RAGQueryable(Protocol):
+    """Protocol for RAG engines that support querying."""
+
+    def query(self, text: str) -> Tuple[str, float, str]:
+        """Query RAG and return (context, confidence, source)."""
+        ...

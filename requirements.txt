@@ -16,8 +16,8 @@ psutil>=5.9.0
 # LLM inference (for answer generation)
 llama-cpp-python>=0.3.0
 
-# ColBERT embeddings for semantic RAG
-pylate>=1.0.0
+# Sentence embeddings for hybrid RAG (FTS5 + vector)
+sentence-transformers>=2.7.0
 
 # Configuration
 pyyaml>=6.0

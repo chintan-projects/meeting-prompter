@@ -102,10 +102,21 @@ class MeetingOrchestrator:
             self.lfm2 = LFM2Wrapper(MODELS_DIR, RUNNER_DIR, model_version="2.0")
             self._status("LFM2-Audio ready (legacy)")
 
-        # RAG retrieval
+        # RAG retrieval (hybrid FTS5 + vector)
         docs_dir = BASE_DIR / config.paths.docs_dir
+        db_path = Path(config.rag.db_path)
         self._status("Loading RAG engine...")
-        self.rag = RAGEngine(docs_dir)
+        from lib.rag import RAGConfig as _RAGConfig
+
+        rag_config = _RAGConfig(
+            max_chunk_tokens=config.rag.max_chunk_tokens,
+            chunk_overlap_tokens=config.rag.chunk_overlap_tokens,
+            lexical_weight=config.rag.lexical_weight,
+            semantic_weight=config.rag.semantic_weight,
+            lexical_top_k=config.rag.lexical_top_k,
+            semantic_top_k=config.rag.semantic_top_k,
+        )
+        self.rag = RAGEngine(docs_dir, db_path=db_path, config=rag_config)
         self._status("RAG engine ready")
 
         # Trigger engine

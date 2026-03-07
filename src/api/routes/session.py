@@ -148,7 +148,7 @@ async def session_status() -> StatusResponse:
 
 @router.post("/reindex")
 async def reindex_documents() -> dict:
-    """Force-rebuild the ColBERT index from context/ directory.
+    """Force-rebuild the RAG index from context/ directory.
 
     Call this after adding or removing files from context/ to ensure
     the RAG engine picks up changes without restarting the app.
@@ -156,12 +156,8 @@ async def reindex_documents() -> dict:
     session = get_session()
     if session.is_running and session._orchestrator:
         rag = session._orchestrator.rag
-        if rag.is_using_colbert:
-            logger.info("Rebuilding ColBERT index...")
-            rag.rebuild_index()
-            chunk_count = len(rag._colbert._chunks_metadata) if rag._colbert else 0
-            logger.info("ColBERT index rebuilt: %d chunks", chunk_count)
-            return {"status": "reindexed", "chunk_count": chunk_count}
-        else:
-            return {"status": "error", "detail": "ColBERT not active, using Jaccard fallback"}
+        logger.info("Rebuilding RAG index...")
+        rag.rebuild_index()
+        logger.info("RAG index rebuilt: %d chunks", rag.chunk_count)
+        return {"status": "reindexed", "chunk_count": rag.chunk_count}
     return {"status": "error", "detail": "No active session with models loaded"}

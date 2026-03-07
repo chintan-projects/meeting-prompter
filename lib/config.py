@@ -68,16 +68,16 @@ class DetectionConfig:
 
 
 @dataclass
-class ChunkingConfig:
-    target_tokens: int = 400
-    overlap_tokens: int = 50
-    min_tokens: int = 30
+class RAGPipelineConfig:
+    """Hybrid FTS5 + vector RAG pipeline settings."""
 
-
-@dataclass
-class NormalizationConfig:
-    sigmoid_center: float = 25.0
-    sigmoid_scale: float = 5.0
+    max_chunk_tokens: int = 400
+    chunk_overlap_tokens: int = 50
+    lexical_weight: float = 0.05
+    semantic_weight: float = 0.95
+    lexical_top_k: int = 20
+    semantic_top_k: int = 20
+    db_path: str = "data/rag.db"
 
 
 @dataclass
@@ -131,8 +131,7 @@ class AppConfig:
     models: ModelsConfig = field(default_factory=ModelsConfig)
     buffer: BufferConfig = field(default_factory=BufferConfig)
     detection: DetectionConfig = field(default_factory=DetectionConfig)
-    chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
-    normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
+    rag: RAGPipelineConfig = field(default_factory=RAGPipelineConfig)
     triggers: TriggerConfig = field(default_factory=TriggerConfig)
     refiner: RefinerConfig = field(default_factory=RefinerConfig)
     diarization: DiarizationConfig = field(default_factory=DiarizationConfig)
@@ -188,8 +187,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         models=models,
         buffer=_build_dataclass(BufferConfig, raw.get("buffer")),
         detection=_build_dataclass(DetectionConfig, raw.get("detection")),
-        chunking=_build_dataclass(ChunkingConfig, raw.get("chunking")),
-        normalization=_build_dataclass(NormalizationConfig, raw.get("normalization")),
+        rag=_build_dataclass(RAGPipelineConfig, raw.get("rag")),
         triggers=_build_dataclass(TriggerConfig, raw.get("triggers")),
         refiner=_build_dataclass(RefinerConfig, raw.get("refiner")),
         diarization=_build_dataclass(DiarizationConfig, raw.get("diarization")),

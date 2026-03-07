@@ -1,6 +1,6 @@
 # CLAUDE.md — meeting-prompter
 
-Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-Audio, detects 4 trigger types (questions, topics, alerts, follow-ups), retrieves context via ColBERT RAG, and generates mode-aware responses using LFM2.5-1.2B-Instruct. Everything runs locally on Apple Silicon. Includes a Tauri desktop app with dual-pane UI (editable transcript + live prompts).
+Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-Audio, detects 4 trigger types (questions, topics, alerts, follow-ups), retrieves context via hybrid FTS5 + vector RAG, and generates mode-aware responses using LFM2.5-1.2B-Instruct. Everything runs locally on Apple Silicon. Includes a Tauri desktop app with dual-pane UI (editable transcript + live prompts).
 
 ## Key Paths
 
@@ -15,14 +15,14 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │   ├── lfm2_wrapper.py            # LFM2.5-Audio subprocess wrapper (llama.cpp)
 │   ├── answer_extractor.py        # Sentence extraction for grounding (fallback)
 │   ├── rag_generator.py           # LFM2.5-1.2B-Instruct generation (ChatML)
-│   ├── rag_engine.py              # ColBERT + Jaccard fallback orchestration
+│   ├── rag_engine.py              # Hybrid RAG adapter (FTS5 + vector → same query() API)
 │   ├── dashboard.py               # CLI dashboard with trigger-type coloring
 │   ├── triggers/                  # Multi-mode trigger engine
-│   │   ├── types.py               # TriggerType enum, Trigger dataclass
+│   │   ├── types.py               # TriggerType, Trigger, RAGQueryable protocol
 │   │   ├── engine.py              # Orchestrator: runs all triggers, priority sort
 │   │   ├── question_trigger.py    # Question detection (patterns + keywords)
 │   │   ├── alert_trigger.py       # Watch word scanning with cooldown
-│   │   ├── topic_trigger.py       # ColBERT-backed topic detection
+│   │   ├── topic_trigger.py       # RAG-backed topic detection
 │   │   └── followup_trigger.py    # Pause-based follow-up suggestions
 │   ├── conversation/              # Conversation intelligence
 │   │   ├── buffer.py              # Rolling 90s transcript + trigger routing
@@ -31,11 +31,16 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │   │   ├── prompts.py             # ChatML prompt templates per trigger type
 │   │   ├── generator.py           # ModeAwareGenerator — trigger-routed generation
 │   │   └── types.py               # GenerationResult dataclass
-│   └── colbert/                   # Semantic retrieval module
-│       ├── retriever.py           # LFM2-ColBERT-350M + PLAID index
-│       ├── chunker.py             # Section-aware markdown chunking
-│       ├── index_manager.py       # Index persistence/cache
-│       └── normalizer.py          # Sigmoid score normalization
+│   └── rag/                       # Hybrid retrieval pipeline
+│       ├── storage/               # SQLite schema + migrations
+│       ├── parser/                # Document parsers (text, PDF, composite)
+│       ├── chunker/               # Token-based chunking with overlap
+│       ├── index/                 # FTS5 lexical + vector semantic indexing
+│       ├── retrieval/             # Weighted fusion engine
+│       ├── rank/                  # Heuristic re-ranking
+│       ├── embedder.py            # all-MiniLM-L6-v2 (384-dim, lazy-load)
+│       ├── config.py              # RAGConfig dataclass (14 tunables)
+│       └── types.py               # Citation, RetrievalResult, FusedHit
 ├── src/api/                       # FastAPI backend for Tauri app
 │   ├── main.py                    # FastAPI server + WebSocket endpoints
 │   ├── session.py                 # Session manager (bridges audio pipeline → WebSocket)
@@ -70,7 +75,7 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 ├── models/                        # Symlink → ~/Projects/_models
 ├── runners/                       # llama.cpp binaries (gitignored)
 ├── context/                       # Source documents for RAG (PDF + Markdown)
-├── data/colbert_index/            # PLAID index cache (gitignored)
+├── data/                          # SQLite RAG index (rag.db, gitignored)
 └── output/                        # Saved meeting notes (gitignored)
 ```
 
@@ -94,23 +99,22 @@ cd app && npm run tauri dev                  # Dev mode (hot reload)
 # API server (standalone)
 uvicorn src.api.main:app --host 0.0.0.0 --port 8420
 
-# Re-index documents
-rm -rf data/colbert_index/
+# Re-index documents (delete data/rag.db and restart, or POST /session/reindex)
 
 # Tests
-pytest                                       # All tests (313 tests)
+pytest                                       # All tests (348 tests)
 pytest tests/test_transcript_buffer.py -v    # Buffer tests only
 cd app && npx tsc --noEmit                   # TypeScript check
 ```
 
 ## Architecture
 
-### Three-Model Pipeline
+### Two-Model Pipeline (+ embedding model)
 
 | Model | Size | Stage | Latency |
 |-------|------|-------|---------|
 | LFM2.5-Audio-1.5B | 1.2 GB | Speech → text | ~300ms |
-| LFM2-ColBERT-350M | 1.4 GB | Semantic retrieval | ~100ms |
+| all-MiniLM-L6-v2 | 80 MB | Hybrid retrieval (FTS5 + vector) | ~50ms |
 | LFM2.5-1.2B-Instruct | 700 MB | Mode-aware generation | ~500ms |
 
 ### Pipeline Flow
@@ -167,6 +171,7 @@ Two independent buffers receive the same raw chunks:
 - **Rolling 90s transcript window** provides conversation context for generation.
 - **Context budget split**: 30% conversation, 70% RAG context in prompts.
 - **Two-stage question pipeline**: extraction grounding → generation. Falls through to direct generation when extraction confidence is low.
+- **Hybrid RAG**: FTS5 BM25 (5%) + vector cosine (95%) weighted fusion. SQLite-backed with incremental indexing. Citations carry document path, section heading, page range.
 - **Section-aware chunking**: Split on markdown headers, 400 tokens, 50 overlap.
 - **KV cache reset**: Reset model state before each generation.
 - **ChatML format**: `<|im_start|>` / `<|im_end|>` delimiters for LFM2.5-Instruct.
@@ -181,12 +186,12 @@ Two independent buffers receive the same raw chunks:
 - Client → Server: `{"type": "edit", "id": "turn-1", "text": "corrected text"}`
 
 **`/ws/prompts`** — Intelligence results with display metadata:
-- Server → Client: `{"type": "prompt", "trigger_type": "question", "trigger_text": "...", "answer": "...", "confidence": 0.75, "method": "hybrid", "latency_ms": 480, "source": "ColBERT + hybrid", "persistence": "persistent", "dismiss_ms": 0, "display_label": "ANSWER", "display_emoji": "💡"}`
+- Server → Client: `{"type": "prompt", "trigger_type": "question", "trigger_text": "...", "answer": "...", "confidence": 0.75, "method": "hybrid", "latency_ms": 480, "source": "deployment.md", "persistence": "persistent", "dismiss_ms": 0, "display_label": "ANSWER", "display_emoji": "💡"}`
 - Dead-end results (`no_match`, `no_context`, `suppressed`, or empty answer) are filtered server-side and never sent to the client.
 
 ### Fallback Chains
 
-ColBERT → Jaccard keyword search. Generation → extraction bullets. Extraction → "no match". LFM2.5 models → LFM2 legacy fallback. Set `RAG_USE_FALLBACK=1` for keyword-only mode.
+Hybrid retrieval (FTS5 + vector) → low-confidence silence. Generation → extraction bullets. Extraction → "no match" (suppressed). LFM2.5 models → LFM2 legacy fallback.
 
 ## Model Registry
 
@@ -195,14 +200,14 @@ Models in `~/Projects/_models/` (shared). Set `MODELS_DIR` env var to override.
 | Model | Path | Purpose |
 |-------|------|---------|
 | LFM2.5-Audio-1.5B | `${MODELS_DIR}/LFM2.5-Audio-1.5B-GGUF/` | ASR via `llama-liquid-audio-cli` |
-| LFM2-ColBERT-350M | HuggingFace cache (auto-download) | Semantic retrieval (PLAID) |
+| all-MiniLM-L6-v2 | HuggingFace cache (auto-download) | Sentence embeddings for hybrid RAG |
 | LFM2.5-1.2B-Instruct | `${MODELS_DIR}/LFM2.5-1.2B-Instruct-Q4_K_M.gguf` | Generation (ChatML) |
 
 ## Configuration
 
 All thresholds externalized to `config.yaml`. Loader: `lib/config.py` with typed dataclasses. Falls back to defaults if no YAML present.
 
-Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question_score_threshold=0.25, topic_match_threshold=0.50, turn_pause=2.0s, max_turn_duration=30s, watch_words configurable per meeting. Intelligence panel: min_answer_length=10, dismiss_persistent_ms=0, dismiss_standard_ms=90000, dismiss_ephemeral_ms=45000.
+Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question_score_threshold=0.25, topic_match_threshold=0.50, turn_pause=2.0s, max_turn_duration=30s, watch_words configurable per meeting. RAG: lexical_weight=0.05, semantic_weight=0.95, max_chunk_tokens=400, db_path=data/rag.db. Intelligence panel: min_answer_length=10, dismiss_persistent_ms=0, dismiss_standard_ms=90000, dismiss_ephemeral_ms=45000.
 
 ## Conventions
 
@@ -212,4 +217,4 @@ Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question
 - Thread safety: `threading.Lock()` in ConversationBuffer, `loop.call_soon_threadsafe` for queue bridge
 - All files under 300 lines
 - `logging` module throughout (no `print()` in lib/)
-- 313 Python tests, 16 frontend tests, TypeScript strict mode
+- 348 Python tests, 16 frontend tests, TypeScript strict mode

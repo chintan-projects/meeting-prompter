@@ -5,20 +5,12 @@ RAG has related content the user might want to bring up.
 """
 import logging
 import time
-from typing import Optional, Protocol
+from typing import Optional
 
 from lib.config import TriggerConfig
-from .types import Trigger, TriggerType
+from .types import RAGQueryable, Trigger, TriggerType
 
 logger = logging.getLogger(__name__)
-
-
-class RAGQueryable(Protocol):
-    """Protocol for RAG engines that support querying."""
-
-    def query(self, text: str) -> tuple:
-        """Query RAG and return (context, confidence, source)."""
-        ...
 
 
 class FollowUpTrigger:

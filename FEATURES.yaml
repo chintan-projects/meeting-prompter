@@ -95,8 +95,83 @@ workstreams:
           - src/api/notes_generator.py
           - app/src/components/NoteEditor.tsx
 
+  # ─── WORKSTREAM 1B: RAG Pipeline Quality ────────────────────────
+  # Priority: HIGHEST — this is the intelligence backbone.
+  # 10-12 documents, must retrieve accurately and fast.
+
+  rag_pipeline:
+    name: "RAG Pipeline Quality"
+    phase: V1
+    description: >
+      The RAG pipeline is the highest-leverage piece of the system. With
+      10-12 source documents, retrieval quality directly determines whether
+      prompts are useful or noise. Hybrid FTS5 + vector pipeline now in
+      place — needs tuning and evaluation on real meeting workloads.
+
+    features:
+      - id: F-110
+        name: "RAG retrieval quality audit + tuning"
+        status: in_progress
+        effort: L
+        description: >
+          Replaced ColBERT with hybrid FTS5 + vector pipeline (all-MiniLM-L6-v2,
+          80MB). End-to-end audit with realistic document sets (10-12 docs).
+          Tune: chunk size/overlap, fusion weights (lexical 5% / semantic 95%),
+          confidence thresholds (may need recalibration from sigmoid → min-max),
+          top-k retrieval count. Build eval set of query → expected doc pairs.
+        depends_on: []
+        files:
+          - lib/rag_engine.py
+          - lib/rag/
+          - config.yaml
+
+      - id: F-111
+        name: "Section-aware chunking improvements"
+        status: backlog
+        effort: M
+        description: >
+          Current chunker splits on markdown headers with fixed token window.
+          Audit chunk boundaries on real docs — are semantically complete
+          sections staying together? Consider: hierarchical chunking (section
+          + subsection context), better PDF section detection, metadata
+          preservation (source file, section title) in chunk for better
+          source attribution in prompts.
+        depends_on: [F-110]
+        files:
+          - lib/rag/chunker/
+          - lib/rag/parser/
+
+      - id: F-112
+        name: "Retrieval result ranking + dedup"
+        status: backlog
+        effort: M
+        description: >
+          When multiple chunks from the same document match, deduplicate
+          and merge overlapping context. Rank by a combination of fused
+          score + document freshness + section relevance. Ensure the
+          generator sees the best 2-3 chunks, not 5 overlapping ones.
+        depends_on: [F-110]
+        files:
+          - lib/rag/retrieval/
+          - lib/rag/rank/
+          - lib/rag_engine.py
+
+      - id: F-113
+        name: "Evaluate LFM2-1.2B-RAG for generation stage"
+        status: backlog
+        effort: M
+        description: >
+          Evaluate LiquidAI/LFM2-1.2B-RAG (HuggingFace) as replacement for
+          LFM2.5-1.2B-Instruct in the generation stage. RAG-tuned on 1M+
+          multi-document Q&A samples — may produce better grounded answers.
+          Separate from retrieval pipeline (which uses all-MiniLM-L6-v2).
+        depends_on: [F-110]
+        files:
+          - lib/generation/generator.py
+          - lib/rag_generator.py
+
   # ─── WORKSTREAM 2: Prompting System Redesign ─────────────────────
-  # Priority: V1 but AFTER core meeting experience is solid.
+  # Priority: TABLED — revisit after real usage informs what's needed.
   # Current system fires on syntax, not intent. Needs product rethink.
 
   prompting:
@@ -221,7 +296,7 @@ workstreams:
     features:
       - id: F-301
         name: "Tier 2: Neural diarization on system audio"
-        status: backlog
+        status: done
         effort: XL
         description: >
           Add diart/pyannote for speaker clustering on the system audio

@@ -1,6 +1,6 @@
 # Meeting Prompter
 
-Real-time meeting intelligence that transcribes audio, detects questions and topics, retrieves context via ColBERT RAG, and generates mode-aware responses. Runs entirely on Apple Silicon using [LFM2.5-Audio](https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-GGUF) for transcription and [LFM2.5-1.2B-Instruct](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF) for generation. Ships as a native Tauri desktop app with live transcript editing and a CLI mode for headless use.
+Real-time meeting intelligence that transcribes audio, detects questions and topics, retrieves context via hybrid FTS5 + vector RAG, and generates mode-aware responses. Runs entirely on Apple Silicon using [LFM2.5-Audio](https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-GGUF) for transcription and [LFM2.5-1.2B-Instruct](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF) for generation. Ships as a native Tauri desktop app with live transcript editing and a CLI mode for headless use.
 
 ![Python](https://img.shields.io/badge/python-3.10+-blue)
 ![TypeScript](https://img.shields.io/badge/typescript-5.x-blue)
@@ -69,20 +69,21 @@ The system uses a **three-model pipeline** with four trigger types and **dual-st
                          │                  │    │    │    │
                    Tauri App UI             └────┴────┴────┘
                    (TranscriptPane)                │
-                                         RAG (ColBERT top-k)
+                                         RAG (hybrid FTS5 + vector)
                                                    │
                                          Mode-Aware Generator
                                                    │
                                          Dashboard / PromptsPane
 ```
 
-### Three-Model Pipeline
+### Two-Model Pipeline
 
 | Model | Size | Stage | Latency |
 |-------|------|-------|---------|
 | LFM2.5-Audio-1.5B | 1.2 GB | Speech-to-text | ~300ms |
-| LFM2-ColBERT-350M | 1.4 GB | Semantic retrieval | ~100ms |
 | LFM2.5-1.2B-Instruct | 700 MB | Mode-aware generation | ~500ms |
+
+Retrieval uses [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) (80 MB) for vector embeddings, combined with SQLite FTS5 for lexical search. No separate model process needed.
 
 ### Four Intelligence Modes
 
@@ -119,13 +120,13 @@ Turns stream to the frontend via WebSocket (`transcript_update` for partial, `tr
 
 ### Hybrid RAG Pipeline
 
-Each trigger feeds through ColBERT semantic retrieval, then a trigger-specific prompt template:
+Each trigger feeds through hybrid retrieval (FTS5 lexical + vector semantic), then a trigger-specific prompt template:
 
-1. **Retrieval**: ColBERT top-k with section-aware chunking (400 tokens, 50 overlap)
-2. **Grounding**: Sentence extraction scores and filters relevant context
-3. **Generation**: LFM2.5-1.2B-Instruct with ChatML format, context budget split (30% conversation, 70% RAG)
+1. **Retrieval**: FTS5 BM25 lexical search (5% weight) + vector cosine similarity (95% weight), fused via weighted sum with min-max normalization. SQLite-backed with section-aware chunking (400 tokens, 50 overlap).
+2. **Citations**: Each result carries document path, section heading, heading hierarchy, and page range (for PDFs).
+3. **Generation**: LFM2.5-1.2B-Instruct with ChatML format, context budget split (30% conversation, 70% RAG).
 
-Fallback chain: ColBERT -> Jaccard keyword search. Generation -> extraction bullets. Extraction -> "no match".
+Generation falls through to extraction bullets when confidence is low, then to silence (dead-end suppression).
 
 ## Desktop App
 
@@ -228,19 +229,18 @@ After stopping a recording, click **Export Notes** (or `Cmd+N`) to generate stru
 | `Cmd+N` | Toggle notes editor (after recording) |
 | `Escape` | Close active modal (notes or setup) |
 
-## ColBERT: Why Late Interaction?
+## Hybrid Retrieval: Why FTS5 + Vector?
 
-Traditional keyword matching fails for semantic queries:
+Pure keyword search misses semantic matches. Pure embedding search misses exact terminology. The hybrid approach combines both:
 
-| Query | Keyword Result | ColBERT Result |
-|-------|----------------|----------------|
-| "What is Liquid AI?" | Found | Found (77%) |
-| "neural network alternatives" | **MISS** | **Found (74%)** |
-| "compete with OpenAI" | **MISS** | **Found (76%)** |
+| Signal | Method | Weight | Strength |
+|--------|--------|--------|----------|
+| Lexical | FTS5 BM25 | 5% | Exact keyword matches, proper nouns, acronyms |
+| Semantic | all-MiniLM-L6-v2 cosine | 95% | Conceptual similarity across vocabulary |
 
-ColBERT creates **one vector per token** (128-dim) and uses **MaxSim** scoring to find token-level semantic matches. "Neural" matches "model", "alternatives" matches "architecture" -- even without keyword overlap.
+Both signals are min-max normalized to [0, 1] and fused via weighted sum. The lexical signal acts as a safety net — when someone says "SOC2", BM25 finds it even if the embedding doesn't rank it top-k.
 
-Documents are chunked with section awareness: split on markdown headers first, then into 400-token segments with 50-token overlap. Section headers prepended to each chunk for retrieval context.
+Documents are parsed with structure awareness (markdown headings, PDF pages), chunked into 400-token segments with 50-token overlap, and stored in SQLite with FTS5 virtual tables and vector embeddings. The index supports incremental updates without full rebuilds.
 
 ## Models
 
@@ -257,10 +257,10 @@ Download to `~/Projects/_models/` (or set `MODELS_DIR` env var). Also need the `
 
 | Model | Size | Purpose |
 |-------|------|---------|
-| [LFM2-ColBERT-350M](https://huggingface.co/LiquidAI/LFM2-ColBERT-350M) | 1.4 GB | Semantic document retrieval |
+| [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) | ~80 MB | Sentence embeddings for hybrid RAG retrieval |
 | [ECAPA-TDNN](https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb) | ~100 MB | Speaker diarization embeddings |
 
-ColBERT and ECAPA-TDNN download automatically on first run. The PLAID index is built once and cached in `data/colbert_index/`.
+Both models download automatically on first use via HuggingFace cache. The RAG index is stored in `data/rag.db` (SQLite) and rebuilt incrementally.
 
 ## Project Structure
 
@@ -277,14 +277,14 @@ meeting-prompter/
 │   ├── lfm2_wrapper.py               # LFM2.5-Audio subprocess wrapper
 │   ├── answer_extractor.py           # Sentence extraction (grounding fallback)
 │   ├── rag_generator.py              # LFM2.5-1.2B-Instruct wrapper (ChatML)
-│   ├── rag_engine.py                 # ColBERT + Jaccard orchestration
+│   ├── rag_engine.py                 # Hybrid RAG adapter (FTS5 + vector)
 │   ├── dashboard.py                  # CLI dashboard with trigger coloring
 │   ├── triggers/                     # Multi-mode trigger engine
-│   │   ├── types.py                  # TriggerType enum, Trigger dataclass
+│   │   ├── types.py                  # TriggerType, Trigger, RAGQueryable protocol
 │   │   ├── engine.py                 # Runs all triggers, priority sort
 │   │   ├── question_trigger.py       # Question detection (patterns + keywords)
 │   │   ├── alert_trigger.py          # Watch word scanning with cooldown
-│   │   ├── topic_trigger.py          # ColBERT-backed topic detection
+│   │   ├── topic_trigger.py          # RAG-backed topic detection
 │   │   └── followup_trigger.py       # Pause-based follow-up suggestions
 │   ├── conversation/                 # Conversation intelligence
 │   │   ├── buffer.py                 # Rolling 90s transcript + triggers
@@ -293,11 +293,16 @@ meeting-prompter/
 │   │   ├── prompts.py                # ChatML templates per trigger type
 │   │   ├── generator.py              # ModeAwareGenerator
 │   │   └── types.py                  # GenerationResult dataclass
-│   └── colbert/                      # Semantic retrieval
-│       ├── retriever.py              # LFM2-ColBERT-350M + PLAID index
-│       ├── chunker.py                # Section-aware markdown chunking
-│       ├── index_manager.py          # Index persistence/cache
-│       └── normalizer.py             # Sigmoid score normalization
+│   └── rag/                          # Hybrid retrieval pipeline
+│       ├── storage/                  # SQLite schema, migrations
+│       ├── parser/                   # Document parsers (text, PDF, composite)
+│       ├── chunker/                  # Token-based chunking with overlap
+│       ├── index/                    # FTS5 + vector indexing
+│       ├── retrieval/                # Hybrid fusion engine
+│       ├── rank/                     # Heuristic re-ranking
+│       ├── embedder.py               # all-MiniLM-L6-v2 sentence embeddings
+│       ├── config.py                 # RAGConfig dataclass
+│       └── types.py                  # Shared types (Citation, RetrievalResult)
 ├── src/api/                          # FastAPI backend (for Tauri app)
 │   ├── main.py                       # Server + WebSocket endpoints
 │   ├── session.py                    # Session lifecycle + speaker diarization
@@ -326,7 +331,7 @@ meeting-prompter/
 │   │   │   └── useKeyboardShortcuts.ts # Global keyboard shortcut handler
 │   │   └── styles/global.css         # Dark theme, pulse animation
 │   └── package.json
-├── tests/                            # 313 Python tests across 10 files
+├── tests/                            # 348 Python tests across 11 files
 │   ├── test_audio_capture.py         # Dual-stream capture + health diagnostics
 │   ├── test_transcript_buffer.py     # Turn accumulation, boundaries
 │   ├── test_transcript_store.py      # Append, upsert, edit, rename, export
@@ -334,13 +339,14 @@ meeting-prompter/
 │   ├── test_text_refiner.py          # Transcript polishing
 │   ├── test_notes_generator.py       # Structured notes generation
 │   ├── test_diarization.py           # Speaker embedding + clustering
+│   ├── test_rag_engine.py            # Hybrid RAG pipeline + parsers + fusion
 │   ├── test_filters.py               # Hallucination/noise filters
 │   ├── test_lfm2_wrapper.py          # LFM2.5-Audio output parsing
 │   └── conftest.py
 ├── models/                           # Symlink to ~/Projects/_models
 ├── runners/                          # llama.cpp binaries (gitignored)
 ├── context/                          # Source documents for RAG
-└── data/colbert_index/               # PLAID index cache (gitignored)
+└── data/                             # SQLite RAG index (rag.db, gitignored)
 ```
 
 ## Live Meeting Setup (BlackHole)
@@ -356,20 +362,19 @@ The app captures both your microphone and system audio simultaneously. Your spee
 
 ## Adding Your Own Docs
 
-Drop PDF or Markdown files in `context/`. The system loads all documents at startup and builds a ColBERT index.
+Drop PDF or Markdown files in `context/`. The system indexes all documents at startup into a SQLite database (`data/rag.db`).
 
 ```bash
 cp your-product-docs.pdf context/
-rm -rf data/colbert_index/   # Force re-index
-python coach.py --mic
+python coach.py --mic        # New files indexed automatically on startup
 ```
 
-You can also trigger a re-index from the API without restarting: `POST /reindex`.
+To force a full re-index during a running session: `POST /session/reindex`.
 
 ## Requirements
 
 - macOS with Apple Silicon (M1/M2/M3/M4)
-- 16GB+ RAM (~4.5GB for all three models)
+- 16GB+ RAM (~2GB for models + embeddings)
 - Python 3.10+
 - Node.js 18+ and Rust (for Tauri app)
 
@@ -381,11 +386,9 @@ You can also trigger a re-index from the API without restarting: `POST /reindex`
 
 **Garbled transcriptions**: LFM2.5-Audio can hallucinate on background noise. The hallucination filter catches common patterns, but noisy environments may cause issues.
 
-**Wrong answers**: Delete `data/colbert_index/` and restart to rebuild the index.
+**Wrong answers**: Delete `data/rag.db` and restart to rebuild the index from scratch.
 
-**ColBERT not loading**: Check `pylate` installation. On 8GB Macs, set `RAG_USE_FALLBACK=1` for keyword search.
-
-**Slow first startup**: First run downloads ColBERT (~1.4GB) and ECAPA-TDNN (~100MB), and builds the PLAID index (~30-60s). Subsequent runs load from cache (~6s).
+**Slow first startup**: First run downloads all-MiniLM-L6-v2 (~80MB) and ECAPA-TDNN (~100MB) embeddings. Subsequent runs load from HuggingFace cache.
 
 **Tauri build errors**: Ensure Rust toolchain and Node.js 18+ are installed. Run `cd app && npm install` to install frontend dependencies.
 

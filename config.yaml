@@ -41,14 +41,14 @@ detection:
   rag_confidence_minimum: 0.30
   extraction_confidence_minimum: 0.25
 
-chunking:
-  target_tokens: 400         # target chunk size for ColBERT
-  overlap_tokens: 50         # overlap between chunks
-  min_tokens: 30             # minimum chunk size
-
-normalization:
-  sigmoid_center: 25.0       # ColBERT score center for sigmoid
-  sigmoid_scale: 5.0         # ColBERT score scale for sigmoid
+rag:
+  max_chunk_tokens: 400      # target chunk size for hybrid retrieval
+  chunk_overlap_tokens: 50   # overlap between chunks
+  lexical_weight: 0.05       # FTS5 BM25 weight in fusion (5%)
+  semantic_weight: 0.95      # vector cosine weight in fusion (95%)
+  lexical_top_k: 20          # candidates from FTS5 before fusion
+  semantic_top_k: 20         # candidates from vector search before fusion
+  db_path: "data/rag.db"     # SQLite database for index storage
 
 triggers:
   question_score_threshold: 0.25
@@ -77,4 +77,4 @@ diarization:
 paths:
   docs_dir: "context"
   output_dir: "output"
-  index_dir: "data/colbert_index"
+  index_dir: "data"

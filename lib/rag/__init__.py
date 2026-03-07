@@ -105,6 +105,7 @@ class RAGPipeline:
             self._config,
             top_k=top_k,
             filter_path=filter_path,
+            ranker=self._ranker,
         )
 
     def close(self) -> None:

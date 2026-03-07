@@ -1,7 +1,9 @@
 """Question trigger — detects direct questions in transcribed speech.
 
 Ports the scoring logic from the original question_detector.py with the same
-24 patterns, 36 keywords, and multi-factor scoring algorithm.
+24 patterns, 36 keywords, and multi-factor scoring algorithm. Includes
+rhetorical question suppression (F-201) to filter confirmations, self-answers,
+tag questions, and rhetorical forms.
 """
 import re
 import time
@@ -53,6 +55,67 @@ _INCOMPLETE_ENDINGS = frozenset([
     'how', 'what', 'is', 'are', 'does', 'do', 'can', 'could', 'would',
 ])
 
+# ─── Rhetorical / confirmation suppression (F-201) ──────────────────────
+
+# Tag questions appended to statements: "...right?", "...isn't it?"
+_TAG_PATTERNS = [
+    re.compile(r',\s*(?:right|okay|ok|yeah|no|huh|eh)\s*\??\s*$'),
+    re.compile(r',\s*(?:isn\'?t it|aren\'?t they|don\'?t you think)\s*\??\s*$'),
+    re.compile(r',\s*(?:isn\'?t that right|don\'?t you agree|you know)\s*\??\s*$'),
+]
+
+# Rhetorical form patterns — answers implied by structure
+_RHETORICAL_PATTERNS = [
+    re.compile(
+        r'^(?:don\'?t|doesn\'?t|didn\'?t|won\'?t|wouldn\'?t|isn\'?t|aren\'?t'
+        r'|can\'?t|couldn\'?t)\s+\w+\s+already\b'
+    ),
+    re.compile(r'^isn\'?t\s+it\s+obvious\b'),
+    re.compile(r'^why\s+would\s+anyone\b'),
+    re.compile(r'^who\s+(?:cares|needs|wants)\b.*\?'),
+    re.compile(r'^what\'?s\s+the\s+point\s+of\b'),
+    re.compile(r'^how\s+hard\s+can\s+it\s+be\b'),
+    re.compile(r'^do\s+we\s+really\s+need\b'),
+]
+
+# Phrases that signal self-answering after a question mark
+_SELF_ANSWER_STARTS = (
+    'yeah', 'yes', 'no', 'nah', 'nope',
+    'i think so', 'i think', 'i believe', 'i guess', 'i mean',
+    'probably', 'definitely', 'absolutely', 'of course', 'sure',
+    'right', 'exactly', 'correct', 'well',
+)
+
+
+def _is_tag_question(text: str) -> bool:
+    """Detect tag questions appended to statements (', right?', ', isn't it?')."""
+    for pattern in _TAG_PATTERNS:
+        if pattern.search(text):
+            return True
+    return False
+
+
+def _is_self_answered(text: str) -> bool:
+    """Detect self-answering: 'Can we X? Yeah.' / 'Is that Y? I think so.'"""
+    q_idx = text.find('?')
+    if q_idx < 0:
+        return False
+    after = text[q_idx + 1:].strip().lower()
+    if not after:
+        return False
+    for phrase in _SELF_ANSWER_STARTS:
+        if after.startswith(phrase):
+            return True
+    return False
+
+
+def _is_rhetorical(text: str) -> bool:
+    """Detect rhetorical forms where the answer is implied by structure."""
+    for pattern in _RHETORICAL_PATTERNS:
+        if pattern.search(text):
+            return True
+    return False
+
 
 class QuestionTrigger:
     """Detects direct questions using pattern matching and keyword scoring."""
@@ -100,6 +163,14 @@ def score_question(sentence: str) -> float:
     for pattern in _FRAGMENT_PATTERNS:
         if re.match(pattern, sentence_lower):
             return 0.0
+
+    # Rhetorical / confirmation suppression (F-201)
+    if _is_tag_question(sentence_lower):
+        return 0.0
+    if _is_self_answered(sentence_lower):
+        return 0.0
+    if _is_rhetorical(sentence_lower):
+        return 0.0
 
     if '?' in sentence:
         score += 0.5

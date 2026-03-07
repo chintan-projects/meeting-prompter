@@ -38,7 +38,7 @@ buffer:
 
 detection:
   question_score_threshold: 0.25
-  rag_confidence_minimum: 0.30
+  rag_confidence_minimum: 0.35
   extraction_confidence_minimum: 0.25
 
 rag:

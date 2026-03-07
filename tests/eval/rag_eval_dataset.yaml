@@ -1,0 +1,98 @@
+# RAG Retrieval Evaluation Dataset
+# Maps realistic meeting queries to expected source documents.
+# Used by test_rag_eval.py to compute Hit@1, Hit@3, MRR.
+
+queries:
+  # ─── Decagon meeting prep (decagonprep.pdf) ────────────────────────
+
+  - query: "What is Decagon's current valuation?"
+    expected_documents: ["decagonprep.pdf"]
+    relevance: high
+
+  - query: "What models does Decagon use in their agent architecture?"
+    expected_documents: ["decagonprep.pdf"]
+    relevance: high
+
+  - query: "How does Decagon approach fine-tuning smaller models?"
+    expected_documents: ["decagonprep.pdf"]
+    relevance: high
+
+  - query: "What is the average deflection rate on the Decagon platform?"
+    expected_documents: ["decagonprep.pdf"]
+    relevance: high
+
+  - query: "Who founded Decagon and when?"
+    expected_documents: ["decagonprep.pdf"]
+    relevance: high
+
+  - query: "What are Decagon's pain points around latency and cost?"
+    expected_documents: ["decagonprep.pdf"]
+    relevance: medium
+
+  # ─── Packaging strategy (packaging-strategy.md) ────────────────────
+
+  - query: "What models ship in the core app bundle?"
+    expected_documents: ["packaging-strategy.md"]
+    relevance: high
+
+  - query: "What is the target App Store download size?"
+    expected_documents: ["packaging-strategy.md"]
+    relevance: high
+
+  - query: "How does the first-run model download work?"
+    expected_documents: ["packaging-strategy.md"]
+    relevance: high
+
+  - query: "What are the code signing requirements for the app?"
+    expected_documents: ["packaging-strategy.md"]
+    relevance: medium
+
+  - query: "What is the total disk usage with all optional packs?"
+    expected_documents: ["packaging-strategy.md"]
+    relevance: high
+
+  # ─── Speaker attribution (speaker-attribution.md) ──────────────────
+
+  - query: "How does dual-stream speaker separation work?"
+    expected_documents: ["speaker-attribution.md"]
+    relevance: high
+
+  - query: "What models does pyannote use for speaker diarization?"
+    expected_documents: ["speaker-attribution.md"]
+    relevance: high
+
+  - query: "Why do spectral features fail on mixed audio?"
+    expected_documents: ["speaker-attribution.md"]
+    relevance: high
+
+  - query: "What is the ECAPA-TDNN embedding model used for?"
+    expected_documents: ["speaker-attribution.md"]
+    relevance: high
+
+  - query: "Does the LFM2.5-Audio model support speaker identification?"
+    expected_documents: ["speaker-attribution.md"]
+    relevance: medium
+
+  # ─── Cross-document queries ────────────────────────────────────────
+
+  - query: "Do we need PyTorch for speaker diarization in the app?"
+    expected_documents: ["speaker-attribution.md", "packaging-strategy.md"]
+    relevance: medium
+
+  - query: "What is the diarization pack download size?"
+    expected_documents: ["packaging-strategy.md", "speaker-attribution.md"]
+    relevance: medium
+
+  # ─── Negative queries (no matching document) ───────────────────────
+
+  - query: "What is the quarterly revenue forecast for next year?"
+    expected_documents: []
+    relevance: none
+
+  - query: "How do we configure the Kubernetes deployment?"
+    expected_documents: []
+    relevance: none
+
+  - query: "What is the employee count at our company?"
+    expected_documents: []
+    relevance: none

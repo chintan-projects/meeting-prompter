@@ -14,6 +14,7 @@ from lib.rag.config import RAGConfig
 from lib.rag.index.fts import fts_search
 from lib.rag.index.protocol import Embedder
 from lib.rag.index.vector import vector_search
+from lib.rag.rank.protocol import Ranker
 from lib.rag.retrieval.fusion import weighted_fusion
 from lib.rag.types import Citation, FusedHit, RetrievalResult
 
@@ -25,13 +26,15 @@ def retrieve(
     config: RAGConfig,
     top_k: int = 5,
     filter_path: str | None = None,
+    ranker: Ranker | None = None,
 ) -> list[RetrievalResult]:
     """Full hybrid retrieval pipeline.
 
     1. FTS5 lexical search (field-boosted BM25)
     2. Vector cosine search (embedding similarity)
     3. Weighted fusion (default 5% lexical / 95% semantic)
-    4. Build citations for each result
+    4. Optional heuristic re-ranking
+    5. Build citations for each result
     """
     # Lexical search via FTS5
     lexical_hits = fts_search(
@@ -52,6 +55,10 @@ def retrieve(
         semantic_weight=config.semantic_weight,
         top_k=top_k,
     )
+
+    # Optional re-ranking
+    if ranker is not None:
+        fused = ranker.rank(query, fused, config)
 
     # Build retrieval results with citations
     return _build_results(conn, fused)

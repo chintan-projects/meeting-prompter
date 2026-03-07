@@ -2,8 +2,9 @@
 Weighted score fusion.
 
 Combines lexical (FTS5) and semantic (vector) search results using
-weighted sum with min-max normalisation. Default: 5% lexical / 95% semantic
-(RAGFlow's production default).
+weighted sum. Lexical BM25 scores are min-max normalised (arbitrary
+range). Semantic cosine similarity is used raw (already [0, 1] for
+normalised vectors), preserving natural score discrimination.
 """
 
 from __future__ import annotations
@@ -20,24 +21,27 @@ def weighted_fusion(
 ) -> list[FusedHit]:
     """Fuse lexical and semantic scores via weighted sum.
 
-    Both score lists are min-max normalised to [0, 1] before fusion.
-    Chunks appearing in only one list get 0 for the missing signal.
+    Lexical (BM25) scores are min-max normalised to [0, 1] because BM25
+    produces arbitrary-range scores. Semantic (cosine) scores are used
+    raw — they are already in [0, 1] for normalised vectors, and
+    min-max would destroy discrimination (top always becomes 1.0).
     """
     # Build score maps
     lex_scores = {h.chunk_id: h.score for h in lexical_hits}
     sem_scores = {h.chunk_id: h.score for h in semantic_hits}
 
-    # Min-max normalise each signal
+    # Min-max normalise lexical (BM25 has arbitrary range)
     lex_norm = _min_max_normalise(lex_scores)
-    sem_norm = _min_max_normalise(sem_scores)
+    # Semantic cosine is already [0, 1] — use raw scores
+    sem_raw = sem_scores
 
     # Union of all chunk IDs
-    all_ids = set(lex_norm.keys()) | set(sem_norm.keys())
+    all_ids = set(lex_norm.keys()) | set(sem_raw.keys())
 
     results: list[FusedHit] = []
     for chunk_id in all_ids:
         lex = lex_norm.get(chunk_id, 0.0)
-        sem = sem_norm.get(chunk_id, 0.0)
+        sem = sem_raw.get(chunk_id, 0.0)
         fused = lexical_weight * lex + semantic_weight * sem
         results.append(
             FusedHit(

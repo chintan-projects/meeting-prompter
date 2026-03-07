@@ -75,20 +75,18 @@ CREATE INDEX IF NOT EXISTS idx_chunk_edges_target ON chunk_edges(target_id);
 """
 
 _FTS5_SETUP = """
--- FTS5 virtual table for lexical search
+-- FTS5 virtual table for lexical search (standalone, synced via triggers)
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     content,
     title,
     heading_path,
     keywords,
-    content=chunks,
-    content_rowid=id,
     tokenize='porter unicode61'
 );
 """
 
 _FTS5_TRIGGERS = """
--- Keep FTS5 in sync with chunks table
+-- Keep FTS5 in sync with chunks table (standalone mode — use regular DELETE)
 CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
     INSERT INTO chunks_fts(rowid, content, title, heading_path, keywords)
     VALUES (
@@ -104,29 +102,11 @@ CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS chunks_fts_delete BEFORE DELETE ON chunks BEGIN
-    INSERT INTO chunks_fts(chunks_fts, rowid, content, title, heading_path, keywords)
-    VALUES (
-        'delete', OLD.id, OLD.content,
-        (SELECT d.filename FROM documents d WHERE d.id = OLD.document_id),
-        COALESCE(
-            (SELECT s.heading_path FROM sections s WHERE s.id = OLD.section_id),
-            ''
-        ),
-        COALESCE(OLD.manual_keywords, '')
-    );
+    DELETE FROM chunks_fts WHERE rowid = OLD.id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON chunks BEGIN
-    INSERT INTO chunks_fts(chunks_fts, rowid, content, title, heading_path, keywords)
-    VALUES (
-        'delete', OLD.id, OLD.content,
-        (SELECT d.filename FROM documents d WHERE d.id = OLD.document_id),
-        COALESCE(
-            (SELECT s.heading_path FROM sections s WHERE s.id = OLD.section_id),
-            ''
-        ),
-        COALESCE(OLD.manual_keywords, '')
-    );
+    DELETE FROM chunks_fts WHERE rowid = OLD.id;
     INSERT INTO chunks_fts(rowid, content, title, heading_path, keywords)
     VALUES (
         NEW.id, NEW.content,
@@ -266,8 +246,6 @@ def _safe_create_fts5(conn: sqlite3.Connection) -> None:
                 title,
                 heading_path,
                 keywords,
-                content=chunks,
-                content_rowid=id,
                 tokenize='porter unicode61'
             )
             """

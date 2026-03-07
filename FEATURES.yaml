@@ -111,19 +111,21 @@ workstreams:
     features:
       - id: F-110
         name: "RAG retrieval quality audit + tuning"
-        status: in_progress
+        status: done
         effort: L
         description: >
           Replaced ColBERT with hybrid FTS5 + vector pipeline (all-MiniLM-L6-v2,
-          80MB). End-to-end audit with realistic document sets (10-12 docs).
-          Tune: chunk size/overlap, fusion weights (lexical 5% / semantic 95%),
-          confidence thresholds (may need recalibration from sigmoid → min-max),
-          top-k retrieval count. Build eval set of query → expected doc pairs.
+          80MB). Built eval harness (21 queries, 3 real docs): Hit@1=94.4%,
+          Hit@3=100%, MRR=0.972. Fixed: FTS5 standalone schema, confidence
+          calibration (raw cosine vs min-max), FTS5 OR queries with stop words,
+          standalone delete triggers. Wired heuristic re-ranking. Tuned
+          rag_confidence_minimum to 0.35 (above negative query max of 0.34).
         depends_on: []
         files:
           - lib/rag_engine.py
           - lib/rag/
           - config.yaml
+          - tests/eval/
 
       - id: F-111
         name: "Section-aware chunking improvements"
@@ -187,16 +189,17 @@ workstreams:
     features:
       - id: F-201
         name: "Rhetorical question detection"
-        status: backlog
+        status: done
         effort: M
         description: >
-          Detect self-answering patterns ("Can you do that? Yeah."),
-          confirmations ("Right?", "Okay?"), and rhetorical forms
-          ("Don't we already...?"). Suppress question trigger for these.
-          Currently fires at 90% on conversational confirmations.
+          Three suppression layers: tag questions ("...right?", "...okay?"),
+          self-answering ("Can we? Yeah."), rhetorical forms ("Don't we
+          already...?"). Conservative patterns — "Do we need X?" stays
+          genuine, "Do we really need X?" suppressed. 46 tests.
         depends_on: []
         files:
           - lib/triggers/question_trigger.py
+          - tests/test_question_trigger.py
 
       - id: F-202
         name: "Kill dead-end responses"

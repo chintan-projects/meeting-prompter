@@ -1,8 +1,8 @@
 # meeting-prompter — Active Progress
 # Stays LEAN. Only active/in-progress state here.
 
-current_phase: "app-integration"
-current_focus: "Prompt experience overhaul complete — live tested on mic"
+current_phase: "rag-tuning"
+current_focus: "F-110 RAG audit complete, F-201 rhetorical suppression done — ready for live test"
 
 active_work:
   - id: "WS-14"
@@ -15,31 +15,31 @@ blockers: []
 pending_decisions: []
 
 recent_sessions:
+  - id: "session-015"
+    date: "2026-03-07"
+    focus: "F-110 RAG quality audit + F-201 rhetorical question detection"
+    completed:
+      - "F-110: eval harness (21 queries, Hit@1=94.4%, MRR=0.972), fixed FTS5 schema/triggers/queries, confidence calibration, re-ranking wired, threshold tuned"
+      - "F-201: 3 suppression layers (tag questions, self-answering, rhetorical forms), 46 tests"
+      - "399 Python tests + 5 eval tests passing"
+    next_recommended: "Live dual-stream test, then F-111 section-aware chunking or F-112 result dedup"
+  - id: "session-014"
+    date: "2026-03-07"
+    focus: "ColBERT → hybrid FTS5 + vector RAG migration"
+    completed:
+      - "Replaced ColBERT with hybrid FTS5+vector pipeline (all-MiniLM-L6-v2, 80MB)"
+      - "New lib/rag/ library: storage, parser, chunker, index, retrieval, rank, embedder"
+      - "348 Python tests passing"
+    next_recommended: "F-110 RAG quality audit + tuning"
   - id: "session-013"
     date: "2026-03-07"
     focus: "Prompt experience overhaul — coaching voice, dead-end suppression, intelligence panel"
     completed:
-      - "F-202 dead-end suppression (generator + session layers), F-203 context surfacing, F-206 coaching voice prompts"
-      - "Intelligence panel: pin/dismiss, persistence tiers, visual hierarchy, auto-dismiss timers"
-      - "Config externalization (min_answer_length, dismiss timers), WebSocket send-after-close fix"
+      - "F-202 dead-end suppression, F-203 context surfacing, F-206 coaching voice prompts"
+      - "Intelligence panel: pin/dismiss, persistence tiers, auto-dismiss timers"
       - "313 Python tests (30 new), TypeScript strict passes, live mic test verified"
-    next_recommended: "Live dual-stream test with Zoom/Teams call — verify diarization + intelligence panel together"
-  - id: "session-012"
-    date: "2026-03-07"
-    focus: "Click-to-rename speaker labels (Tier 3 lite)"
-    completed:
-      - "TranscriptStore.rename_speaker(), Session name mapping, WebSocket handler"
-      - "TranscriptPane inline rename UI + stable color map"
-      - "283 Python tests (9 new), 16 frontend tests, TypeScript strict passes"
-    next_recommended: "Live test with mic + BlackHole — verify rename + diarization flow"
-  - id: "session-011"
-    date: "2026-03-06"
-    focus: "Tier 2 neural speaker diarization implementation"
-    completed:
-      - "SpeakerDiarizer with ECAPA-TDNN, async relabeling, multi-speaker colors"
-      - "274 tests passing, 16 frontend tests, TypeScript strict passes"
-    next_recommended: "Live test with diarization.enabled=true, verify Speaker A/B/C labels"
+    next_recommended: "Live dual-stream test with Zoom/Teams call"
 
 completed_summary:
-  total_items: 46
-  total_sessions: 13
+  total_items: 50
+  total_sessions: 15

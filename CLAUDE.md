@@ -20,7 +20,7 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │   ├── triggers/                  # Multi-mode trigger engine
 │   │   ├── types.py               # TriggerType, Trigger, RAGQueryable protocol
 │   │   ├── engine.py              # Orchestrator: runs all triggers, priority sort
-│   │   ├── question_trigger.py    # Question detection (patterns + keywords)
+│   │   ├── question_trigger.py    # Question detection + rhetorical suppression
 │   │   ├── alert_trigger.py       # Watch word scanning with cooldown
 │   │   ├── topic_trigger.py       # RAG-backed topic detection
 │   │   └── followup_trigger.py    # Pause-based follow-up suggestions
@@ -69,9 +69,13 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 ├── tests/                         # Colocated Python tests
 │   ├── test_audio_capture.py      # Audio level detection + health diagnostics
 │   ├── test_lfm2_wrapper.py       # LFM2.5-Audio output parsing
+│   ├── test_question_trigger.py   # Rhetorical/tag/self-answer suppression (46 tests)
 │   ├── test_session.py            # Thread-safe queue bridge + turn callbacks
 │   ├── test_transcript_buffer.py  # Turn accumulation, boundaries, callbacks
-│   └── test_transcript_store.py   # Append, upsert, edit overlay, export
+│   ├── test_transcript_store.py   # Append, upsert, edit overlay, export
+│   └── eval/                      # RAG retrieval quality eval harness
+│       ├── rag_eval_dataset.yaml  # 21 queries against real context docs
+│       └── test_rag_eval.py       # Hit@1, Hit@3, MRR, confidence analysis
 ├── models/                        # Symlink → ~/Projects/_models
 ├── runners/                       # llama.cpp binaries (gitignored)
 ├── context/                       # Source documents for RAG (PDF + Markdown)
@@ -102,8 +106,9 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8420
 # Re-index documents (delete data/rag.db and restart, or POST /session/reindex)
 
 # Tests
-pytest                                       # All tests (348 tests)
+pytest                                       # All tests (399 tests)
 pytest tests/test_transcript_buffer.py -v    # Buffer tests only
+pytest tests/eval/ -m slow -v               # RAG retrieval eval (requires real docs)
 cd app && npx tsc --noEmit                   # TypeScript check
 ```
 
@@ -170,8 +175,8 @@ Two independent buffers receive the same raw chunks:
 - **4 intelligence modes** with coaching voice persona. Dead-end suppression (F-202): empty/low-quality answers silently filtered at generator and session layers. Persistence tiers control auto-dismiss (configurable in config.yaml).
 - **Rolling 90s transcript window** provides conversation context for generation.
 - **Context budget split**: 30% conversation, 70% RAG context in prompts.
-- **Two-stage question pipeline**: extraction grounding → generation. Falls through to direct generation when extraction confidence is low.
-- **Hybrid RAG**: FTS5 BM25 (5%) + vector cosine (95%) weighted fusion. SQLite-backed with incremental indexing. Citations carry document path, section heading, page range.
+- **Two-stage question pipeline**: extraction grounding → generation. Falls through to direct generation when extraction confidence is low. Rhetorical question suppression (F-201): tag questions, self-answering, rhetorical forms filtered before scoring.
+- **Hybrid RAG**: FTS5 BM25 (5%) + vector cosine (95%) weighted fusion with heuristic re-ranking. Raw cosine similarity (not min-max) for semantic scores to preserve confidence discrimination. FTS5 queries use OR with stop word removal. SQLite-backed with incremental indexing. Citations carry document path, section heading, page range. Eval: Hit@1=94.4%, MRR=0.972 on 21-query benchmark.
 - **Section-aware chunking**: Split on markdown headers, 400 tokens, 50 overlap.
 - **KV cache reset**: Reset model state before each generation.
 - **ChatML format**: `<|im_start|>` / `<|im_end|>` delimiters for LFM2.5-Instruct.
@@ -207,7 +212,7 @@ Models in `~/Projects/_models/` (shared). Set `MODELS_DIR` env var to override.
 
 All thresholds externalized to `config.yaml`. Loader: `lib/config.py` with typed dataclasses. Falls back to defaults if no YAML present.
 
-Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question_score_threshold=0.25, topic_match_threshold=0.50, turn_pause=2.0s, max_turn_duration=30s, watch_words configurable per meeting. RAG: lexical_weight=0.05, semantic_weight=0.95, max_chunk_tokens=400, db_path=data/rag.db. Intelligence panel: min_answer_length=10, dismiss_persistent_ms=0, dismiss_standard_ms=90000, dismiss_ephemeral_ms=45000.
+Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question_score_threshold=0.25, topic_match_threshold=0.50, rag_confidence_minimum=0.35, turn_pause=2.0s, max_turn_duration=30s, watch_words configurable per meeting. RAG: lexical_weight=0.05, semantic_weight=0.95, max_chunk_tokens=400, db_path=data/rag.db. Intelligence panel: min_answer_length=10, dismiss_persistent_ms=0, dismiss_standard_ms=90000, dismiss_ephemeral_ms=45000.
 
 ## Conventions
 
@@ -217,4 +222,4 @@ Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question
 - Thread safety: `threading.Lock()` in ConversationBuffer, `loop.call_soon_threadsafe` for queue bridge
 - All files under 300 lines
 - `logging` module throughout (no `print()` in lib/)
-- 348 Python tests, 16 frontend tests, TypeScript strict mode
+- 399 Python tests, 16 frontend tests, TypeScript strict mode

@@ -404,3 +404,58 @@ class TestRealisticPipeline:
         assert d["timestamp"] == 100.0
         assert d["is_final"] is False
         assert d["speaker"] == ""
+        assert d["source"] == ""
+
+
+class TestSourceField:
+    """Tests for source field (dual-stream support)."""
+
+    def test_source_passed_to_turn(self) -> None:
+        buf = TranscriptBuffer()
+        turn = buf.add_chunk("hello", timestamp=100.0, source="mic")
+        assert turn is not None
+        assert turn.source == "mic"
+
+    def test_source_in_to_dict(self) -> None:
+        buf = TranscriptBuffer()
+        buf.add_chunk("hello", timestamp=100.0, source="system")
+        d = buf.active_turn.to_dict()
+        assert d["source"] == "system"
+
+    def test_same_source_chunks_merge(self) -> None:
+        buf = TranscriptBuffer()
+        buf.add_chunk("hello", timestamp=100.0, source="mic")
+        turn = buf.add_chunk("world", timestamp=103.5, source="mic")
+        assert turn.id == "turn-1"
+        assert turn.text == "hello world"
+        assert turn.source == "mic"
+
+    def test_source_change_finalizes_turn(self) -> None:
+        """Changing source should finalize the active turn and start a new one."""
+        buf = TranscriptBuffer()
+        buf.add_chunk("system speech here", timestamp=100.0, source="system")
+        turn = buf.add_chunk("mic speech here", timestamp=103.5, source="mic")
+        assert turn.id == "turn-2"
+        assert turn.source == "mic"
+        assert len(buf._finalized_turns) == 1
+        assert buf._finalized_turns[0].source == "system"
+
+    def test_source_change_back_and_forth(self) -> None:
+        """Multiple source changes should create distinct turns."""
+        buf = TranscriptBuffer()
+        buf.add_chunk("system turn one", timestamp=100.0, source="system")
+        buf.add_chunk("mic turn one", timestamp=103.5, source="mic")
+        buf.add_chunk("system turn two", timestamp=107.0, source="system")
+        assert len(buf._finalized_turns) == 2
+        assert buf._finalized_turns[0].source == "system"
+        assert buf._finalized_turns[1].source == "mic"
+        assert buf.active_turn.source == "system"
+
+    def test_empty_source_doesnt_trigger_change(self) -> None:
+        """If source is empty, it should not trigger source-change finalization."""
+        buf = TranscriptBuffer()
+        buf.add_chunk("first", timestamp=100.0, source="mic")
+        turn = buf.add_chunk("second", timestamp=103.5, source="")
+        # Empty source should not cause finalization
+        assert turn.id == "turn-1"
+        assert len(buf._finalized_turns) == 0

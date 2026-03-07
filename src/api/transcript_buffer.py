@@ -37,6 +37,7 @@ class Turn:
     end_timestamp: float
     is_final: bool = False
     speaker: str = ""
+    source: str = ""  # "mic" or "system" — identifies audio stream origin
     chunk_count: int = 0
 
     def to_dict(self) -> dict:
@@ -48,6 +49,7 @@ class Turn:
             "end_timestamp": self.end_timestamp,
             "is_final": self.is_final,
             "speaker": self.speaker,
+            "source": self.source,
         }
 
 
@@ -118,12 +120,15 @@ class TranscriptBuffer:
         """Total number of turns (finalized + active)."""
         return len(self._finalized_turns) + (1 if self._active_turn else 0)
 
-    def add_chunk(self, text: str, timestamp: float) -> Optional[Turn]:
+    def add_chunk(
+        self, text: str, timestamp: float, source: str = "",
+    ) -> Optional[Turn]:
         """Add a transcribed text chunk. Returns the active turn if updated.
 
         If silence was detected since the last speech chunk (via on_silence),
         the active turn is finalized first, then a new turn begins.
-        Max duration also triggers finalization.
+        Max duration also triggers finalization. Source change (mic vs system)
+        also triggers a new turn so speakers don't merge.
 
         Time gaps between add_chunk calls are NOT used for turn detection
         because the ASR pipeline cadence (~3.5s) is longer than any
@@ -136,9 +141,12 @@ class TranscriptBuffer:
         # Check if we need to finalize the active turn first
         if self._active_turn is not None:
             duration = timestamp - self._active_turn.start_timestamp
+            source_changed = source and self._active_turn.source and (
+                source != self._active_turn.source
+            )
 
-            # Finalize if silence was detected or max duration exceeded
-            if self._silence_seen or duration >= self._max_turn_duration:
+            # Finalize if silence, max duration, or source change
+            if self._silence_seen or duration >= self._max_turn_duration or source_changed:
                 self._finalize_active()
 
         # Reset silence flag — we have speech now
@@ -152,6 +160,7 @@ class TranscriptBuffer:
                 text=text,
                 start_timestamp=timestamp,
                 end_timestamp=timestamp,
+                source=source,
                 chunk_count=1,
             )
         else:

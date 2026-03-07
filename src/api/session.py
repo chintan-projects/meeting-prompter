@@ -1,18 +1,18 @@
-"""Session manager — bridges the audio pipeline to WebSocket consumers.
+"""Session manager — bridges dual audio pipelines to WebSocket consumers.
 
-Uses orchestrator callbacks (on_transcription, on_silence_detected,
-on_trigger_result) instead of monkey-patching process_chunk. This
-keeps the Session's role clear: it wires pipeline events to the
-transcript buffer, transcript store, text refiner, and async queues.
+Dual-stream architecture: captures microphone (you) and system audio
+(others) simultaneously. Speaker identity is deterministic from the
+audio source — no ML-based speaker attribution needed.
 
 Pipeline flow:
-    Audio → ASR → Orchestrator.process_chunk() → callbacks
-    on_transcription  → TranscriptBuffer → turns → TextRefiner → WebSocket
-    on_silence        → TranscriptBuffer → turn boundaries
-    on_trigger_result → prompt queue → WebSocket
+    Mic Audio   → ASR → source="mic"    → TranscriptBuffer → "You"
+    System Audio → ASR → source="system" → TranscriptBuffer → "Others"
+    Both streams → on_silence → turn boundaries
+    Both streams → ConversationBuffer → trigger engine → prompts
 """
 import asyncio
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -20,7 +20,6 @@ from typing import Optional
 from lib.config import AppConfig, load_config
 from lib.conversation.meeting_context import MeetingContext, load_meeting_context
 from lib.generation.types import GenerationResult
-from lib.speaker_tracker import SpeakerTracker
 from lib.text_refiner import TextRefiner
 from lib.triggers.types import Trigger, TriggerType
 
@@ -34,12 +33,16 @@ _OUTPUT_DIR = Path(__file__).parent.parent.parent / "output"
 
 
 class Session:
-    """Managed meeting session that bridges audio pipeline to async API.
+    """Managed meeting session with dual-stream audio capture.
 
-    The audio pipeline runs in a background thread. Transcript turns
-    and trigger results are pushed into asyncio queues that WebSocket
-    handlers consume. Orchestrator callbacks bridge the pipeline thread
-    to the Session cleanly — no monkey-patching.
+    Two AudioCapture instances (mic + system audio) feed a shared
+    TranscriptBuffer. Each turn is tagged with its source ("mic" or
+    "system"), and speaker labels are set deterministically:
+    - source="mic" → speaker="You"
+    - source="system" → speaker="Others"
+
+    Transcript turns and trigger results are pushed into asyncio queues
+    that WebSocket handlers consume.
     """
 
     def __init__(self, config: Optional[AppConfig] = None) -> None:
@@ -61,9 +64,10 @@ class Session:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         self._orchestrator: Optional[object] = None
+        self._mic_capture: Optional[object] = None
         self._text_refiner: Optional[TextRefiner] = None
-        self._speaker_tracker: Optional[SpeakerTracker] = None
-        self._thread: Optional["threading.Thread"] = None
+        self._thread: Optional[threading.Thread] = None
+        self._mic_thread: Optional[threading.Thread] = None
         self._running = False
         self._start_time: float = 0.0
         self._loading = False
@@ -83,10 +87,18 @@ class Session:
         self.meeting_context = load_meeting_context(path)
         return self.meeting_context
 
-    def start(self, audio_device: str = "BlackHole 2ch") -> None:
-        """Start the audio pipeline in a background thread."""
-        import threading
+    def start(
+        self,
+        audio_device: str = "BlackHole 2ch",
+        mic_device: str = "",
+    ) -> None:
+        """Start the dual audio pipeline in background threads.
 
+        Args:
+            audio_device: System audio device (e.g. "BlackHole 2ch").
+            mic_device: Microphone device (e.g. "MacBook Pro Microphone").
+                If empty, falls back to config default.
+        """
         if self._running or self._loading:
             logger.warning("Session already running or loading")
             return
@@ -100,23 +112,34 @@ class Session:
         self._running = True
         self._start_time = time.time()
         self._audio_device = audio_device
+        self._mic_device = mic_device or self.config.audio.device_mic
         self._thread = threading.Thread(target=self._run_pipeline, daemon=True)
         self._thread.start()
-        logger.info("Session starting on %s (loading models in background)", audio_device)
+        logger.info(
+            "Session starting — system: %s, mic: %s",
+            audio_device,
+            self._mic_device,
+        )
 
     def stop(self) -> None:
-        """Stop the audio pipeline, finalize active turn, save recording."""
+        """Stop both audio pipelines, finalize active turn, save recording."""
         self._running = False
         if self._orchestrator:
             self._orchestrator._running = False
+
+        # Stop mic capture
+        if self._mic_capture:
+            self._mic_capture.stop()
 
         # Flush any in-progress turn
         self._transcript_buffer.flush()
 
         if self._thread:
             self._thread.join(timeout=10.0)
+        if self._mic_thread:
+            self._mic_thread.join(timeout=10.0)
 
-        # Save session recording
+        # Save session recording (system audio — primary stream)
         if self._orchestrator and hasattr(self._orchestrator, "audio"):
             _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
             ts = time.strftime("%Y%m%d_%H%M%S")
@@ -141,16 +164,23 @@ class Session:
             "audio_health": audio_health,
         }
 
-    # --- Orchestrator callbacks (called from pipeline background thread) ---
+    # --- Orchestrator callbacks (called from system audio pipeline thread) ---
 
     def _on_transcription(self, text: str, timestamp: float) -> None:
-        """Called when valid speech is transcribed by the ASR model.
+        """Called when valid speech is transcribed from system audio.
 
-        Feeds the text into the TranscriptBuffer (which handles turn
-        assembly and fires _on_turn_update / _on_turn_final).
+        Tags the chunk with source="system" (remote participants).
         """
-        logger.debug("[pipeline] Valid speech: %r", text[:80])
-        self._transcript_buffer.add_chunk(text, timestamp)
+        logger.debug("[system] Valid speech: %r", text[:80])
+        self._transcript_buffer.add_chunk(text, timestamp, source="system")
+
+    def _on_mic_transcription(self, text: str, timestamp: float) -> None:
+        """Called when valid speech is transcribed from microphone.
+
+        Tags the chunk with source="mic" (local user).
+        """
+        logger.debug("[mic] Valid speech: %r", text[:80])
+        self._transcript_buffer.add_chunk(text, timestamp, source="mic")
 
     def _on_silence_detected(self, timestamp: float) -> None:
         """Called when ASR returns empty/hallucination (silence).
@@ -161,10 +191,7 @@ class Session:
         self._transcript_buffer.on_silence(timestamp)
 
     def _on_trigger_result(self, trigger: Trigger, result: GenerationResult) -> None:
-        """Called when a trigger fires and produces a generation result.
-
-        Pushes the result to the prompt queue for the WebSocket consumer.
-        """
+        """Called when a trigger fires and produces a generation result."""
         logger.info(
             "[trigger] %s → %s (conf=%.2f, %dms)",
             trigger.type.value,
@@ -206,18 +233,14 @@ class Session:
     def _on_turn_final(self, turn: Turn) -> None:
         """Called when a turn is finalized (pause detected).
 
-        Assigns speaker label via energy features, emits transcript_final
-        (raw text) immediately, then runs the text refiner and emits
-        transcript_polished if the text changed.
+        Speaker label is set deterministically from source:
+        mic → "You", system → "Others".
         """
-        # Speaker attribution — fetch audio features for this turn's time range
-        if self._speaker_tracker and self._orchestrator and hasattr(self._orchestrator, "audio"):
-            try:
-                features = self._orchestrator.audio.get_recent_features(turn.start_timestamp)
-                speaker = self._speaker_tracker.on_turn_features(features)
-                turn.speaker = speaker
-            except Exception as e:
-                logger.warning("Speaker attribution failed: %s", e)
+        # Source-based speaker attribution — deterministic, no ML
+        if turn.source == "mic":
+            turn.speaker = "You"
+        elif turn.source == "system":
+            turn.speaker = "Others"
 
         # Emit raw finalization immediately
         self.transcript.upsert(
@@ -251,13 +274,15 @@ class Session:
                     "end_timestamp": turn.end_timestamp,
                     "is_final": True,
                     "speaker": turn.speaker,
+                    "source": turn.source,
                 })
 
-    # --- Pipeline thread ---
+    # --- Pipeline threads ---
 
     def _run_pipeline(self) -> None:
-        """Background thread: load models then run the audio capture loop."""
+        """Background thread: load models, start system audio + mic capture."""
         try:
+            from lib.audio_capture import AudioCapture
             from lib.orchestrator import MeetingOrchestrator
 
             logger.info("Loading models in background thread...")
@@ -268,55 +293,106 @@ class Session:
                 headless=True,
             )
 
-            # Inject meeting context if loaded (no dashboard in headless mode)
+            # Inject meeting context if loaded
             if self.meeting_context and self._orchestrator:
                 orch = self._orchestrator
                 orch.meeting_context = self.meeting_context
                 if self.meeting_context.watch_words:
                     orch.trigger_engine.set_watch_words(self.meeting_context.watch_words)
 
-            # Wire orchestrator callbacks — clean pipeline observation
+            # Wire orchestrator callbacks for system audio stream
             self._orchestrator.on_transcription = self._on_transcription
             self._orchestrator.on_silence_detected = self._on_silence_detected
             self._orchestrator.on_trigger_result = self._on_trigger_result
 
             # Create text refiner (shares Llama instance with generator)
             refiner_config = getattr(self.config, "refiner", None)
-            refiner_enabled = getattr(refiner_config, "enabled", True) if refiner_config else True
+            refiner_enabled = (
+                getattr(refiner_config, "enabled", True) if refiner_config else True
+            )
             if refiner_enabled and hasattr(self._orchestrator.generator, "_generator"):
                 self._text_refiner = TextRefiner(
                     self._orchestrator.generator._generator,
-                    min_words_to_refine=getattr(refiner_config, "min_words_to_refine", 5)
-                    if refiner_config
-                    else 5,
+                    min_words_to_refine=(
+                        getattr(refiner_config, "min_words_to_refine", 5)
+                        if refiner_config
+                        else 5
+                    ),
                 )
                 logger.info("Text refiner enabled (sharing LFM2.5-Instruct instance)")
 
-            # Create speaker tracker for attribution
-            speaker_config = getattr(self.config, "speaker", None)
-            speaker_enabled = getattr(speaker_config, "enabled", True) if speaker_config else True
-            if speaker_enabled:
-                self._speaker_tracker = SpeakerTracker(
-                    similarity_threshold=(
-                        getattr(speaker_config, "similarity_threshold", 0.6)
-                        if speaker_config
-                        else 0.6
-                    ),
-                    ema_alpha=(
-                        getattr(speaker_config, "ema_alpha", 0.3) if speaker_config else 0.3
-                    ),
-                )
-                logger.info("Speaker tracker enabled (energy-based attribution)")
+            # --- Mic capture: separate AudioCapture + ASR pipeline ---
+            self._mic_capture = AudioCapture(device=self._mic_device)
+            self._mic_thread = threading.Thread(
+                target=self._run_mic_pipeline,
+                daemon=True,
+                name="mic-pipeline",
+            )
+            self._mic_thread.start()
+            logger.info("Mic pipeline started on: %s", self._mic_device)
 
             self._loading = False
-            logger.info("Models loaded, starting audio capture...")
+            logger.info("Models loaded, starting system audio capture...")
 
+            # System audio runs on this thread (blocking)
             self._orchestrator.run()
         except Exception as e:
             logger.error("Pipeline error: %s", e, exc_info=True)
         finally:
             self._loading = False
             self._running = False
+
+    def _run_mic_pipeline(self) -> None:
+        """Mic pipeline thread: capture mic audio, transcribe, tag source.
+
+        Shares the LFM2 ASR model with the system audio pipeline via the
+        orchestrator. Uses the same filter chain but tags output as "mic".
+        """
+        try:
+            from lib.filters import is_hallucination_only, is_noise
+
+            if not self._orchestrator:
+                logger.error("Mic pipeline: orchestrator not ready")
+                return
+
+            lfm2 = self._orchestrator.lfm2
+
+            def process_mic_chunk(audio_path: Path, timestamp: float) -> None:
+                """Process a mic audio chunk through ASR + filters."""
+                try:
+                    text = lfm2.transcribe(audio_path)
+
+                    if not text or text.startswith("["):
+                        self._on_silence_detected(timestamp)
+                        return
+
+                    if is_hallucination_only(text):
+                        self._on_silence_detected(timestamp)
+                        return
+
+                    # Valid speech from mic
+                    self._on_mic_transcription(text, timestamp)
+
+                    # Feed trigger pipeline (same as system audio)
+                    if not is_noise(text):
+                        triggers = self._orchestrator.buffer.add_chunk(text, timestamp)
+                        self._handle_mic_triggers(triggers)
+                except Exception as e:
+                    logger.error("Mic chunk error: %s", e)
+
+            self._mic_capture.start_stream(process_mic_chunk)
+        except Exception as e:
+            logger.error("Mic pipeline error: %s", e, exc_info=True)
+
+    def _handle_mic_triggers(self, triggers: list) -> None:
+        """Handle triggers from mic audio (same as system audio triggers)."""
+        from lib.triggers.types import Trigger as TriggerType_
+
+        for trigger in triggers:
+            result = self._orchestrator._process_trigger(trigger)
+            if result and result.answer and not result.answer.startswith("["):
+                if self._orchestrator.on_trigger_result:
+                    self._orchestrator.on_trigger_result(trigger, result)
 
     def _thread_safe_put(self, queue: asyncio.Queue, item: dict) -> None:
         """Put an item on an asyncio.Queue from a background thread."""

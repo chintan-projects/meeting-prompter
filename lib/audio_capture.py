@@ -19,8 +19,6 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from lib.audio_features import compute_mfccs, compute_spectral_features
-
 logger = logging.getLogger(__name__)
 
 # Sentinel value to signal worker thread to stop
@@ -201,30 +199,21 @@ class AudioCapture:
     def compute_chunk_features(
         audio_data: np.ndarray, sample_rate: int = 16000,
     ) -> Dict[str, float]:
-        """Compute audio features for speaker attribution.
+        """Compute basic audio features for diagnostics.
 
-        Returns 11 features: rms, zcr, spectral_centroid, spectral_bandwidth,
-        spectral_rolloff, and mfcc_0 through mfcc_5. Spectral features capture
-        vocal tract characteristics for speaker discrimination.
+        Returns RMS energy and zero-crossing rate — sufficient for
+        audio health monitoring. Spectral features removed (speaker
+        attribution now uses dual-stream source separation).
 
         Args:
             audio_data: 1D or 2D float32 audio array.
             sample_rate: Sample rate in Hz (default 16000).
 
         Returns:
-            Dict of feature name → float. Returns zeros for empty input.
+            Dict with rms and zcr. Returns zeros for empty input.
         """
-        n_mfcc = 6
-        zero_features: Dict[str, float] = {
-            "rms": 0.0, "zcr": 0.0,
-            "spectral_centroid": 0.0, "spectral_bandwidth": 0.0,
-            "spectral_rolloff": 0.0,
-        }
-        for i in range(n_mfcc):
-            zero_features[f"mfcc_{i}"] = 0.0
-
         if audio_data.size == 0:
-            return zero_features
+            return {"rms": 0.0, "zcr": 0.0}
 
         flat = audio_data.flatten().astype(np.float32)
 
@@ -239,16 +228,7 @@ class AudioCapture:
         else:
             zcr = 0.0
 
-        # Spectral features (centroid, bandwidth, rolloff)
-        spectral = compute_spectral_features(flat, sample_rate)
-
-        # MFCCs (6 coefficients capturing vocal tract shape)
-        mfccs = compute_mfccs(flat, sample_rate, n_mfcc=n_mfcc)
-
-        features: Dict[str, float] = {"rms": rms, "zcr": zcr, **spectral}
-        for i, coeff in enumerate(mfccs):
-            features[f"mfcc_{i}"] = coeff
-        return features
+        return {"rms": rms, "zcr": zcr}
 
     def get_recent_features(self, since_timestamp: float) -> List[Dict[str, float]]:
         """Get chunk features recorded since a given timestamp.

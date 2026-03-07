@@ -210,124 +210,104 @@ class TestTurnCallbacks:
         assert merged[0]["text"] == "hello world"
 
 
-class TestSpeakerAttribution:
-    """Tests for speaker tracker integration in _on_turn_final."""
+class TestSourceBasedAttribution:
+    """Tests for dual-stream source-based speaker attribution."""
 
     @pytest.mark.asyncio
-    async def test_speaker_label_set_when_tracker_active(self) -> None:
-        """When speaker tracker is active, turn.speaker should be set."""
-        from lib.speaker_tracker import SpeakerTracker
+    async def test_mic_source_sets_speaker_you(self) -> None:
+        """Turn with source='mic' should get speaker='You'."""
         from src.api.transcript_buffer import Turn
 
         session = Session()
         session._loop = asyncio.get_running_loop()
 
-        # Wire up speaker tracker + mock orchestrator audio (full spectral features)
-        session._speaker_tracker = SpeakerTracker()
-        mock_orch = MagicMock()
-        mock_orch.audio.get_recent_features.return_value = [
-            {"rms": 0.05, "zcr": 0.15, "timestamp": 100.0,
-             "spectral_centroid": 500.0, "spectral_bandwidth": 200.0,
-             "spectral_rolloff": 1000.0,
-             "mfcc_0": -4.0, "mfcc_1": 1.0, "mfcc_2": 0.5,
-             "mfcc_3": -0.3, "mfcc_4": 0.2, "mfcc_5": 0.1},
-        ]
-        session._orchestrator = mock_orch
-
         turn = Turn(
-            id="turn-1", text="hello world testing",
-            start_timestamp=99.0, end_timestamp=102.0, is_final=True,
+            id="turn-1", text="hello from mic",
+            start_timestamp=100.0, end_timestamp=102.0,
+            is_final=True, source="mic",
         )
         session._on_turn_final(turn)
 
-        assert turn.speaker == "Speaker 1"
+        assert turn.speaker == "You"
         await asyncio.sleep(0.01)
         msg = session._transcript_queue.get_nowait()
-        assert msg["speaker"] == "Speaker 1"
+        assert msg["speaker"] == "You"
+        assert msg["source"] == "mic"
 
     @pytest.mark.asyncio
-    async def test_speaker_label_empty_without_tracker(self) -> None:
-        """Without speaker tracker, turn.speaker stays empty."""
+    async def test_system_source_sets_speaker_others(self) -> None:
+        """Turn with source='system' should get speaker='Others'."""
         from src.api.transcript_buffer import Turn
 
         session = Session()
         session._loop = asyncio.get_running_loop()
-        session._speaker_tracker = None
 
         turn = Turn(
-            id="turn-1", text="hello world testing",
-            start_timestamp=99.0, end_timestamp=102.0, is_final=True,
+            id="turn-1", text="hello from system audio",
+            start_timestamp=100.0, end_timestamp=102.0,
+            is_final=True, source="system",
+        )
+        session._on_turn_final(turn)
+
+        assert turn.speaker == "Others"
+        await asyncio.sleep(0.01)
+        msg = session._transcript_queue.get_nowait()
+        assert msg["speaker"] == "Others"
+        assert msg["source"] == "system"
+
+    @pytest.mark.asyncio
+    async def test_empty_source_keeps_speaker_empty(self) -> None:
+        """Turn with no source stays with empty speaker (legacy compat)."""
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        turn = Turn(
+            id="turn-1", text="no source set",
+            start_timestamp=100.0, end_timestamp=102.0,
+            is_final=True, source="",
         )
         session._on_turn_final(turn)
 
         assert turn.speaker == ""
 
     @pytest.mark.asyncio
-    async def test_speaker_attribution_error_doesnt_crash(self) -> None:
-        """If feature retrieval raises, turn still emits without speaker."""
-        from src.api.transcript_buffer import Turn
-
+    async def test_on_transcription_tags_system_source(self) -> None:
+        """_on_transcription should tag chunks with source='system'."""
         session = Session()
         session._loop = asyncio.get_running_loop()
-        session._speaker_tracker = MagicMock()
-        mock_orch = MagicMock()
-        mock_orch.audio.get_recent_features.side_effect = RuntimeError("bad audio")
-        session._orchestrator = mock_orch
 
-        turn = Turn(
-            id="turn-1", text="still works fine",
-            start_timestamp=99.0, end_timestamp=102.0, is_final=True,
-        )
-        session._on_turn_final(turn)
-
-        await asyncio.sleep(0.01)
-        msg = session._transcript_queue.get_nowait()
-        assert msg["type"] == "transcript_final"
-        assert msg["text"] == "still works fine"
+        session._on_transcription("system speech here", 100.0)
+        turn = session._transcript_buffer.active_turn
+        assert turn is not None
+        assert turn.source == "system"
 
     @pytest.mark.asyncio
-    async def test_multiple_speakers_get_different_labels(self) -> None:
-        """Different audio features should produce different speaker labels."""
-        from lib.speaker_tracker import SpeakerTracker
-        from src.api.transcript_buffer import Turn
-
+    async def test_on_mic_transcription_tags_mic_source(self) -> None:
+        """_on_mic_transcription should tag chunks with source='mic'."""
         session = Session()
         session._loop = asyncio.get_running_loop()
-        session._speaker_tracker = SpeakerTracker()
-        mock_orch = MagicMock()
-        session._orchestrator = mock_orch
 
-        # Speaker A — low pitch, low energy
-        mock_orch.audio.get_recent_features.return_value = [
-            {"rms": 0.04, "zcr": 0.08, "timestamp": 100.0,
-             "spectral_centroid": 250.0, "spectral_bandwidth": 120.0,
-             "spectral_rolloff": 500.0,
-             "mfcc_0": -5.0, "mfcc_1": 1.2, "mfcc_2": 0.4,
-             "mfcc_3": -0.3, "mfcc_4": 0.2, "mfcc_5": 0.1},
-        ]
-        turn_a = Turn(
-            id="turn-a", text="speaker a",
-            start_timestamp=99.0, end_timestamp=102.0, is_final=True,
-        )
-        session._on_turn_final(turn_a)
+        session._on_mic_transcription("mic speech here", 100.0)
+        turn = session._transcript_buffer.active_turn
+        assert turn is not None
+        assert turn.source == "mic"
 
-        # Speaker B — high pitch, higher energy (distinct spectral profile)
-        mock_orch.audio.get_recent_features.return_value = [
-            {"rms": 0.06, "zcr": 0.22, "timestamp": 105.0,
-             "spectral_centroid": 1800.0, "spectral_bandwidth": 700.0,
-             "spectral_rolloff": 3500.0,
-             "mfcc_0": -2.0, "mfcc_1": -1.5, "mfcc_2": -0.8,
-             "mfcc_3": 0.5, "mfcc_4": -0.3, "mfcc_5": -0.4},
-        ]
-        turn_b = Turn(
-            id="turn-b", text="speaker b",
-            start_timestamp=104.0, end_timestamp=107.0, is_final=True,
-        )
-        session._on_turn_final(turn_b)
+    @pytest.mark.asyncio
+    async def test_source_change_creates_new_turn(self) -> None:
+        """Switching source (mic→system) should finalize and create new turn."""
+        session = Session()
+        session._loop = asyncio.get_running_loop()
 
-        assert turn_a.speaker != turn_b.speaker
-        assert turn_a.speaker == "Speaker 1"
-        assert turn_b.speaker == "Speaker 2"
+        session._on_transcription("system speech", 100.0)
+        session._on_mic_transcription("mic speech", 103.5)
+
+        # Should have finalized the system turn and started a new mic turn
+        assert session._transcript_buffer.active_turn is not None
+        assert session._transcript_buffer.active_turn.source == "mic"
+        assert len(session._transcript_buffer._finalized_turns) == 1
+        assert session._transcript_buffer._finalized_turns[0].source == "system"
 
 
 class TestOrchestratorCallbacks:

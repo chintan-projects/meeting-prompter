@@ -10,12 +10,11 @@ interface TranscriptPaneProps {
 }
 
 /**
- * Turn-based transcript display.
+ * Dual-stream transcript display with chat-bubble layout.
  *
- * Each segment represents a speech turn (continuous block of speech
- * accumulated on the backend). Turns are displayed as timestamped
- * paragraphs. Active turns (still accumulating) show a live indicator.
- * Finalized turns are clean, static paragraphs. Double-click to edit.
+ * Mic turns (source="mic") appear right-aligned with accent styling → "You"
+ * System turns (source="system") appear left-aligned with muted styling → "Others"
+ * Active turns show a live indicator. Double-click finalized turns to edit.
  */
 export function TranscriptPane({
   segments,
@@ -59,6 +58,8 @@ export function TranscriptPane({
     });
   };
 
+  const isMic = (seg: TranscriptSegment): boolean => seg.source === "mic";
+
   if (collapsed) {
     return (
       <div style={styles.collapsed} onClick={onToggle}>
@@ -89,44 +90,55 @@ export function TranscriptPane({
           <div style={styles.empty}>Waiting for transcript...</div>
         )}
 
-        {segments.map((seg) => (
-          <div
-            key={seg.id}
-            style={{
-              ...styles.turn,
-              ...(seg.is_final ? {} : styles.activeTurn),
-              ...(seg.edited ? styles.editedTurn : {}),
-            }}
-            onDoubleClick={() => startEdit(seg)}
-          >
-            <div style={styles.turnHeader}>
-              <span style={styles.timestamp}>{formatTime(seg.timestamp)}</span>
-              {seg.speaker && (
-                <span style={styles.speaker}>{seg.speaker}</span>
-              )}
-              {!seg.is_final && <span style={styles.liveIndicator} />}
-            </div>
-
-            {editingId === seg.id ? (
-              <textarea
-                style={styles.editInput}
-                value={editText}
-                onChange={(e) => setEditText(e.target.value)}
-                onBlur={commitEdit}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    commitEdit();
-                  }
+        {segments.map((seg) => {
+          const mic = isMic(seg);
+          return (
+            <div
+              key={seg.id}
+              style={{
+                ...styles.turnRow,
+                justifyContent: mic ? "flex-end" : "flex-start",
+              }}
+            >
+              <div
+                style={{
+                  ...styles.turn,
+                  ...(mic ? styles.micTurn : styles.systemTurn),
+                  ...(seg.is_final ? {} : styles.activeTurn),
+                  ...(seg.edited ? styles.editedTurn : {}),
                 }}
-                autoFocus
-                rows={3}
-              />
-            ) : (
-              <div style={styles.turnText}>{seg.text}</div>
-            )}
-          </div>
-        ))}
+                onDoubleClick={() => startEdit(seg)}
+              >
+                <div style={styles.turnHeader}>
+                  <span style={styles.timestamp}>{formatTime(seg.timestamp)}</span>
+                  <span style={mic ? styles.speakerMic : styles.speakerSystem}>
+                    {seg.speaker || (mic ? "You" : "Others")}
+                  </span>
+                  {!seg.is_final && <span style={styles.liveIndicator} />}
+                </div>
+
+                {editingId === seg.id ? (
+                  <textarea
+                    style={styles.editInput}
+                    value={editText}
+                    onChange={(e) => setEditText(e.target.value)}
+                    onBlur={commitEdit}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        commitEdit();
+                      }
+                    }}
+                    autoFocus
+                    rows={3}
+                  />
+                ) : (
+                  <div style={styles.turnText}>{seg.text}</div>
+                )}
+              </div>
+            </div>
+          );
+        })}
 
         <div ref={bottomRef} />
       </div>
@@ -181,19 +193,31 @@ const styles: Record<string, React.CSSProperties> = {
   },
   empty: { color: "var(--text-muted)", fontStyle: "italic", padding: 16 },
 
-  /* --- Turn blocks --- */
+  /* --- Turn blocks (chat-bubble layout) --- */
+  turnRow: {
+    display: "flex",
+    padding: "4px 10px",
+  },
   turn: {
+    maxWidth: "85%",
     padding: "8px 14px",
-    borderBottom: "1px solid var(--border)",
+    borderRadius: 12,
     cursor: "default",
     transition: "background 0.15s ease",
   },
+  micTurn: {
+    background: "rgba(74, 158, 255, 0.12)",
+    borderBottomRightRadius: 4,
+  },
+  systemTurn: {
+    background: "var(--bg-secondary)",
+    borderBottomLeftRadius: 4,
+  },
   activeTurn: {
-    background: "rgba(74, 158, 255, 0.04)",
     borderLeft: "2px solid var(--accent-blue, #4a9eff)",
   },
   editedTurn: {
-    background: "rgba(74, 158, 255, 0.06)",
+    opacity: 0.85,
   },
   turnHeader: {
     display: "flex",
@@ -207,7 +231,12 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-muted)",
     flexShrink: 0,
   },
-  speaker: {
+  speakerMic: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: "var(--accent-blue, #4a9eff)",
+  },
+  speakerSystem: {
     fontSize: 11,
     fontWeight: 600,
     color: "var(--text-secondary)",

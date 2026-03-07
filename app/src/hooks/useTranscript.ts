@@ -6,6 +6,7 @@ export interface TranscriptSegment {
   timestamp: number;
   end_timestamp: number;
   speaker: string;
+  source: string; // "mic" or "system" — audio stream origin
   is_final: boolean;
   edited?: boolean;
 }

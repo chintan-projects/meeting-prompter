@@ -23,6 +23,7 @@ def get_session() -> Session:
 
 class StartRequest(BaseModel):
     audio_device: str = "BlackHole 2ch"
+    mic_device: str = "MacBook Pro Microphone"
 
 
 class AudioHealth(BaseModel):
@@ -67,8 +68,12 @@ async def start_session(req: StartRequest) -> dict:
         raise HTTPException(status_code=409, detail="Session already running")
     # Create a fresh session for a new recording
     _session = Session()
-    _session.start(audio_device=req.audio_device)
-    return {"status": "started", "audio_device": req.audio_device}
+    _session.start(audio_device=req.audio_device, mic_device=req.mic_device)
+    return {
+        "status": "started",
+        "audio_device": req.audio_device,
+        "mic_device": req.mic_device,
+    }
 
 
 @router.post("/stop")

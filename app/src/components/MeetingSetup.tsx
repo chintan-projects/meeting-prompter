@@ -10,7 +10,7 @@ interface AudioDevice {
 
 interface MeetingSetupProps {
   onStart: (config: MeetingConfig) => void;
-  onQuickStart: (device: string) => void;
+  onQuickStart: (device: string, micDevice?: string) => void;
 }
 
 interface MeetingConfig {
@@ -19,6 +19,7 @@ interface MeetingConfig {
   watch_words: string[];
   participants: string[];
   audio_device: string;
+  mic_device: string;
 }
 
 export function MeetingSetup({ onStart, onQuickStart }: MeetingSetupProps) {
@@ -27,6 +28,7 @@ export function MeetingSetup({ onStart, onQuickStart }: MeetingSetupProps) {
   const [watchWords, setWatchWords] = useState("pricing, timeline, budget, competitor");
   const [participants, setParticipants] = useState("");
   const [audioDevice, setAudioDevice] = useState("BlackHole 2ch");
+  const [micDevice, setMicDevice] = useState("MacBook Pro Microphone");
   const [devices, setDevices] = useState<AudioDevice[]>([]);
 
   useEffect(() => {
@@ -35,9 +37,17 @@ export function MeetingSetup({ onStart, onQuickStart }: MeetingSetupProps) {
       .then((data) => {
         const devs = data.devices as AudioDevice[];
         setDevices(devs);
-        // Auto-select first available device if BlackHole not found
+        // Auto-select system audio device
         if (devs.length > 0 && !devs.some((d) => d.name === "BlackHole 2ch")) {
           setAudioDevice(devs[0].name);
+        }
+        // Auto-select mic device
+        const mic = devs.find((d) =>
+          d.name.toLowerCase().includes("microphone") ||
+          d.name.toLowerCase().includes("macbook")
+        );
+        if (mic) {
+          setMicDevice(mic.name);
         }
       })
       .catch(() => {
@@ -61,6 +71,7 @@ export function MeetingSetup({ onStart, onQuickStart }: MeetingSetupProps) {
         .map((s) => s.trim())
         .filter(Boolean),
       audio_device: audioDevice,
+      mic_device: micDevice,
     });
   };
 
@@ -108,30 +119,57 @@ export function MeetingSetup({ onStart, onQuickStart }: MeetingSetupProps) {
           />
         </label>
 
-        <label style={styles.label}>
-          Audio Device
-          <select
-            style={styles.input}
-            value={audioDevice}
-            onChange={(e) => setAudioDevice(e.target.value)}
-          >
-            {devices.length > 0 ? (
-              devices.map((d) => (
-                <option key={d.index} value={d.name}>
-                  {d.name} ({d.channels}ch)
-                </option>
-              ))
-            ) : (
-              <>
-                <option value="BlackHole 2ch">BlackHole 2ch (Meeting)</option>
-                <option value="MacBook Pro Microphone">MacBook Microphone (Test)</option>
-              </>
-            )}
-          </select>
-        </label>
+        <div style={styles.deviceRow}>
+          <label style={{ ...styles.label, flex: 1 }}>
+            System Audio
+            <select
+              style={styles.input}
+              value={audioDevice}
+              onChange={(e) => setAudioDevice(e.target.value)}
+            >
+              {devices.length > 0 ? (
+                devices.map((d) => (
+                  <option key={d.index} value={d.name}>
+                    {d.name} ({d.channels}ch)
+                  </option>
+                ))
+              ) : (
+                <>
+                  <option value="BlackHole 2ch">BlackHole 2ch</option>
+                  <option value="MacBook Pro Microphone">MacBook Microphone</option>
+                </>
+              )}
+            </select>
+          </label>
+
+          <label style={{ ...styles.label, flex: 1 }}>
+            Microphone
+            <select
+              style={styles.input}
+              value={micDevice}
+              onChange={(e) => setMicDevice(e.target.value)}
+            >
+              {devices.length > 0 ? (
+                devices.map((d) => (
+                  <option key={d.index} value={d.name}>
+                    {d.name} ({d.channels}ch)
+                  </option>
+                ))
+              ) : (
+                <>
+                  <option value="MacBook Pro Microphone">MacBook Microphone</option>
+                  <option value="BlackHole 2ch">BlackHole 2ch</option>
+                </>
+              )}
+            </select>
+          </label>
+        </div>
 
         <div style={styles.actions}>
-          <button style={styles.quickBtn} onClick={() => onQuickStart(audioDevice)}>
+          <button
+            style={styles.quickBtn}
+            onClick={() => onQuickStart(audioDevice, micDevice)}
+          >
             Quick Start
           </button>
           <button style={styles.startBtn} onClick={handleStart}>
@@ -157,7 +195,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: "var(--bg-secondary)",
     borderRadius: 12,
     padding: "28px 32px",
-    width: 420,
+    width: 480,
     maxHeight: "90vh",
     overflowY: "auto",
     display: "flex",
@@ -183,6 +221,10 @@ const styles: Record<string, React.CSSProperties> = {
     outline: "none",
     fontFamily: "inherit",
     resize: "vertical" as const,
+  },
+  deviceRow: {
+    display: "flex",
+    gap: 12,
   },
   actions: {
     display: "flex",

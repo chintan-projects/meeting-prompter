@@ -57,6 +57,7 @@ function App() {
           end_timestamp: number;
           is_final: boolean;
           speaker: string;
+          source: string;
         };
         if (
           msg.type === "transcript_update" ||
@@ -69,6 +70,7 @@ function App() {
             timestamp: msg.timestamp,
             end_timestamp: msg.end_timestamp ?? msg.timestamp,
             speaker: msg.speaker ?? "",
+            source: msg.source ?? "",
             is_final: msg.is_final ?? msg.type !== "transcript_update",
           });
         }
@@ -146,12 +148,15 @@ function App() {
     };
   }, []);
 
-  const startSession = async (audioDevice: string) => {
+  const startSession = async (audioDevice: string, micDevice?: string) => {
     try {
       const res = await fetch(`${API_BASE}/session/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audio_device: audioDevice }),
+        body: JSON.stringify({
+          audio_device: audioDevice,
+          mic_device: micDevice ?? "MacBook Pro Microphone",
+        }),
       });
       if (res.ok) {
         setIsRunning(true);
@@ -185,6 +190,7 @@ function App() {
     watch_words: string[];
     participants: string[];
     audio_device: string;
+    mic_device: string;
   }) => {
     setMeetingTitle(config.title);
     setShowSetup(false);
@@ -205,12 +211,12 @@ function App() {
       // proceed anyway
     }
 
-    await startSession(config.audio_device);
+    await startSession(config.audio_device, config.mic_device);
   };
 
-  const handleQuickStart = (device: string) => {
+  const handleQuickStart = (device: string, micDevice?: string) => {
     setShowSetup(false);
-    startSession(device);
+    startSession(device, micDevice);
   };
 
   const handleEditSegment = (id: string, text: string) => {

@@ -116,7 +116,7 @@ class DiarizationConfig:
 
 @dataclass
 class PathsConfig:
-    docs_dir: str = "docs"
+    docs_dir: str = "context"
     output_dir: str = "output"
     index_dir: str = "data/colbert_index"
 

@@ -43,7 +43,7 @@ output/*.log
 # Internal resources
 resources/
 
-docs/
+context/
 archive*
 # ColBERT index and embeddings cache
 data/colbert_index/

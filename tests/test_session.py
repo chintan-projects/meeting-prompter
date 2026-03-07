@@ -903,6 +903,102 @@ class TestDiarizationIntegration:
         assert relabeled["speaker"] == "Speaker C"
 
 
+class TestRenameSpeaker:
+    """Tests for click-to-rename speaker labels (Tier 3 lite)."""
+
+    @pytest.mark.asyncio
+    async def test_rename_updates_store_and_emits_messages(self) -> None:
+        """rename_speaker should update store and emit transcript_relabeled."""
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        # Pre-populate transcript
+        session.transcript.upsert("turn-1", "hello", 100.0, 104.0, True, "Speaker A", "system")
+        session.transcript.upsert("turn-2", "world", 105.0, 108.0, True, "Speaker A", "system")
+        session.transcript.upsert("turn-3", "bye", 110.0, 112.0, True, "Speaker B", "system")
+
+        session.rename_speaker("Speaker A", "Alice")
+
+        await asyncio.sleep(0.02)
+        messages = []
+        while not session._transcript_queue.empty():
+            messages.append(session._transcript_queue.get_nowait())
+
+        assert len(messages) == 2
+        assert all(m["type"] == "transcript_relabeled" for m in messages)
+        assert all(m["speaker"] == "Alice" for m in messages)
+        assert {m["id"] for m in messages} == {"turn-1", "turn-2"}
+
+        # Store should reflect rename
+        raw = session.transcript.get_raw()
+        assert raw[0]["speaker"] == "Alice"
+        assert raw[1]["speaker"] == "Alice"
+        assert raw[2]["speaker"] == "Speaker B"
+
+    @pytest.mark.asyncio
+    async def test_future_diarizer_uses_name_mapping(self) -> None:
+        """After rename, diarizer results should resolve to custom name."""
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        # Rename Speaker A → Alice
+        session.transcript.upsert("turn-1", "hi", 100.0, 104.0, True, "Speaker A", "system")
+        session.rename_speaker("Speaker A", "Alice")
+
+        # Drain rename messages
+        await asyncio.sleep(0.02)
+        while not session._transcript_queue.empty():
+            session._transcript_queue.get_nowait()
+
+        # Mock diarizer returns "Speaker A" for a new turn
+        mock_diarizer = MagicMock()
+        mock_diarizer.process_turn.return_value = "Speaker A"
+        session._diarizer = mock_diarizer
+
+        mock_orch = MagicMock()
+        mock_orch.audio.get_audio_segment.return_value = np.zeros(32000, dtype=np.float32)
+        session._orchestrator = mock_orch
+
+        turn = Turn(
+            id="turn-2", text="new system speech",
+            start_timestamp=200.0, end_timestamp=204.0,
+            is_final=True, source="system", speaker="Others",
+        )
+        session._relabel_speaker(turn)
+
+        await asyncio.sleep(0.02)
+        msg = session._transcript_queue.get_nowait()
+        assert msg["speaker"] == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_rename_others_works(self) -> None:
+        """Can rename the default 'Others' label too."""
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        session.transcript.upsert("turn-1", "hi", 100.0, 104.0, True, "Others", "system")
+        session.rename_speaker("Others", "External")
+
+        await asyncio.sleep(0.02)
+        msg = session._transcript_queue.get_nowait()
+        assert msg["speaker"] == "External"
+        assert session.transcript.get_raw()[0]["speaker"] == "External"
+
+    @pytest.mark.asyncio
+    async def test_rename_no_match_is_noop(self) -> None:
+        """Renaming a non-existent speaker should not emit messages."""
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        session.transcript.upsert("turn-1", "hi", 100.0, 104.0, True, "Speaker A", "system")
+        session.rename_speaker("Speaker Z", "Zach")
+
+        await asyncio.sleep(0.02)
+        assert session._transcript_queue.empty()
+
+
 class TestConfigWiring:
     """Tests for config-driven TranscriptBuffer parameters (F-105)."""
 

@@ -216,7 +216,7 @@ workstreams:
       Tier 1 (dual-stream You/Others) is complete. Tier 2 adds neural
       diarization for multi-speaker on system audio. Tier 3 adds named
       speaker enrollment. Both require model delivery decisions.
-      See docs/speaker-attribution.md.
+      See context/speaker-attribution.md.
 
     features:
       - id: F-301
@@ -249,7 +249,7 @@ workstreams:
 
   # ─── WORKSTREAM 4: Packaging & Distribution ─────────────────────
   # Priority: V1 ship — gates on core experience being ready.
-  # See docs/packaging-strategy.md.
+  # See context/packaging-strategy.md.
 
   packaging:
     name: "Packaging & Distribution"
@@ -257,7 +257,7 @@ workstreams:
     description: >
       Native Mac app build pipeline, code signing, model bundling,
       App Store submission. Premature until core product experience
-      is right. See docs/packaging-strategy.md for model delivery tiers.
+      is right. See context/packaging-strategy.md for model delivery tiers.
 
     features:
       - id: F-401

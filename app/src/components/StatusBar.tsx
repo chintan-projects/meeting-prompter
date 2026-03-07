@@ -6,11 +6,14 @@ const API_BASE = "http://127.0.0.1:8420";
 interface StatusBarProps {
   title: string;
   isRunning: boolean;
+  isPaused: boolean;
   elapsed: number;
   transcriptConnected: boolean;
   promptsConnected: boolean;
   onStart: () => void;
   onStop: () => void;
+  onPause: () => void;
+  onResume: () => void;
 }
 
 interface AudioHealth {
@@ -22,11 +25,14 @@ interface AudioHealth {
 export function StatusBar({
   title,
   isRunning,
+  isPaused,
   elapsed,
   transcriptConnected,
   promptsConnected,
   onStart,
   onStop,
+  onPause,
+  onResume,
 }: StatusBarProps) {
   const [loading, setLoading] = useState(false);
   const [audioWarning, setAudioWarning] = useState("");
@@ -75,20 +81,32 @@ export function StatusBar({
 
         <div style={styles.center}>
           {isRunning ? (
-            <button onClick={onStop} style={{ ...styles.btn, ...styles.stopBtn }}>
-              ■ Stop
-            </button>
+            <>
+              <button onClick={onStop} style={{ ...styles.btn, ...styles.stopBtn }}>
+                ■ Stop
+              </button>
+              {isPaused ? (
+                <button onClick={onResume} style={{ ...styles.btn, ...styles.resumeBtn }}>
+                  ▶ Resume
+                </button>
+              ) : (
+                <button onClick={onPause} style={{ ...styles.btn, ...styles.pauseBtn }}>
+                  ❚❚ Pause
+                </button>
+              )}
+            </>
           ) : (
             <button onClick={onStart} style={{ ...styles.btn, ...styles.startBtn }}>
               ⏺ Record
             </button>
           )}
           <span style={styles.time}>
-            {loading ? "Loading models..." : timeStr}
+            {loading ? "Loading models..." : isPaused ? `${timeStr} PAUSED` : timeStr}
           </span>
         </div>
 
         <div style={styles.right}>
+          <span style={styles.shortcuts}>⌘⇧R rec · Space pause · ⌘\\ pane</span>
           <span style={{ color: transcriptConnected ? "var(--accent-green)" : "var(--accent-red)" }}>
             T {transcriptConnected ? "●" : "○"}
           </span>
@@ -125,7 +143,7 @@ const styles: Record<string, React.CSSProperties> = {
   center: {
     display: "flex",
     alignItems: "center",
-    gap: 12,
+    gap: 8,
     // @ts-expect-error WebkitAppRegion is a non-standard CSS property for Tauri window dragging
     WebkitAppRegion: "no-drag",
   },
@@ -133,6 +151,12 @@ const styles: Record<string, React.CSSProperties> = {
   dot: { color: "var(--accent-blue)", fontSize: 18 },
   title: { fontWeight: 600, fontSize: 14 },
   time: { fontFamily: "var(--font-mono)", color: "var(--text-secondary)", fontSize: 13 },
+  shortcuts: {
+    color: "var(--text-muted)",
+    fontSize: 10,
+    marginRight: 12,
+    opacity: 0.6,
+  },
   btn: {
     border: "none",
     borderRadius: 6,
@@ -143,6 +167,14 @@ const styles: Record<string, React.CSSProperties> = {
   },
   startBtn: { background: "var(--accent-red)", color: "#fff" },
   stopBtn: { background: "var(--text-muted)", color: "#fff" },
+  pauseBtn: {
+    background: "var(--accent-yellow)",
+    color: "#1a1a2e",
+  },
+  resumeBtn: {
+    background: "var(--accent-green)",
+    color: "#1a1a2e",
+  },
   warning: {
     background: "#442200",
     color: "#ffaa33",

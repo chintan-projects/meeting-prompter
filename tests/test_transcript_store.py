@@ -26,10 +26,14 @@ class TestTranscriptSegment:
         d = seg.to_dict()
         assert d["end_timestamp"] == 100.0
 
+    def test_default_source(self) -> None:
+        seg = TranscriptSegment(id="seg-1", text="hello", timestamp=0.0)
+        assert seg.source == ""
+
     def test_to_dict_includes_all_fields(self) -> None:
         seg = TranscriptSegment(
             id="turn-1", text="hello", timestamp=100.0,
-            end_timestamp=105.0, is_final=True, speaker="Bob",
+            end_timestamp=105.0, is_final=True, speaker="Bob", source="mic",
         )
         d = seg.to_dict()
         assert d == {
@@ -39,6 +43,7 @@ class TestTranscriptSegment:
             "end_timestamp": 105.0,
             "is_final": True,
             "speaker": "Bob",
+            "source": "mic",
         }
 
 
@@ -177,6 +182,122 @@ class TestUpsert:
         merged = store.get_merged()
         assert merged[0]["id"] == "seg-1"
         assert merged[1]["id"] == "turn-1"
+
+    def test_upsert_with_source(self) -> None:
+        store = TranscriptStore()
+        store.upsert("turn-1", "hello", timestamp=100.0, source="mic")
+        raw = store.get_raw()
+        assert raw[0]["source"] == "mic"
+
+    def test_upsert_preserves_source_on_update(self) -> None:
+        store = TranscriptStore()
+        store.upsert("turn-1", "hello", timestamp=100.0, source="system")
+        store.upsert("turn-1", "hello world", timestamp=100.0)
+        raw = store.get_raw()
+        assert raw[0]["source"] == "system"
+
+    def test_upsert_does_not_overwrite_source_with_empty(self) -> None:
+        store = TranscriptStore()
+        store.upsert("turn-1", "hello", timestamp=100.0, source="mic")
+        store.upsert("turn-1", "hello world", timestamp=100.0, source="")
+        raw = store.get_raw()
+        assert raw[0]["source"] == "mic"
+
+    def test_upsert_source_and_speaker_together(self) -> None:
+        store = TranscriptStore()
+        store.upsert("turn-1", "hi", timestamp=100.0, speaker="You", source="mic")
+        store.upsert("turn-2", "hey", timestamp=102.0, speaker="Others", source="system")
+        raw = store.get_raw()
+        assert raw[0]["speaker"] == "You"
+        assert raw[0]["source"] == "mic"
+        assert raw[1]["speaker"] == "Others"
+        assert raw[1]["source"] == "system"
+
+    def test_export_json_returns_all_segments(self) -> None:
+        store = TranscriptStore()
+        store.upsert("turn-1", "hello", timestamp=100.0, speaker="You", source="mic")
+        store.upsert("turn-2", "hey there", timestamp=102.0, speaker="Others", source="system")
+        result = store.export_json()
+        assert len(result) == 2
+        assert result[0]["id"] == "turn-1"
+        assert result[1]["id"] == "turn-2"
+
+    def test_export_json_includes_edited_flag(self) -> None:
+        store = TranscriptStore()
+        store.upsert("turn-1", "original", timestamp=100.0, is_final=True)
+        store.upsert("turn-2", "untouched", timestamp=102.0, is_final=True)
+        store.edit("turn-1", "corrected")
+        result = store.export_json()
+        assert result[0]["edited"] is True
+        assert result[0]["text"] == "corrected"
+        assert result[1]["edited"] is False
+        assert result[1]["text"] == "untouched"
+
+    def test_export_json_applies_edit_overlay(self) -> None:
+        store = TranscriptStore()
+        store.upsert("turn-1", "typo here", timestamp=100.0, is_final=True)
+        store.edit("turn-1", "fixed here")
+        result = store.export_json()
+        assert result[0]["text"] == "fixed here"
+
+    def test_export_json_empty_store(self) -> None:
+        store = TranscriptStore()
+        assert store.export_json() == []
+
+    def test_export_json_preserves_source_and_speaker(self) -> None:
+        store = TranscriptStore()
+        store.upsert("turn-1", "hi", timestamp=100.0, speaker="You", source="mic")
+        result = store.export_json()
+        assert result[0]["speaker"] == "You"
+        assert result[0]["source"] == "mic"
+        assert result[0]["edited"] is False
+
+class TestRenameSpeaker:
+    """Tests for bulk speaker rename."""
+
+    def test_renames_matching_segments(self) -> None:
+        store = TranscriptStore()
+        store.upsert("turn-1", "hello", timestamp=100.0, speaker="Speaker A", source="system")
+        store.upsert("turn-2", "world", timestamp=102.0, speaker="Speaker A", source="system")
+        store.upsert("turn-3", "bye", timestamp=104.0, speaker="Speaker B", source="system")
+        affected = store.rename_speaker("Speaker A", "Alice")
+        assert affected == ["turn-1", "turn-2"]
+        raw = store.get_raw()
+        assert raw[0]["speaker"] == "Alice"
+        assert raw[1]["speaker"] == "Alice"
+        assert raw[2]["speaker"] == "Speaker B"
+
+    def test_returns_empty_on_no_match(self) -> None:
+        store = TranscriptStore()
+        store.upsert("turn-1", "hello", timestamp=100.0, speaker="Speaker A", source="system")
+        affected = store.rename_speaker("Speaker Z", "Zach")
+        assert affected == []
+        assert store.get_raw()[0]["speaker"] == "Speaker A"
+
+    def test_does_not_affect_mic_turns(self) -> None:
+        store = TranscriptStore()
+        store.upsert("turn-1", "hi", timestamp=100.0, speaker="You", source="mic")
+        store.upsert("turn-2", "hey", timestamp=102.0, speaker="Speaker A", source="system")
+        affected = store.rename_speaker("Speaker A", "Bob")
+        assert affected == ["turn-2"]
+        assert store.get_raw()[0]["speaker"] == "You"
+
+    def test_rename_others(self) -> None:
+        """Can rename 'Others' (non-diarized) too."""
+        store = TranscriptStore()
+        store.upsert("turn-1", "hi", timestamp=100.0, speaker="Others", source="system")
+        affected = store.rename_speaker("Others", "External")
+        assert affected == ["turn-1"]
+        assert store.get_raw()[0]["speaker"] == "External"
+
+    def test_export_reflects_rename(self) -> None:
+        store = TranscriptStore()
+        store.upsert("turn-1", "hello", timestamp=0.0, speaker="Speaker A", source="system")
+        store.rename_speaker("Speaker A", "Alice")
+        md = store.export_markdown()
+        assert "**Alice**" in md
+        assert "Speaker A" not in md
+
 
     def test_export_markdown_with_turns(self) -> None:
         store = TranscriptStore()

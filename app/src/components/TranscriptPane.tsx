@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { TranscriptSegment } from "../hooks/useTranscript";
 
 interface TranscriptPaneProps {
@@ -6,41 +6,19 @@ interface TranscriptPaneProps {
   collapsed: boolean;
   onToggle: () => void;
   onEdit: (id: string, text: string) => void;
+  onRenameSpeaker: (oldName: string, newName: string) => void;
   width: number;
 }
 
-// Speaker color palette for Tier 2 diarized system audio speakers
+// Speaker color palette for system audio speakers (diarized or renamed)
 const SPEAKER_COLORS: readonly string[] = [
-  "#4caf50", // green — Speaker A
-  "#ff9800", // orange — Speaker B
-  "#ab47bc", // purple — Speaker C
-  "#e91e63", // pink — Speaker D
-  "#00bcd4", // teal — Speaker E
-  "#ff5722", // deep orange — Speaker F
+  "#4caf50", // green
+  "#ff9800", // orange
+  "#ab47bc", // purple
+  "#e91e63", // pink
+  "#00bcd4", // teal
+  "#ff5722", // deep orange
 ];
-
-/** Map speaker label to a distinct color. Mic → blue, system speakers → cycling palette. */
-function getSpeakerColor(seg: TranscriptSegment): string {
-  if (seg.source === "mic") return "var(--accent-blue, #4a9eff)";
-  const match = seg.speaker.match(/Speaker\s+([A-Z])/);
-  if (match) {
-    const idx = match[1].charCodeAt(0) - 65; // A=0, B=1, ...
-    return SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
-  }
-  return "var(--text-secondary)";
-}
-
-/** Get a faint background tint for diarized system speakers. */
-function getSpeakerBubbleBg(seg: TranscriptSegment): string | undefined {
-  if (seg.source !== "system") return undefined;
-  const match = seg.speaker.match(/Speaker\s+([A-Z])/);
-  if (match) {
-    const idx = match[1].charCodeAt(0) - 65;
-    const hex = SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
-    return `${hex}14`; // ~8% opacity via hex alpha
-  }
-  return undefined;
-}
 
 /**
  * Dual-stream transcript display with chat-bubble layout.
@@ -55,12 +33,70 @@ export function TranscriptPane({
   collapsed,
   onToggle,
   onEdit,
+  onRenameSpeaker,
   width,
 }: TranscriptPaneProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [pinBottom, setPinBottom] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
+  const [renamingSpeaker, setRenamingSpeaker] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState("");
+
+  // Stable color assignment: maps speaker names to color indices.
+  // Survives renames by transferring the index from old → new name.
+  const colorMapRef = useRef<Map<string, number>>(new Map());
+
+  const getColorIndex = useCallback((speaker: string): number => {
+    const map = colorMapRef.current;
+    if (!map.has(speaker)) {
+      map.set(speaker, map.size);
+    }
+    return map.get(speaker)!;
+  }, []);
+
+  const getSpeakerColor = useCallback(
+    (seg: TranscriptSegment): string => {
+      if (seg.source === "mic") return "var(--accent-blue, #4a9eff)";
+      const speaker = seg.speaker;
+      if (!speaker || speaker === "Others") return "var(--text-secondary)";
+      const idx = getColorIndex(speaker);
+      return SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
+    },
+    [getColorIndex],
+  );
+
+  const getSpeakerBubbleBg = useCallback(
+    (seg: TranscriptSegment): string | undefined => {
+      if (seg.source !== "system") return undefined;
+      const speaker = seg.speaker;
+      if (!speaker || speaker === "Others") return undefined;
+      const idx = getColorIndex(speaker);
+      const hex = SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
+      return `${hex}14`; // ~8% opacity via hex alpha
+    },
+    [getColorIndex],
+  );
+
+  const startRename = (speaker: string) => {
+    setRenamingSpeaker(speaker);
+    setRenameText(speaker);
+  };
+
+  const commitRename = () => {
+    if (renamingSpeaker && renameText.trim() && renameText.trim() !== renamingSpeaker) {
+      const newName = renameText.trim();
+      // Transfer color index from old name to new name
+      const map = colorMapRef.current;
+      const oldIdx = map.get(renamingSpeaker);
+      if (oldIdx !== undefined) {
+        map.set(newName, oldIdx);
+        map.delete(renamingSpeaker);
+      }
+      onRenameSpeaker(renamingSpeaker, newName);
+    }
+    setRenamingSpeaker(null);
+  };
 
   // Auto-scroll when new turns arrive or active turn updates
   useEffect(() => {
@@ -148,14 +184,44 @@ export function TranscriptPane({
               >
                 <div style={styles.turnHeader}>
                   <span style={styles.timestamp}>{formatTime(seg.timestamp)}</span>
-                  <span
-                    style={{
-                      ...styles.speakerLabel,
-                      color: getSpeakerColor(seg),
-                    }}
-                  >
-                    {seg.speaker || (mic ? "You" : "Others")}
-                  </span>
+                  {renamingSpeaker === (seg.speaker || (mic ? "You" : "Others")) &&
+                  !mic &&
+                  seg.is_final ? (
+                    <input
+                      style={{
+                        ...styles.renameInput,
+                        color: getSpeakerColor(seg),
+                      }}
+                      value={renameText}
+                      onChange={(e) => setRenameText(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          commitRename();
+                        } else if (e.key === "Escape") {
+                          setRenamingSpeaker(null);
+                        }
+                      }}
+                      autoFocus
+                    />
+                  ) : (
+                    <span
+                      style={{
+                        ...styles.speakerLabel,
+                        color: getSpeakerColor(seg),
+                        ...(!mic && seg.is_final ? styles.speakerClickable : {}),
+                      }}
+                      onClick={
+                        !mic && seg.is_final
+                          ? () => startRename(seg.speaker || "Others")
+                          : undefined
+                      }
+                      title={!mic && seg.is_final ? "Click to rename" : undefined}
+                    >
+                      {seg.speaker || (mic ? "You" : "Others")}
+                    </span>
+                  )}
                   {!seg.is_final && <span style={styles.liveIndicator} />}
                 </div>
 
@@ -276,6 +342,21 @@ const styles: Record<string, React.CSSProperties> = {
   speakerLabel: {
     fontSize: 11,
     fontWeight: 600,
+  },
+  speakerClickable: {
+    cursor: "pointer",
+    borderBottom: "1px dashed currentColor",
+  },
+  renameInput: {
+    fontSize: 11,
+    fontWeight: 600,
+    background: "transparent",
+    border: "none",
+    borderBottom: "1px solid currentColor",
+    outline: "none",
+    padding: 0,
+    fontFamily: "inherit",
+    width: 100,
   },
   liveIndicator: {
     width: 6,

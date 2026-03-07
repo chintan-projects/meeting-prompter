@@ -69,7 +69,7 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │   └── test_transcript_store.py   # Append, upsert, edit overlay, export
 ├── models/                        # Symlink → ~/Projects/_models
 ├── runners/                       # llama.cpp binaries (gitignored)
-├── docs/                          # Source documents for RAG (PDF + Markdown)
+├── context/                       # Source documents for RAG (PDF + Markdown)
 ├── data/colbert_index/            # PLAID index cache (gitignored)
 └── output/                        # Saved meeting notes (gitignored)
 ```
@@ -98,7 +98,7 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8420
 rm -rf data/colbert_index/
 
 # Tests
-pytest                                       # All tests (76 tests)
+pytest                                       # All tests (283 tests)
 pytest tests/test_transcript_buffer.py -v    # Buffer tests only
 cd app && npx tsc --noEmit                   # TypeScript check
 ```
@@ -211,4 +211,4 @@ Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question
 - Thread safety: `threading.Lock()` in ConversationBuffer, `loop.call_soon_threadsafe` for queue bridge
 - All files under 300 lines
 - `logging` module throughout (no `print()` in lib/)
-- 76 Python tests, TypeScript strict mode
+- 283 Python tests, 16 frontend tests, TypeScript strict mode

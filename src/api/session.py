@@ -83,6 +83,9 @@ class Session:
         # Accumulated trigger results for post-meeting summary
         self._trigger_history: list[dict] = []
 
+        # Speaker name mapping: diarizer label → custom name (e.g. "Speaker A" → "Alice")
+        self._speaker_names: dict[str, str] = {}
+
     @property
     def is_running(self) -> bool:
         return self._running
@@ -373,6 +376,8 @@ class Session:
             speaker = self._diarizer.process_turn(
                 audio_segment, self.config.audio.sample_rate,
             )
+            if speaker:
+                speaker = self._speaker_names.get(speaker, speaker)
             if speaker and speaker != turn.speaker:
                 turn.speaker = speaker
                 self.transcript.upsert(
@@ -397,6 +402,48 @@ class Session:
                 logger.info("Turn %s relabeled: Others → %s", turn.id, speaker)
         except Exception as e:
             logger.warning("Speaker relabeling failed for %s: %s", turn.id, e)
+
+    def rename_speaker(self, old_name: str, new_name: str) -> None:
+        """Rename a speaker across all transcript segments.
+
+        Updates the name mapping so future diarizer results also resolve
+        to the custom name. Emits transcript_relabeled for each affected
+        segment so the UI updates in real time.
+        """
+        # Update mapping: find original diarizer label that maps to old_name
+        original_label = None
+        for orig, custom in self._speaker_names.items():
+            if custom == old_name:
+                original_label = orig
+                break
+        if original_label:
+            self._speaker_names[original_label] = new_name
+        else:
+            self._speaker_names[old_name] = new_name
+
+        # Bulk rename in store
+        affected_ids = self.transcript.rename_speaker(old_name, new_name)
+        if not affected_ids:
+            return
+
+        # Emit relabeled messages for each affected segment
+        for seg_id in affected_ids:
+            idx = self.transcript._index.get(seg_id)
+            if idx is None:
+                continue
+            seg = self.transcript._segments[idx]
+            self._thread_safe_put(self._transcript_queue, {
+                "type": "transcript_relabeled",
+                "id": seg.id,
+                "text": seg.text,
+                "timestamp": seg.timestamp,
+                "end_timestamp": seg.end_timestamp or seg.timestamp,
+                "is_final": seg.is_final,
+                "speaker": new_name,
+                "source": seg.source,
+            })
+
+        logger.info("Renamed speaker '%s' → '%s' (%d segments)", old_name, new_name, len(affected_ids))
 
     def _get_turn_audio(self, turn: Turn) -> Optional["np.ndarray"]:
         """Retrieve raw audio for a turn's time range from the system AudioCapture."""

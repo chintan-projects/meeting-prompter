@@ -1,8 +1,9 @@
-"""Session management routes — start/stop/status/reindex."""
+"""Session management routes — start/stop/pause/resume/status/reindex."""
 import logging
+from typing import List, Optional
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
 
 from src.api.session import Session
 
@@ -24,6 +25,11 @@ def get_session() -> Session:
 class StartRequest(BaseModel):
     audio_device: str = "BlackHole 2ch"
     mic_device: str = "MacBook Pro Microphone"
+    # Meeting context (optional — Quick Start omits these)
+    title: str = ""
+    agenda_items: List[str] = []
+    watch_words: List[str] = []
+    participants: List[str] = []
 
 
 class AudioHealth(BaseModel):
@@ -36,6 +42,7 @@ class AudioHealth(BaseModel):
 
 class StatusResponse(BaseModel):
     running: bool
+    paused: bool = False
     loading: bool
     elapsed_seconds: float
     segment_count: int
@@ -60,14 +67,29 @@ async def start_session(req: StartRequest) -> dict:
     """Start a new meeting session.
 
     Creates a fresh session each time so transcript/RAG state is clean.
-    The previous session (if any) is discarded.
+    The previous session (if any) is discarded. Meeting context (title,
+    agenda, watch words, participants) is set on the new session before
+    the pipeline starts.
     """
     global _session
     session = get_session()
     if session.is_running:
         raise HTTPException(status_code=409, detail="Session already running")
+
     # Create a fresh session for a new recording
     _session = Session()
+
+    # Set meeting context if provided (fixes race where context was set on old session)
+    if req.title or req.agenda_items or req.watch_words or req.participants:
+        from lib.conversation.meeting_context import MeetingContext
+
+        _session.meeting_context = MeetingContext(
+            title=req.title,
+            agenda_items=req.agenda_items,
+            watch_words=req.watch_words,
+            participants=req.participants,
+        )
+
     _session.start(audio_device=req.audio_device, mic_device=req.mic_device)
     return {
         "status": "started",
@@ -92,6 +114,30 @@ async def stop_session() -> dict:
     return {"status": "stopped", "elapsed_seconds": elapsed}
 
 
+@router.post("/pause")
+async def pause_session() -> dict:
+    """Pause the current session. Audio capture stops, models stay loaded."""
+    session = get_session()
+    if not session.is_running:
+        raise HTTPException(status_code=409, detail="No session running")
+    if session.is_paused:
+        raise HTTPException(status_code=409, detail="Session already paused")
+    session.pause()
+    return {"status": "paused", "elapsed_seconds": session.elapsed_seconds}
+
+
+@router.post("/resume")
+async def resume_session() -> dict:
+    """Resume a paused session."""
+    session = get_session()
+    if not session.is_running:
+        raise HTTPException(status_code=409, detail="No session running")
+    if not session.is_paused:
+        raise HTTPException(status_code=409, detail="Session not paused")
+    session.resume()
+    return {"status": "resumed", "elapsed_seconds": session.elapsed_seconds}
+
+
 @router.get("/status", response_model=StatusResponse)
 async def session_status() -> StatusResponse:
     """Get current session status."""
@@ -102,9 +148,9 @@ async def session_status() -> StatusResponse:
 
 @router.post("/reindex")
 async def reindex_documents() -> dict:
-    """Force-rebuild the ColBERT index from docs/ directory.
+    """Force-rebuild the ColBERT index from context/ directory.
 
-    Call this after adding or removing files from docs/ to ensure
+    Call this after adding or removing files from context/ to ensure
     the RAG engine picks up changes without restarting the app.
     """
     session = get_session()

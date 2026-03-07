@@ -237,27 +237,16 @@ class ModeAwareGenerator:
             text=trigger.text,
         )
 
-        try:
-            self._generator.load()
-            self._generator._reset_state()
+        answer = self._generator.generate_text(
+            prompt,
+            max_tokens=config["max_tokens"],
+            stop=prompts.STOP_TOKENS,
+        )
 
-            response = self._generator.llm(
-                prompt,
-                max_tokens=config["max_tokens"],
-                stop=prompts.STOP_TOKENS,
-                temperature=0,
-                top_p=1.0,
-            )
-
-            answer = response["choices"][0]["text"].strip()
-            if not answer or answer.startswith("["):
-                return None
-
-            return self._generator._clean_answer(answer)
-
-        except Exception as e:
-            logger.error("Generation failed for %s trigger: %s", trigger.type.value, e)
+        if not answer or answer.startswith("["):
             return None
+
+        return self._generator._clean_answer(answer)
 
 
 def _elapsed_ms(start: float) -> float:

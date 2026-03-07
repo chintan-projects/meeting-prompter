@@ -1,17 +1,48 @@
 """Notes routes — editing, structured notes generation, export, and save."""
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from typing import Dict, List, Optional, Union
+
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
-from typing import List
 
+from lib.rag_generator import RAGAnswerGenerator
 from src.api.notes_generator import generate_structured_notes
 from src.api.routes.session import get_session
+from src.api.session import Session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/notes", tags=["notes"])
+
+
+def _get_generator(session: Session) -> Optional[RAGAnswerGenerator]:
+    """Safely extract the RAGAnswerGenerator from the session, or None.
+
+    Returns None if the orchestrator hasn't loaded, the generator model
+    is missing, or any component in the chain is unavailable. The caller
+    falls back to template-based notes.
+    """
+    try:
+        orch = getattr(session, "_orchestrator", None)
+        if orch is None:
+            return None
+        gen = getattr(orch, "generator", None)
+        if gen is None:
+            return None
+        rag_gen = getattr(gen, "_generator", None)
+        if not isinstance(rag_gen, RAGAnswerGenerator):
+            return None
+        if rag_gen.llm is None:
+            # Model not loaded — generate_text() will load lazily, but if
+            # it was None after a crash, better to use template fallback
+            return None
+        return rag_gen
+    except Exception:
+        logger.warning("Could not access LLM generator — using template fallback")
+        return None
 
 
 class EditRequest(BaseModel):
@@ -39,35 +70,54 @@ async def edit_segment(req: EditRequest) -> dict:
     return {"status": "updated", "segment_id": req.segment_id}
 
 
-@router.get("/export", response_model=ExportResponse)
-async def export_notes() -> ExportResponse:
-    """Export merged transcript as markdown."""
+@router.get("/export")
+async def export_notes(format: str = Query("markdown")) -> Dict[str, Union[str, int, float, List[dict]]]:
+    """Export merged transcript as markdown or structured JSON.
+
+    Query params:
+        format: "markdown" (default) or "json"
+    """
     session = get_session()
-    return ExportResponse(
-        markdown=session.transcript.export_markdown(),
-        segment_count=session.transcript.segment_count,
-    )
+
+    if format == "json":
+        title = session.meeting_context.title if session.meeting_context else ""
+        return {
+            "version": "1.0",
+            "title": title,
+            "duration_seconds": session.elapsed_seconds,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "segment_count": session.transcript.segment_count,
+            "segments": session.transcript.export_json(),
+        }
+
+    return {
+        "markdown": session.transcript.export_markdown(),
+        "segment_count": session.transcript.segment_count,
+    }
 
 
 @router.post("/generate", response_model=StructuredNotesResponse)
 async def generate_notes() -> StructuredNotesResponse:
     """Generate structured meeting notes from the transcript.
 
-    Uses LFM2.5-Instruct to produce Summary, Key Decisions,
-    Action Items, and Follow-ups. Falls back to a template
-    if no model is available.
+    Uses LFM2.5-Instruct to produce speaker-attributed notes when
+    speaker data is available, or generic structured notes otherwise.
+    Falls back to a template if no model is available or model crashed.
     """
     session = get_session()
     transcript_md = session.transcript.export_markdown()
+    segments = session.transcript.export_json()
 
-    # Try to use the session's generator if available
-    generator = None
-    if session._orchestrator is not None:
-        gen = session._orchestrator.generator
-        if gen._generator is not None:
-            generator = gen._generator
+    # Try to use the session's generator if available (may be None after crash)
+    generator = _get_generator(session)
 
-    notes = generate_structured_notes(transcript_md, generator)
+    notes = generate_structured_notes(
+        transcript_md,
+        generator,
+        segments=segments,
+        meeting_context=session.meeting_context,
+        trigger_history=session.trigger_history,
+    )
     return StructuredNotesResponse(
         notes=notes,
         segment_count=session.transcript.segment_count,
@@ -146,16 +196,18 @@ async def download_notes() -> PlainTextResponse:
     """
     session = get_session()
     transcript_md = session.transcript.export_markdown()
+    segments = session.transcript.export_json()
     meeting_title = session.meeting_context.title if session.meeting_context else "Meeting"
 
-    # Try to generate structured notes if possible
-    generator = None
-    if session._orchestrator is not None:
-        gen = session._orchestrator.generator
-        if gen._generator is not None:
-            generator = gen._generator
-
-    notes = generate_structured_notes(transcript_md, generator)
+    # Try to generate structured notes if possible (may be None after crash)
+    generator = _get_generator(session)
+    notes = generate_structured_notes(
+        transcript_md,
+        generator,
+        segments=segments,
+        meeting_context=session.meeting_context,
+        trigger_history=session.trigger_history,
+    )
 
     parts = [
         f"# {meeting_title}",

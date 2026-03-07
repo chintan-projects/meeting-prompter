@@ -60,6 +60,11 @@ async def transcript_ws(ws: WebSocket) -> None:
                     seg_id = msg.get("id", "")
                     new_text = msg.get("text", "")
                     session.transcript.edit(seg_id, new_text)
+                elif msg.get("type") == "rename_speaker":
+                    old_speaker = msg.get("old_speaker", "")
+                    new_speaker = msg.get("new_speaker", "")
+                    if old_speaker and new_speaker and old_speaker != new_speaker:
+                        session.rename_speaker(old_speaker, new_speaker)
         except (WebSocketDisconnect, asyncio.CancelledError):
             pass
 

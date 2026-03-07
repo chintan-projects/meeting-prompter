@@ -47,15 +47,15 @@ python coach.py --context meeting_context.yaml
 
 ## Architecture
 
-The system uses a **three-model pipeline** with four trigger types. Each trigger gets a purpose-built prompt template for generation.
+The system uses a **three-model pipeline** with four trigger types and **dual-stream audio capture** for speaker attribution.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         Audio Pipeline                              │
+│                     Dual-Stream Audio Pipeline                       │
 │                                                                     │
-│  Microphone ──► Audio Capture ──► LFM2.5-Audio ──► Filter Chain     │
-│                  (4s chunks)      (transcription)   (hallucination  │
-│                                                      + noise)       │
+│  Microphone ─────► Audio Capture ──► LFM2.5-Audio ──► Filter Chain  │
+│  BlackHole  ─────►  (dual-stream)    (transcription)   (halluc.     │
+│                                                         + noise)    │
 └──────────────────────────────────────┬──────────────────────────────┘
                                        │
                          ┌─────────────┴─────────────┐
@@ -64,16 +64,16 @@ The system uses a **three-model pipeline** with four trigger types. Each trigger
                   (turn accumulation)         (rolling 90s window)
                          │                           │
                   Store + WebSocket            Trigger Engine
-                  (transcript_update /    ┌────┬────┬────┐
-                   transcript_final)    ALERT  Q  TOPIC FOLLOW-UP
-                         │                │    │    │    │
-                   Tauri App UI           └────┴────┴────┘
-                   (TranscriptPane)              │
-                                       RAG (ColBERT top-k)
-                                                 │
-                                       Mode-Aware Generator
-                                                 │
-                                       Dashboard / PromptsPane
+                  (update/final/            ┌────┬────┬────┐
+                   polished/relabeled)    ALERT  Q  TOPIC FOLLOW-UP
+                         │                  │    │    │    │
+                   Tauri App UI             └────┴────┴────┘
+                   (TranscriptPane)                │
+                                         RAG (ColBERT top-k)
+                                                   │
+                                         Mode-Aware Generator
+                                                   │
+                                         Dashboard / PromptsPane
 ```
 
 ### Three-Model Pipeline
@@ -92,6 +92,17 @@ The system uses a **three-model pipeline** with four trigger types. Each trigger
 | QUESTION | 2 | Direct question in speech | 200 |
 | TOPIC_MATCH | 3 | Discussion matches docs | 100 |
 | FOLLOW_UP | 4 | Pause after topic | 75 |
+
+### Dual-Stream Speaker Attribution
+
+The system captures two audio streams simultaneously for automatic speaker identification:
+
+- **Microphone stream** — captures your voice, labeled as "You"
+- **System audio stream** (BlackHole) — captures remote participants
+
+Source-based attribution (Tier 1) gives immediate "You" vs "Others" labels. Neural diarization (Tier 2) further distinguishes individual remote speakers (Speaker A, Speaker B, etc.) using ECAPA-TDNN embeddings on the system audio stream.
+
+Users can **click any speaker label** to rename it (e.g., "Speaker A" → "Alice"). The rename applies retroactively to all past turns and persists for future diarizer results via a name mapping.
 
 ### Turn-Based Transcript
 
@@ -114,36 +125,38 @@ Fallback chain: ColBERT -> Jaccard keyword search. Generation -> extraction bull
 
 ## Desktop App
 
-The Tauri app provides a dual-pane interface:
+The Tauri app provides a dual-pane interface with resizable panels, keyboard shortcuts, and post-meeting notes export:
 
 ```
-┌─────────────────────────────────────────────────┐
-│ Meeting Prompter    [Recording]   00:12:34       │
-├──────────────────────┬──────────────────────────┤
-│   TRANSCRIPT         │   PROMPTS                │
-│                      │                          │
-│  [12:01]             │  ALERT: "pricing"        │
-│  What about the      │  Our pricing model is... │
-│  deployment timeline │                          │
-│  for Edge SDK?       │  ANSWER                  │
-│  ●                   │  Q: Deployment timeline?  │
-│                      │  Edge SDK ships Q2...    │
-│  [12:02]             │                          │
-│  We're targeting     │  TOPIC: compliance       │
-│  Q2 for the beta     │  SOC2 audit completed... │
-│  release.            │                          │
-│                      │  FOLLOW-UP               │
-│  [12:03]             │  Ask about HIPAA status  │
-│  And compliance?     │                          │
-├──────────────────────┴──────────────────────────┤
-│  Settings  Export Notes  Mic: BlackHole          │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│ Meeting Prompter    ● Recording   00:12:34               │
+├────────────────────────┬────────────────────────────────┤
+│   TRANSCRIPT           │   PROMPTS                      │
+│                        │                                │
+│  [12:01] You           │  ALERT: "pricing"              │
+│  What about the        │  Our pricing model is...       │
+│  deployment timeline   │                                │
+│  for Edge SDK?         │  ANSWER                        │
+│  ●                     │  Q: Deployment timeline?        │
+│                        │  Edge SDK ships Q2...          │
+│  [12:02] Alice         │                                │
+│  We're targeting       │  TOPIC: compliance             │
+│  Q2 for the beta       │  SOC2 audit completed...       │
+│  release.              │                                │
+│                        │  FOLLOW-UP                     │
+│  [12:03] Speaker B     │  Ask about HIPAA status        │
+│  And compliance?       │                                │
+├────────────────────────┴────────────────────────────────┤
+│  ⌘R Record  ⌘P Pause  ⌘T Transcript  Export Notes       │
+└─────────────────────────────────────────────────────────┘
 ```
 
-- **Left pane**: Live transcript with turn-based display. Active turns show a pulsing indicator. Double-click finalized turns to edit.
+- **Left pane**: Live transcript with speaker labels (You/Speaker A/B/C). Active turns show a pulsing indicator. Double-click finalized turns to edit. Click speaker labels to rename.
 - **Right pane**: Trigger results color-coded by type and priority-sorted (alerts on top).
-- **Meeting setup**: Configure agenda, watch words, and upload docs before recording.
-- **Meeting notes**: After recording, generate structured notes (summary, decisions, action items) and export to Markdown.
+- **Resizable**: Drag the divider between panes. Width persists across sessions.
+- **Meeting setup**: Configure agenda, watch words, participants, and select audio devices before recording.
+- **Meeting notes**: After recording, generate structured notes (summary, decisions, action items) and export to Markdown or copy to clipboard.
+- **Keyboard shortcuts**: `Cmd+R` toggle recording, `Cmd+P` pause/resume, `Cmd+T` toggle transcript, `Cmd+N` toggle notes, `Escape` close modals.
 
 ## ColBERT: Why Late Interaction?
 
@@ -175,8 +188,9 @@ Download to `~/Projects/_models/` (or set `MODELS_DIR` env var). Also need the `
 | Model | Size | Purpose |
 |-------|------|---------|
 | [LFM2-ColBERT-350M](https://huggingface.co/LiquidAI/LFM2-ColBERT-350M) | 1.4 GB | Semantic document retrieval |
+| [ECAPA-TDNN](https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb) | ~100 MB | Speaker diarization embeddings |
 
-ColBERT downloads automatically on first run via `pylate`. The PLAID index is built once and cached in `data/colbert_index/`.
+ColBERT and ECAPA-TDNN download automatically on first run. The PLAID index is built once and cached in `data/colbert_index/`.
 
 ## Project Structure
 
@@ -188,7 +202,8 @@ meeting-prompter/
 │   ├── orchestrator.py               # MeetingOrchestrator — pipeline coordinator
 │   ├── config.py                     # Typed dataclass config loader
 │   ├── filters.py                    # Hallucination/noise/normalization
-│   ├── audio_capture.py              # Streaming mic/BlackHole capture
+│   ├── audio_capture.py              # Dual-stream mic/BlackHole capture
+│   ├── text_refiner.py               # LLM-powered transcript polishing
 │   ├── lfm2_wrapper.py               # LFM2.5-Audio subprocess wrapper
 │   ├── answer_extractor.py           # Sentence extraction (grounding fallback)
 │   ├── rag_generator.py              # LFM2.5-1.2B-Instruct wrapper (ChatML)
@@ -215,13 +230,13 @@ meeting-prompter/
 │       └── normalizer.py             # Sigmoid score normalization
 ├── src/api/                          # FastAPI backend (for Tauri app)
 │   ├── main.py                       # Server + WebSocket endpoints
-│   ├── session.py                    # Session lifecycle + queue bridge
+│   ├── session.py                    # Session lifecycle + speaker diarization
 │   ├── transcript_buffer.py          # Turn-based ASR chunk accumulator
-│   ├── transcript_store.py           # Append-only store + edit overlay
+│   ├── transcript_store.py           # Append-only store + edit overlay + rename
 │   ├── notes_generator.py            # Structured notes via LLM
 │   └── routes/
-│       ├── session.py                # Start/stop/status/reindex
-│       ├── transcript.py             # WebSocket transcript stream
+│       ├── session.py                # Start/stop/pause/resume/status/reindex
+│       ├── transcript.py             # WebSocket transcript stream + edits + rename
 │       ├── prompts.py                # WebSocket trigger results
 │       ├── notes.py                  # Notes generate/export/download
 │       └── context.py                # Meeting context upload
@@ -230,25 +245,31 @@ meeting-prompter/
 │   ├── src/
 │   │   ├── App.tsx                   # Root layout, WebSocket connections
 │   │   ├── components/
-│   │   │   ├── TranscriptPane.tsx    # Turn-based editable transcript
+│   │   │   ├── TranscriptPane.tsx    # Turn-based transcript + speaker rename
 │   │   │   ├── PromptsPane.tsx       # Live trigger results
 │   │   │   ├── StatusBar.tsx         # Session controls, audio health
-│   │   │   ├── MeetingSetup.tsx      # Pre-meeting context config
+│   │   │   ├── MeetingSetup.tsx      # Pre-meeting config + device selection
 │   │   │   └── NoteEditor.tsx        # Post-meeting notes editor
 │   │   ├── hooks/
 │   │   │   ├── useWebSocket.ts       # WS connection + reconnect
-│   │   │   └── useTranscript.ts      # Transcript state with upsert
+│   │   │   ├── useTranscript.ts      # Transcript state with upsert
+│   │   │   └── useKeyboardShortcuts.ts # Global keyboard shortcut handler
 │   │   └── styles/global.css         # Dark theme, pulse animation
 │   └── package.json
-├── tests/                            # 76 tests across 5 files
-│   ├── test_audio_capture.py
-│   ├── test_transcript_buffer.py
-│   ├── test_transcript_store.py
-│   ├── test_session.py
+├── tests/                            # 283 Python tests across 9 files
+│   ├── test_audio_capture.py         # Dual-stream capture + health diagnostics
+│   ├── test_transcript_buffer.py     # Turn accumulation, boundaries
+│   ├── test_transcript_store.py      # Append, upsert, edit, rename, export
+│   ├── test_session.py               # Queue bridge, turns, diarization, rename
+│   ├── test_text_refiner.py          # Transcript polishing
+│   ├── test_notes_generator.py       # Structured notes generation
+│   ├── test_diarization.py           # Speaker embedding + clustering
+│   ├── test_filters.py               # Hallucination/noise filters
+│   ├── test_lfm2_wrapper.py          # LFM2.5-Audio output parsing
 │   └── conftest.py
 ├── models/                           # Symlink to ~/Projects/_models
 ├── runners/                          # llama.cpp binaries (gitignored)
-├── docs/                             # Source documents for RAG
+├── context/                          # Source documents for RAG
 └── data/colbert_index/               # PLAID index cache (gitignored)
 ```
 
@@ -261,15 +282,19 @@ To capture audio from video calls:
 3. Set your meeting app's speaker to "Multi-Output Device"
 4. Run: `python coach.py` (CLI) or launch the Tauri app
 
+The app captures both your microphone and system audio simultaneously. Your speech is labeled "You", remote participants are attributed via neural diarization (Speaker A, Speaker B, etc.). Click any speaker label to assign a real name.
+
 ## Adding Your Own Docs
 
-Drop PDF or Markdown files in `docs/`. The system loads all documents at startup and builds a ColBERT index.
+Drop PDF or Markdown files in `context/`. The system loads all documents at startup and builds a ColBERT index.
 
 ```bash
-cp your-product-docs.pdf docs/
+cp your-product-docs.pdf context/
 rm -rf data/colbert_index/   # Force re-index
 python coach.py --mic
 ```
+
+You can also trigger a re-index from the API without restarting: `POST /reindex`.
 
 ## Requirements
 
@@ -280,7 +305,7 @@ python coach.py --mic
 
 ## Troubleshooting
 
-**No audio detected**: Check mic with `--list-devices` or verify BlackHole config for meeting mode.
+**No audio detected**: Check mic with `--list-devices` or verify BlackHole config for meeting mode. The app selects mic and system audio devices independently in the setup dialog.
 
 **Model not found**: Ensure GGUF files are in `models/` (or `MODELS_DIR`) and `llama-liquid-audio-cli` is in `runners/macos-arm64/`.
 
@@ -290,7 +315,7 @@ python coach.py --mic
 
 **ColBERT not loading**: Check `pylate` installation. On 8GB Macs, set `RAG_USE_FALLBACK=1` for keyword search.
 
-**Slow first startup**: First run downloads ColBERT (~1.4GB) and builds the PLAID index (~30-60s). Subsequent runs load from cache (~6s).
+**Slow first startup**: First run downloads ColBERT (~1.4GB) and ECAPA-TDNN (~100MB), and builds the PLAID index (~30-60s). Subsequent runs load from cache (~6s).
 
 **Tauri build errors**: Ensure Rust toolchain and Node.js 18+ are installed. Run `cd app && npm install` to install frontend dependencies.
 

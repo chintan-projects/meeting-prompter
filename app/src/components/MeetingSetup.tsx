@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type React from "react";
 
 const API_BASE = "http://127.0.0.1:8420";
 
@@ -8,12 +9,7 @@ interface AudioDevice {
   channels: number;
 }
 
-interface MeetingSetupProps {
-  onStart: (config: MeetingConfig) => void;
-  onQuickStart: (device: string, micDevice?: string) => void;
-}
-
-interface MeetingConfig {
+export interface MeetingConfig {
   title: string;
   agenda_items: string[];
   watch_words: string[];
@@ -22,7 +18,13 @@ interface MeetingConfig {
   mic_device: string;
 }
 
-export function MeetingSetup({ onStart, onQuickStart }: MeetingSetupProps) {
+interface MeetingSetupProps {
+  onStart: (config: MeetingConfig) => void;
+  onQuickStart: (device: string, micDevice?: string) => void;
+  onCancel: () => void;
+}
+
+export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupProps) {
   const [title, setTitle] = useState("");
   const [agenda, setAgenda] = useState("");
   const [watchWords, setWatchWords] = useState("pricing, timeline, budget, competitor");
@@ -75,8 +77,25 @@ export function MeetingSetup({ onStart, onQuickStart }: MeetingSetupProps) {
     });
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      onCancel();
+    }
+  };
+
+  const handleOverlayClick = (e: React.MouseEvent) => {
+    // Close when clicking the overlay background (not the dialog)
+    if (e.target === e.currentTarget) {
+      onCancel();
+    }
+  };
+
   return (
-    <div style={styles.overlay}>
+    <div
+      style={styles.overlay}
+      onKeyDown={handleKeyDown}
+      onClick={handleOverlayClick}
+    >
       <div style={styles.dialog}>
         <h2 style={styles.heading}>Meeting Setup</h2>
 
@@ -87,6 +106,7 @@ export function MeetingSetup({ onStart, onQuickStart }: MeetingSetupProps) {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="e.g. Sprint Planning"
+            autoFocus
           />
         </label>
 
@@ -167,6 +187,12 @@ export function MeetingSetup({ onStart, onQuickStart }: MeetingSetupProps) {
 
         <div style={styles.actions}>
           <button
+            style={styles.cancelBtn}
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
             style={styles.quickBtn}
             onClick={() => onQuickStart(audioDevice, micDevice)}
           >
@@ -231,6 +257,16 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 12,
     marginTop: 8,
     justifyContent: "flex-end",
+  },
+  cancelBtn: {
+    background: "transparent",
+    border: "none",
+    borderRadius: 6,
+    color: "var(--text-muted)",
+    padding: "8px 14px",
+    fontSize: 14,
+    cursor: "pointer",
+    marginRight: "auto",
   },
   quickBtn: {
     background: "transparent",

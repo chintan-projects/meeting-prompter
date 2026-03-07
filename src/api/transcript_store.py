@@ -21,6 +21,7 @@ class TranscriptSegment:
     text: str
     timestamp: float
     speaker: str = ""
+    source: str = ""
     end_timestamp: float = 0.0
     is_final: bool = False
 
@@ -31,6 +32,7 @@ class TranscriptSegment:
             "text": self.text,
             "timestamp": self.timestamp,
             "speaker": self.speaker,
+            "source": self.source,
             "end_timestamp": self.end_timestamp or self.timestamp,
             "is_final": self.is_final,
         }
@@ -72,6 +74,7 @@ class TranscriptStore:
         end_timestamp: float = 0.0,
         is_final: bool = False,
         speaker: str = "",
+        source: str = "",
     ) -> str:
         """Create or update a transcript segment (turn-based).
 
@@ -87,6 +90,8 @@ class TranscriptStore:
             seg.is_final = is_final
             if speaker:
                 seg.speaker = speaker
+            if source:
+                seg.source = source
         else:
             segment = TranscriptSegment(
                 id=seg_id,
@@ -95,10 +100,23 @@ class TranscriptStore:
                 end_timestamp=end_timestamp or timestamp,
                 is_final=is_final,
                 speaker=speaker,
+                source=source,
             )
             self._index[seg_id] = len(self._segments)
             self._segments.append(segment)
         return seg_id
+
+    def rename_speaker(self, old_name: str, new_name: str) -> List[str]:
+        """Rename all segments with old_name speaker to new_name.
+
+        Returns list of affected segment IDs.
+        """
+        affected: List[str] = []
+        for seg in self._segments:
+            if seg.speaker == old_name:
+                seg.speaker = new_name
+                affected.append(seg.id)
+        return affected
 
     def edit(self, segment_id: str, new_text: str) -> bool:
         """Apply an edit overlay to a segment. Returns True if segment exists."""
@@ -126,6 +144,24 @@ class TranscriptStore:
     def get_raw(self) -> List[dict]:
         """Get original unedited segments."""
         return [seg.to_dict() for seg in self._segments]
+
+    def export_json(self) -> List[dict]:
+        """Export merged transcript as structured JSON with edit status.
+
+        Returns a list of segment dicts suitable for machine consumption.
+        Each segment includes an explicit 'edited' field. Meeting-level
+        metadata (title, duration) is added by the caller.
+        """
+        result = []
+        for seg in self._segments:
+            entry = seg.to_dict()
+            if seg.id in self._edits:
+                entry["text"] = self._edits[seg.id]
+                entry["edited"] = True
+            else:
+                entry["edited"] = False
+            result.append(entry)
+        return result
 
     def export_markdown(self) -> str:
         """Export merged transcript as markdown.

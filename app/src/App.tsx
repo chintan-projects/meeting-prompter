@@ -250,6 +250,10 @@ function App() {
     transcriptWs.send({ type: "edit", id, text });
   };
 
+  const handleRenameSpeaker = (oldName: string, newName: string) => {
+    transcriptWs.send({ type: "rename_speaker", old_speaker: oldName, new_speaker: newName });
+  };
+
   // --- Keyboard shortcuts ---
 
   useKeyboardShortcuts({
@@ -307,6 +311,7 @@ function App() {
           collapsed={transcriptCollapsed}
           onToggle={() => setTranscriptCollapsed((c) => !c)}
           onEdit={handleEditSegment}
+          onRenameSpeaker={handleRenameSpeaker}
           width={transcriptWidth}
         />
         {!transcriptCollapsed && (

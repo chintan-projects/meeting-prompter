@@ -5,8 +5,9 @@ LFM2.5-1.2B-Instruct has 32K context and strong instruction following (IFEval 86
 """
 
 import logging
+import threading
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from llama_cpp import Llama
 
@@ -46,6 +47,7 @@ class RAGAnswerGenerator:
         self.max_context_chars = max_context_chars
         self.max_question_chars = max_question_chars
         self.llm: Optional[Llama] = None
+        self._lock = threading.Lock()
 
     def load(self) -> None:
         """
@@ -77,6 +79,50 @@ class RAGAnswerGenerator:
                 self.llm = None
                 self.load()
 
+    def generate_text(
+        self,
+        prompt: str,
+        max_tokens: int = 200,
+        stop: Optional[List[str]] = None,
+        temperature: float = 0,
+        top_p: float = 1.0,
+    ) -> str:
+        """Thread-safe LLM text generation.
+
+        Acquires the internal lock, then runs the full load → reset → generate
+        sequence atomically. All callers (ModeAwareGenerator, TextRefiner,
+        notes_generator) should use this instead of accessing .llm directly.
+
+        Args:
+            prompt: Complete prompt string (caller builds the ChatML).
+            max_tokens: Maximum tokens in response.
+            stop: Stop sequences (defaults to ChatML delimiters).
+            temperature: Sampling temperature (0 = greedy).
+            top_p: Nucleus sampling threshold.
+
+        Returns:
+            Raw generated text (stripped), or empty string on failure.
+        """
+        if stop is None:
+            stop = ["<|im_end|>", "<|im_start|>"]
+
+        with self._lock:
+            self.load()
+            self._reset_state()
+
+            try:
+                response = self.llm(
+                    prompt,
+                    max_tokens=max_tokens,
+                    stop=stop,
+                    temperature=temperature,
+                    top_p=top_p,
+                )
+                return response["choices"][0]["text"].strip()
+            except Exception as e:
+                logger.error("LLM generation failed: %s", e)
+                return ""
+
     def generate(
         self,
         question: str,
@@ -93,47 +139,24 @@ class RAGAnswerGenerator:
         Returns:
             Generated answer string, or error message on failure.
         """
-        self.load()
-        self._reset_state()
-
         truncated_context = context[: self.max_context_chars]
         truncated_question = question[: self.max_question_chars]
 
-        # Build prompt using ChatML format
         prompt = RAG_PROMPT_TEMPLATE.format(
             context=truncated_context,
             question=truncated_question,
         )
 
-        try:
-            response = self.llm(
-                prompt,
-                max_tokens=max_tokens,
-                stop=[
-                    "<|im_end|>",
-                    "<|im_start|>",
-                    "\n\nQUESTION:",
-                    "\n\nCONTEXT:",
-                    "---",
-                ],
-                temperature=0,  # Greedy decoding for factual responses
-                top_p=1.0,
-            )
+        answer = self.generate_text(
+            prompt,
+            max_tokens=max_tokens,
+            stop=["<|im_end|>", "<|im_start|>", "\n\nQUESTION:", "\n\nCONTEXT:", "---"],
+        )
 
-            answer = response["choices"][0]["text"].strip()
+        if not answer:
+            return "[Unable to generate answer]"
 
-            # Validate we got a real answer
-            if not answer:
-                return "[Unable to generate answer]"
-
-            # Clean up any trailing incomplete sentences
-            answer = self._clean_answer(answer)
-
-            return answer
-
-        except Exception as e:
-            logger.error("RAG generation error: %s", e)
-            return "[Let me get back to you on that]"
+        return self._clean_answer(answer)
 
     def _clean_answer(self, answer: str) -> str:
         """Clean up generated answer: trailing sentences, whitespace."""

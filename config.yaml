@@ -71,6 +71,6 @@ diarization:
   embedding_model: "speechbrain/spkrec-ecapa-voxceleb"
 
 paths:
-  docs_dir: "docs"
+  docs_dir: "context"
   output_dir: "output"
   index_dir: "data/colbert_index"

@@ -19,6 +19,8 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
+from lib.audio_features import compute_mfccs, compute_spectral_features
+
 logger = logging.getLogger(__name__)
 
 # Sentinel value to signal worker thread to stop
@@ -196,29 +198,57 @@ class AudioCapture:
         }
 
     @staticmethod
-    def compute_chunk_features(audio_data: np.ndarray) -> Dict[str, float]:
+    def compute_chunk_features(
+        audio_data: np.ndarray, sample_rate: int = 16000,
+    ) -> Dict[str, float]:
         """Compute audio features for speaker attribution.
 
+        Returns 11 features: rms, zcr, spectral_centroid, spectral_bandwidth,
+        spectral_rolloff, and mfcc_0 through mfcc_5. Spectral features capture
+        vocal tract characteristics for speaker discrimination.
+
         Args:
-            audio_data: 1D float32 audio array.
+            audio_data: 1D or 2D float32 audio array.
+            sample_rate: Sample rate in Hz (default 16000).
 
         Returns:
-            Dict with 'rms' (root mean square energy) and 'zcr' (zero-crossing rate).
-            Returns zeros for empty or invalid input.
+            Dict of feature name → float. Returns zeros for empty input.
         """
+        n_mfcc = 6
+        zero_features: Dict[str, float] = {
+            "rms": 0.0, "zcr": 0.0,
+            "spectral_centroid": 0.0, "spectral_bandwidth": 0.0,
+            "spectral_rolloff": 0.0,
+        }
+        for i in range(n_mfcc):
+            zero_features[f"mfcc_{i}"] = 0.0
+
         if audio_data.size == 0:
-            return {"rms": 0.0, "zcr": 0.0}
+            return zero_features
 
         flat = audio_data.flatten().astype(np.float32)
+
+        # RMS energy
         rms = float(np.sqrt(np.mean(flat**2)))
-        # Zero-crossing rate: fraction of adjacent samples with sign change
+
+        # Zero-crossing rate
         if flat.size > 1:
             signs = np.sign(flat)
             sign_changes = np.abs(np.diff(signs))
             zcr = float(np.mean(sign_changes > 0))
         else:
             zcr = 0.0
-        return {"rms": rms, "zcr": zcr}
+
+        # Spectral features (centroid, bandwidth, rolloff)
+        spectral = compute_spectral_features(flat, sample_rate)
+
+        # MFCCs (6 coefficients capturing vocal tract shape)
+        mfccs = compute_mfccs(flat, sample_rate, n_mfcc=n_mfcc)
+
+        features: Dict[str, float] = {"rms": rms, "zcr": zcr, **spectral}
+        for i, coeff in enumerate(mfccs):
+            features[f"mfcc_{i}"] = coeff
+        return features
 
     def get_recent_features(self, since_timestamp: float) -> List[Dict[str, float]]:
         """Get chunk features recorded since a given timestamp.
@@ -227,7 +257,7 @@ class AudioCapture:
             since_timestamp: Unix timestamp. Returns features after this time.
 
         Returns:
-            List of feature dicts with 'rms', 'zcr', and 'timestamp'.
+            List of feature dicts (11 audio features + 'timestamp').
         """
         with self._features_lock:
             return [f for f in self._chunk_features if f.get("timestamp", 0) >= since_timestamp]
@@ -243,7 +273,7 @@ class AudioCapture:
             self._update_audio_metrics(chunk)
 
             # Compute and store features for speaker attribution
-            features = self.compute_chunk_features(chunk)
+            features = self.compute_chunk_features(chunk, sample_rate=self.sample_rate)
             features["timestamp"] = timestamp
             with self._features_lock:
                 self._chunk_features.append(features)

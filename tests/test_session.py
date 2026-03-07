@@ -222,11 +222,15 @@ class TestSpeakerAttribution:
         session = Session()
         session._loop = asyncio.get_running_loop()
 
-        # Wire up speaker tracker + mock orchestrator audio
+        # Wire up speaker tracker + mock orchestrator audio (full spectral features)
         session._speaker_tracker = SpeakerTracker()
         mock_orch = MagicMock()
         mock_orch.audio.get_recent_features.return_value = [
-            {"rms": 0.05, "zcr": 0.15, "timestamp": 100.0},
+            {"rms": 0.05, "zcr": 0.15, "timestamp": 100.0,
+             "spectral_centroid": 500.0, "spectral_bandwidth": 200.0,
+             "spectral_rolloff": 1000.0,
+             "mfcc_0": -4.0, "mfcc_1": 1.0, "mfcc_2": 0.5,
+             "mfcc_3": -0.3, "mfcc_4": 0.2, "mfcc_5": 0.1},
         ]
         session._orchestrator = mock_orch
 
@@ -293,9 +297,13 @@ class TestSpeakerAttribution:
         mock_orch = MagicMock()
         session._orchestrator = mock_orch
 
-        # Speaker A — low energy
+        # Speaker A — low pitch, low energy
         mock_orch.audio.get_recent_features.return_value = [
-            {"rms": 0.02, "zcr": 0.05, "timestamp": 100.0},
+            {"rms": 0.04, "zcr": 0.08, "timestamp": 100.0,
+             "spectral_centroid": 250.0, "spectral_bandwidth": 120.0,
+             "spectral_rolloff": 500.0,
+             "mfcc_0": -5.0, "mfcc_1": 1.2, "mfcc_2": 0.4,
+             "mfcc_3": -0.3, "mfcc_4": 0.2, "mfcc_5": 0.1},
         ]
         turn_a = Turn(
             id="turn-a", text="speaker a",
@@ -303,9 +311,13 @@ class TestSpeakerAttribution:
         )
         session._on_turn_final(turn_a)
 
-        # Speaker B — high energy (very different)
+        # Speaker B — high pitch, higher energy (distinct spectral profile)
         mock_orch.audio.get_recent_features.return_value = [
-            {"rms": 0.08, "zcr": 0.25, "timestamp": 105.0},
+            {"rms": 0.06, "zcr": 0.22, "timestamp": 105.0,
+             "spectral_centroid": 1800.0, "spectral_bandwidth": 700.0,
+             "spectral_rolloff": 3500.0,
+             "mfcc_0": -2.0, "mfcc_1": -1.5, "mfcc_2": -0.8,
+             "mfcc_3": 0.5, "mfcc_4": -0.3, "mfcc_5": -0.4},
         ]
         turn_b = Turn(
             id="turn-b", text="speaker b",

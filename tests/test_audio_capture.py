@@ -200,22 +200,55 @@ class TestSessionRecording:
 
 
 class TestChunkFeatures:
-    """Tests for per-chunk audio feature extraction."""
+    """Tests for per-chunk audio feature extraction (11 spectral features)."""
 
     def test_compute_chunk_features_silence(self) -> None:
-        """Silent audio should have near-zero RMS and ZCR."""
+        """Silent audio should have near-zero features."""
         silence = np.zeros(16000, dtype=np.float32)
         features = AudioCapture.compute_chunk_features(silence)
         assert features["rms"] == pytest.approx(0.0, abs=1e-8)
         assert features["zcr"] == pytest.approx(0.0, abs=1e-8)
+        assert features["spectral_centroid"] == pytest.approx(0.0, abs=1e-4)
+        assert features["spectral_bandwidth"] == pytest.approx(0.0, abs=1e-4)
+        assert features["spectral_rolloff"] == pytest.approx(0.0, abs=1e-4)
+        for i in range(6):
+            assert f"mfcc_{i}" in features
 
     def test_compute_chunk_features_sine(self) -> None:
-        """Sine wave should have non-zero RMS and high ZCR."""
+        """Sine wave should have non-zero spectral features."""
         t = np.linspace(0, 1, 16000, dtype=np.float32)
         sine = 0.1 * np.sin(2 * np.pi * 440 * t)
         features = AudioCapture.compute_chunk_features(sine)
         assert features["rms"] > 0.05
         assert features["zcr"] > 0.01
+        # Centroid should be in a reasonable range for a 440 Hz tone
+        # (spectral leakage from rectangular windowing shifts it)
+        assert 200.0 < features["spectral_centroid"] < 2000.0
+        assert features["spectral_bandwidth"] > 0.0
+        assert features["spectral_rolloff"] > 400.0
+        assert features["mfcc_0"] != 0.0
+
+    def test_feature_vector_has_11_keys(self) -> None:
+        """Feature dict should contain all 11 expected features."""
+        t = np.linspace(0, 1, 16000, dtype=np.float32)
+        audio = 0.1 * np.sin(2 * np.pi * 440 * t)
+        features = AudioCapture.compute_chunk_features(audio)
+        expected = {
+            "rms", "zcr",
+            "spectral_centroid", "spectral_bandwidth", "spectral_rolloff",
+            "mfcc_0", "mfcc_1", "mfcc_2", "mfcc_3", "mfcc_4", "mfcc_5",
+        }
+        assert set(features.keys()) == expected
+
+    def test_different_frequencies_produce_different_features(self) -> None:
+        """Two sine waves at different frequencies should differ in centroid."""
+        t = np.linspace(0, 1, 16000, dtype=np.float32)
+        low = 0.1 * np.sin(2 * np.pi * 200 * t)
+        high = 0.1 * np.sin(2 * np.pi * 2000 * t)
+        feat_low = AudioCapture.compute_chunk_features(low)
+        feat_high = AudioCapture.compute_chunk_features(high)
+        assert feat_low["spectral_centroid"] < feat_high["spectral_centroid"]
+        assert feat_low["spectral_rolloff"] < feat_high["spectral_rolloff"]
 
     def test_feature_deque_stores_with_timestamp(self, capture: AudioCapture) -> None:
         """Features should be stored with timestamps in the deque."""
@@ -230,6 +263,7 @@ class TestChunkFeatures:
         assert len(result) == 1
         assert result[0]["timestamp"] == 100.0
         assert result[0]["rms"] > 0
+        assert "spectral_centroid" in result[0]
 
     def test_get_recent_features_filters_by_timestamp(self, capture: AudioCapture) -> None:
         """get_recent_features should only return features after given timestamp."""
@@ -251,11 +285,13 @@ class TestChunkFeatures:
         assert len(cap._chunk_features) == 50  # maxlen=50
 
     def test_compute_chunk_features_empty_array(self) -> None:
-        """Empty array should return zeros without errors."""
+        """Empty array should return zeros for all 11 features."""
         empty = np.array([], dtype=np.float32)
         features = AudioCapture.compute_chunk_features(empty)
         assert features["rms"] == 0.0
         assert features["zcr"] == 0.0
+        assert features["spectral_centroid"] == 0.0
+        assert len(features) == 11
 
     def test_compute_chunk_features_single_sample(self) -> None:
         """Single sample array should return RMS but zero ZCR."""
@@ -269,7 +305,7 @@ class TestChunkFeatures:
         stereo = np.full((16000, 2), 0.05, dtype=np.float32)
         features = AudioCapture.compute_chunk_features(stereo)
         assert features["rms"] == pytest.approx(0.05, abs=0.001)
-        assert "zcr" in features
+        assert "spectral_centroid" in features
 
     def test_get_recent_features_empty_deque(self, capture: AudioCapture) -> None:
         """get_recent_features on empty deque should return empty list."""

@@ -72,9 +72,13 @@ class MeetingOrchestrator:
         config: AppConfig,
         audio_device: str = "BlackHole 2ch",
         meeting_context_path: Optional[Path] = None,
+        headless: bool = False,
     ) -> None:
         self.config = config
-        display_header()
+        self._headless = headless
+
+        if not headless:
+            display_header()
 
         # --- Callback hooks (set by Session or other consumers) ---
         self.on_transcription: Optional[TranscriptionCallback] = None
@@ -86,23 +90,23 @@ class MeetingOrchestrator:
         if meeting_context_path:
             self.meeting_context = load_meeting_context(meeting_context_path)
             if self.meeting_context:
-                display_status(self.meeting_context.summary())
+                self._status(self.meeting_context.summary())
 
         # Transcription model — LFM2.5 preferred, LFM2 fallback
-        display_status("Loading audio model...")
+        self._status("Loading audio model...")
         audio_dir = AUDIO_MODELS_DIR if AUDIO_MODELS_DIR.exists() else MODELS_DIR
         try:
             self.lfm2 = LFM2Wrapper(audio_dir, RUNNER_DIR, model_version="2.5")
-            display_status("LFM2.5-Audio ready")
+            self._status("LFM2.5-Audio ready")
         except FileNotFoundError:
             self.lfm2 = LFM2Wrapper(MODELS_DIR, RUNNER_DIR, model_version="2.0")
-            display_status("LFM2-Audio ready (legacy)")
+            self._status("LFM2-Audio ready (legacy)")
 
         # RAG retrieval
         docs_dir = BASE_DIR / config.paths.docs_dir
-        display_status("Loading RAG engine...")
+        self._status("Loading RAG engine...")
         self.rag = RAGEngine(docs_dir)
-        display_status("RAG engine ready")
+        self._status("RAG engine ready")
 
         # Trigger engine
         trigger_config = config.triggers
@@ -118,30 +122,39 @@ class MeetingOrchestrator:
 
         # Mode-aware generation (replaces HybridAnswerer)
         rag_model = _resolve_rag_model(config)
-        display_status("Loading generation model...")
+        self._status("Loading generation model...")
         self.generator = ModeAwareGenerator(
             model_path=rag_model,
             max_context_chars=config.models.generation.max_context_chars,
             min_extraction_confidence=config.detection.extraction_confidence_minimum,
         )
-        display_status("Generation ready")
+        self._status("Generation ready")
 
         # Audio capture (no on_silence — silence driven by ASR output now)
         self.audio = AudioCapture(device=audio_device)
 
-        # Dashboard
-        self.dashboard = Dashboard()
-        if self.meeting_context and self.meeting_context.title:
-            self.dashboard.set_meeting_title(self.meeting_context.title)
+        # Dashboard (skipped in headless/API mode)
+        self.dashboard: Optional[Dashboard] = None
+        if not headless:
+            self.dashboard = Dashboard()
+            if self.meeting_context and self.meeting_context.title:
+                self.dashboard.set_meeting_title(self.meeting_context.title)
 
         # State
         self._running = False
         self.chunk_count = 0
         OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
+    def _status(self, message: str) -> None:
+        """Display status in CLI mode, log in headless mode."""
+        if self._headless:
+            logger.info("[status] %s", message)
+        else:
+            display_status(message)
+
     def run(self) -> None:
         """Start real-time processing loop."""
-        display_status(f"Listening on {self.audio.device}...")
+        self._status(f"Listening on {self.audio.device}...")
         self._running = True
         try:
             self.audio.start_stream(self.process_chunk)
@@ -194,8 +207,9 @@ class MeetingOrchestrator:
                 logger.debug("Filler speech, skipping triggers: %r", text[:60])
 
             # 6. Update dashboard transcript preview
-            self.dashboard.set_transcript_preview(text)
-            self.dashboard.render()
+            if self.dashboard:
+                self.dashboard.set_transcript_preview(text)
+                self.dashboard.render()
 
         except Exception as e:
             logger.error("Error processing chunk: %s", e)
@@ -212,8 +226,9 @@ class MeetingOrchestrator:
         for trigger in triggers:
             result = self._process_trigger(trigger)
             if result and result.answer and not result.answer.startswith("["):
-                self.dashboard.add_result(result)
-                self.dashboard.render()
+                if self.dashboard:
+                    self.dashboard.add_result(result)
+                    self.dashboard.render()
 
                 # Notify callback
                 if self.on_trigger_result:

@@ -265,16 +265,15 @@ class Session:
                 config=self.config,
                 audio_device=self._audio_device,
                 meeting_context_path=None,
+                headless=True,
             )
 
-            # Inject meeting context if loaded
+            # Inject meeting context if loaded (no dashboard in headless mode)
             if self.meeting_context and self._orchestrator:
                 orch = self._orchestrator
                 orch.meeting_context = self.meeting_context
                 if self.meeting_context.watch_words:
                     orch.trigger_engine.set_watch_words(self.meeting_context.watch_words)
-                if self.meeting_context.title:
-                    orch.dashboard.set_meeting_title(self.meeting_context.title)
 
             # Wire orchestrator callbacks — clean pipeline observation
             self._orchestrator.on_transcription = self._on_transcription

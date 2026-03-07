@@ -8,42 +8,37 @@ active_work:
   - id: "WS-07"
     name: "Live speech test in Tauri app"
     status: pending
-    notes: "Pipeline complete with speaker attribution. Needs real mic validation."
+    notes: "Spectral speaker attribution + headless mode ready. Needs real mic validation."
 
 blockers: []
 
 pending_decisions: []
 
 recent_sessions:
+  - id: "session-007"
+    date: "2026-03-06"
+    focus: "Headless orchestrator + spectral speaker attribution"
+    completed:
+      - "Headless mode suppresses CLI dashboard in Tauri (logger.info instead)"
+      - "11-feature spectral vectors (MFCCs, centroid, bandwidth, rolloff) via scipy"
+      - "Scale-normalized cosine similarity fixes all-Speaker-1 bug"
+      - "177 tests passing (5 new), TypeScript strict passes"
+    next_recommended: "Test with live speech — verify speaker labels differentiate voices"
   - id: "session-006"
     date: "2026-03-06"
     focus: "Logging, resizable panes, energy-based speaker attribution"
     completed:
-      - "Hot-path logging downgraded to debug (session.py, audio_capture.py)"
-      - "Resizable transcript/prompt panes with drag handle (localStorage persistence)"
-      - "Energy-based speaker attribution (SpeakerTracker with RMS+ZCR, EMA profiles)"
-      - "SpeakerConfig in config.yaml with configurable threshold/alpha"
-      - "All speaker tracker params extracted from hardcoded values"
-      - "Error handling around speaker attribution in pipeline thread"
+      - "Hot-path logging to debug, resizable panes, RMS+ZCR speaker attribution"
       - "172 tests passing (31 new), TypeScript strict passes"
-    next_recommended: "Test with live speech — verify speaker labels appear on turn changes"
+    next_recommended: "Test with live speech"
   - id: "session-005"
     date: "2026-03-06"
     focus: "Pipeline architecture redesign — robust transcription"
     completed:
-      - "Queue-based audio capture (bounded queue, single worker, no data loss)"
-      - "Removed audio level gating — all audio reaches ASR"
-      - "Two-level filtering, orchestrator callbacks, text refiner, session WAV recording"
+      - "Queue-based audio, orchestrator callbacks, text refiner, session WAV recording"
       - "141 tests passing (59 new), TypeScript strict passes"
-    next_recommended: "Test with live speech"
-  - id: "session-004"
-    date: "2026-03-06"
-    focus: "Fix broken turn boundaries — silence-based detection"
-    completed:
-      - "Switched to silence-event-driven boundaries (on_silence from audio capture)"
-      - "Rewrote 30 tests for silence-based boundary model (82 total, all pass)"
     next_recommended: "Test with live speech"
 
 completed_summary:
-  total_items: 29
-  total_sessions: 6
+  total_items: 30
+  total_sessions: 7

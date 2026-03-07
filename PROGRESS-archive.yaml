@@ -131,6 +131,20 @@ completed_items:
       - "tests/test_audio_capture.py"
       - "tests/test_session.py"
 
+  - id: "WS-09"
+    name: "Headless orchestrator + spectral speaker attribution"
+    date: "2026-03-06"
+    notes: "Headless mode silences CLI dashboard in Tauri, 11-feature spectral vectors (MFCCs, centroid, bandwidth, rolloff) with scale-normalized cosine similarity for speaker discrimination"
+    files:
+      - "lib/audio_features.py (NEW)"
+      - "lib/audio_capture.py"
+      - "lib/speaker_tracker.py"
+      - "lib/orchestrator.py"
+      - "src/api/session.py"
+      - "tests/test_audio_capture.py"
+      - "tests/test_speaker_tracker.py"
+      - "tests/test_session.py"
+
 sessions:
   - id: "session-001"
     date: "2026-03-05"
@@ -162,9 +176,11 @@ sessions:
     completed:
       - "Queue-based audio capture (bounded queue, single worker, no data loss)"
       - "Removed audio level gating — all audio reaches ASR"
-      - "Two-level filtering: is_hallucination_only (transcript) vs is_noise (triggers)"
-      - "Orchestrator callback interface (replaces monkey-patching)"
-      - "Text refiner (LFM2.5-Instruct, shared Llama instance, polishes finalized turns)"
-      - "Session WAV recording on stop"
-      - "Frontend handles transcript_polished WebSocket messages"
+      - "Two-level filtering, orchestrator callbacks, text refiner, session WAV recording"
       - "141 tests passing (59 new), TypeScript strict passes"
+  - id: "session-006"
+    date: "2026-03-06"
+    focus: "Logging, resizable panes, energy-based speaker attribution"
+    completed:
+      - "Hot-path logging to debug, resizable panes, RMS+ZCR speaker attribution"
+      - "172 tests passing (31 new), TypeScript strict passes"

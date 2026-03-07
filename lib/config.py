@@ -49,11 +49,15 @@ class ModelsConfig:
 
 @dataclass
 class BufferConfig:
+    # ConversationBuffer (trigger pipeline)
     pause_threshold: float = 1.5
     max_buffer_time: float = 8.0
     min_words: int = 4
     confidence_threshold: float = 0.3
     min_start_score: float = 0.1
+    # TranscriptBuffer (turn detection for UI)
+    turn_pause: float = 2.0
+    max_turn_duration: float = 30.0
 
 
 @dataclass
@@ -96,6 +100,21 @@ class RefinerConfig:
 
 
 @dataclass
+class DiarizationConfig:
+    """Speaker diarization settings (Tier 2).
+
+    Uses speechbrain ECAPA-TDNN embeddings with online centroid
+    clustering. Runs on system audio turns only — mic turns stay "You".
+    """
+
+    enabled: bool = False
+    max_speakers: int = 6
+    similarity_threshold: float = 0.65
+    min_audio_duration: float = 1.0
+    embedding_model: str = "speechbrain/spkrec-ecapa-voxceleb"
+
+
+@dataclass
 class PathsConfig:
     docs_dir: str = "docs"
     output_dir: str = "output"
@@ -112,6 +131,7 @@ class AppConfig:
     normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
     triggers: TriggerConfig = field(default_factory=TriggerConfig)
     refiner: RefinerConfig = field(default_factory=RefinerConfig)
+    diarization: DiarizationConfig = field(default_factory=DiarizationConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
 
 
@@ -168,5 +188,6 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         normalization=_build_dataclass(NormalizationConfig, raw.get("normalization")),
         triggers=_build_dataclass(TriggerConfig, raw.get("triggers")),
         refiner=_build_dataclass(RefinerConfig, raw.get("refiner")),
+        diarization=_build_dataclass(DiarizationConfig, raw.get("diarization")),
         paths=_build_dataclass(PathsConfig, raw.get("paths")),
     )

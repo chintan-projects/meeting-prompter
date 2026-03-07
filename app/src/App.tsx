@@ -6,6 +6,7 @@ import { MeetingSetup } from "./components/MeetingSetup";
 import { NoteEditor } from "./components/NoteEditor";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useTranscript } from "./hooks/useTranscript";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 
 const TRANSCRIPT_WIDTH_KEY = "meeting-prompter:transcript-width";
 const DEFAULT_TRANSCRIPT_WIDTH = 380;
@@ -27,9 +28,19 @@ interface PromptResult {
   receivedAt: number;
 }
 
+interface MeetingConfig {
+  title: string;
+  agenda_items: string[];
+  watch_words: string[];
+  participants: string[];
+  audio_device: string;
+  mic_device: string;
+}
+
 function App() {
   const [showSetup, setShowSetup] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [meetingTitle, setMeetingTitle] = useState("");
   const [transcriptCollapsed, setTranscriptCollapsed] = useState(false);
@@ -62,7 +73,8 @@ function App() {
         if (
           msg.type === "transcript_update" ||
           msg.type === "transcript_final" ||
-          msg.type === "transcript_polished"
+          msg.type === "transcript_polished" ||
+          msg.type === "transcript_relabeled"
         ) {
           upsertSegment({
             id: msg.id,
@@ -92,12 +104,12 @@ function App() {
     }, []),
   });
 
-  // Elapsed timer
+  // Elapsed timer — pauses when session is paused
   useEffect(() => {
-    if (!isRunning) return;
+    if (!isRunning || isPaused) return;
     const interval = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(interval);
-  }, [isRunning]);
+  }, [isRunning, isPaused]);
 
   // Resizable pane drag handling — listeners stored in ref for cleanup
   const dragListenersRef = useRef<{
@@ -148,19 +160,27 @@ function App() {
     };
   }, []);
 
-  const startSession = async (audioDevice: string, micDevice?: string) => {
+  // --- Session control functions ---
+
+  const startSession = async (config: MeetingConfig) => {
     try {
       const res = await fetch(`${API_BASE}/session/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          audio_device: audioDevice,
-          mic_device: micDevice ?? "MacBook Pro Microphone",
+          audio_device: config.audio_device,
+          mic_device: config.mic_device,
+          title: config.title,
+          agenda_items: config.agenda_items,
+          watch_words: config.watch_words,
+          participants: config.participants,
         }),
       });
       if (res.ok) {
         setIsRunning(true);
+        setIsPaused(false);
         setElapsed(0);
+        setMeetingTitle(config.title);
         transcriptWs.connect();
         promptsWs.connect();
       }
@@ -176,6 +196,7 @@ function App() {
       // ignore
     }
     setIsRunning(false);
+    setIsPaused(false);
     transcriptWs.disconnect();
     promptsWs.disconnect();
     // Show notes editor after stopping
@@ -184,39 +205,43 @@ function App() {
     }
   };
 
-  const handleSetupStart = async (config: {
-    title: string;
-    agenda_items: string[];
-    watch_words: string[];
-    participants: string[];
-    audio_device: string;
-    mic_device: string;
-  }) => {
-    setMeetingTitle(config.title);
-    setShowSetup(false);
-
-    // Set context via API
+  const pauseSession = async () => {
     try {
-      await fetch(`${API_BASE}/context/set`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: config.title,
-          agenda_items: config.agenda_items,
-          watch_words: config.watch_words,
-          participants: config.participants,
-        }),
-      });
-    } catch {
-      // proceed anyway
+      const res = await fetch(`${API_BASE}/session/pause`, { method: "POST" });
+      if (res.ok) {
+        setIsPaused(true);
+      }
+    } catch (err) {
+      console.error("Failed to pause session:", err);
     }
+  };
 
-    await startSession(config.audio_device, config.mic_device);
+  const resumeSession = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/session/resume`, { method: "POST" });
+      if (res.ok) {
+        setIsPaused(false);
+      }
+    } catch (err) {
+      console.error("Failed to resume session:", err);
+    }
+  };
+
+  const handleSetupStart = async (config: MeetingConfig) => {
+    setShowSetup(false);
+    await startSession(config);
   };
 
   const handleQuickStart = (device: string, micDevice?: string) => {
     setShowSetup(false);
-    startSession(device, micDevice);
+    startSession({
+      title: "",
+      agenda_items: [],
+      watch_words: [],
+      participants: [],
+      audio_device: device,
+      mic_device: micDevice ?? "MacBook Pro Microphone",
+    });
   };
 
   const handleEditSegment = (id: string, text: string) => {
@@ -225,16 +250,55 @@ function App() {
     transcriptWs.send({ type: "edit", id, text });
   };
 
+  // --- Keyboard shortcuts ---
+
+  useKeyboardShortcuts({
+    onToggleRecording: () => {
+      if (isRunning) {
+        stopSession();
+      } else {
+        setShowSetup(true);
+      }
+    },
+    onPauseResume: () => {
+      if (!isRunning) return;
+      if (isPaused) {
+        resumeSession();
+      } else {
+        pauseSession();
+      }
+    },
+    onToggleTranscript: () => setTranscriptCollapsed((c) => !c),
+    onCloseModal: () => {
+      if (showNotes) {
+        setShowNotes(false);
+      } else if (showSetup && !isRunning) {
+        setShowSetup(false);
+      }
+    },
+    onSaveNotes: () => {
+      // Handled by NoteEditor internally when visible
+    },
+    onToggleNotes: () => {
+      if (!isRunning && segments.length > 0) {
+        setShowNotes((n) => !n);
+      }
+    },
+  });
+
   return (
     <div style={styles.app}>
       <StatusBar
         title={meetingTitle}
         isRunning={isRunning}
+        isPaused={isPaused}
         elapsed={elapsed}
         transcriptConnected={transcriptWs.connected}
         promptsConnected={promptsWs.connected}
         onStart={() => setShowSetup(true)}
         onStop={stopSession}
+        onPause={pauseSession}
+        onResume={resumeSession}
       />
 
       <div style={styles.main}>
@@ -256,7 +320,11 @@ function App() {
       </div>
 
       {showSetup && (
-        <MeetingSetup onStart={handleSetupStart} onQuickStart={handleQuickStart} />
+        <MeetingSetup
+          onStart={handleSetupStart}
+          onQuickStart={handleQuickStart}
+          onCancel={() => setShowSetup(false)}
+        />
       )}
 
       <NoteEditor visible={showNotes} onClose={() => setShowNotes(false)} />

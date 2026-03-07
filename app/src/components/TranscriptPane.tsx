@@ -9,11 +9,45 @@ interface TranscriptPaneProps {
   width: number;
 }
 
+// Speaker color palette for Tier 2 diarized system audio speakers
+const SPEAKER_COLORS: readonly string[] = [
+  "#4caf50", // green — Speaker A
+  "#ff9800", // orange — Speaker B
+  "#ab47bc", // purple — Speaker C
+  "#e91e63", // pink — Speaker D
+  "#00bcd4", // teal — Speaker E
+  "#ff5722", // deep orange — Speaker F
+];
+
+/** Map speaker label to a distinct color. Mic → blue, system speakers → cycling palette. */
+function getSpeakerColor(seg: TranscriptSegment): string {
+  if (seg.source === "mic") return "var(--accent-blue, #4a9eff)";
+  const match = seg.speaker.match(/Speaker\s+([A-Z])/);
+  if (match) {
+    const idx = match[1].charCodeAt(0) - 65; // A=0, B=1, ...
+    return SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
+  }
+  return "var(--text-secondary)";
+}
+
+/** Get a faint background tint for diarized system speakers. */
+function getSpeakerBubbleBg(seg: TranscriptSegment): string | undefined {
+  if (seg.source !== "system") return undefined;
+  const match = seg.speaker.match(/Speaker\s+([A-Z])/);
+  if (match) {
+    const idx = match[1].charCodeAt(0) - 65;
+    const hex = SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
+    return `${hex}14`; // ~8% opacity via hex alpha
+  }
+  return undefined;
+}
+
 /**
  * Dual-stream transcript display with chat-bubble layout.
  *
  * Mic turns (source="mic") appear right-aligned with accent styling → "You"
- * System turns (source="system") appear left-aligned with muted styling → "Others"
+ * System turns (source="system") appear left-aligned with muted styling → speaker label
+ * Tier 2 diarization colors individual remote speakers (Speaker A, B, ...).
  * Active turns show a live indicator. Double-click finalized turns to edit.
  */
 export function TranscriptPane({
@@ -63,7 +97,7 @@ export function TranscriptPane({
   if (collapsed) {
     return (
       <div style={styles.collapsed} onClick={onToggle}>
-        <span style={styles.collapseHandle}>&blacktriangleright;</span>
+        <span style={styles.collapseHandle}>&#x25B6;</span>
       </div>
     );
   }
@@ -72,7 +106,7 @@ export function TranscriptPane({
     <div style={{ ...styles.pane, width }}>
       <div style={styles.header}>
         <span style={styles.collapseHandle} onClick={onToggle}>
-          &blacktriangleleft;
+          &#x25C0;
         </span>
         <span style={styles.headerTitle}>TRANSCRIPT</span>
         <label style={styles.pinLabel}>
@@ -104,6 +138,9 @@ export function TranscriptPane({
                 style={{
                   ...styles.turn,
                   ...(mic ? styles.micTurn : styles.systemTurn),
+                  ...(getSpeakerBubbleBg(seg)
+                    ? { background: getSpeakerBubbleBg(seg) }
+                    : {}),
                   ...(seg.is_final ? {} : styles.activeTurn),
                   ...(seg.edited ? styles.editedTurn : {}),
                 }}
@@ -111,7 +148,12 @@ export function TranscriptPane({
               >
                 <div style={styles.turnHeader}>
                   <span style={styles.timestamp}>{formatTime(seg.timestamp)}</span>
-                  <span style={mic ? styles.speakerMic : styles.speakerSystem}>
+                  <span
+                    style={{
+                      ...styles.speakerLabel,
+                      color: getSpeakerColor(seg),
+                    }}
+                  >
                     {seg.speaker || (mic ? "You" : "Others")}
                   </span>
                   {!seg.is_final && <span style={styles.liveIndicator} />}
@@ -231,15 +273,9 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-muted)",
     flexShrink: 0,
   },
-  speakerMic: {
+  speakerLabel: {
     fontSize: 11,
     fontWeight: 600,
-    color: "var(--accent-blue, #4a9eff)",
-  },
-  speakerSystem: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: "var(--text-secondary)",
   },
   liveIndicator: {
     width: 6,

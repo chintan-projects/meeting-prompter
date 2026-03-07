@@ -1,12 +1,14 @@
 """Session manager — bridges dual audio pipelines to WebSocket consumers.
 
 Dual-stream architecture: captures microphone (you) and system audio
-(others) simultaneously. Speaker identity is deterministic from the
-audio source — no ML-based speaker attribution needed.
+(others) simultaneously. Tier 1 speaker attribution is deterministic
+from the audio source. Tier 2 adds neural diarization on system audio
+to distinguish individual remote speakers.
 
 Pipeline flow:
     Mic Audio   → ASR → source="mic"    → TranscriptBuffer → "You"
     System Audio → ASR → source="system" → TranscriptBuffer → "Others"
+    System Audio → diarization (parallel) → relabel "Others" → "Speaker B"
     Both streams → on_silence → turn boundaries
     Both streams → ConversationBuffer → trigger engine → prompts
 """
@@ -19,6 +21,7 @@ from typing import Optional
 
 from lib.config import AppConfig, load_config
 from lib.conversation.meeting_context import MeetingContext, load_meeting_context
+from lib.diarization import SpeakerDiarizer
 from lib.generation.types import GenerationResult
 from lib.text_refiner import TextRefiner
 from lib.triggers.types import Trigger, TriggerType
@@ -52,8 +55,8 @@ class Session:
 
         # Turn-based buffer: accumulates raw chunks into speech turns
         self._transcript_buffer = TranscriptBuffer(
-            turn_pause=2.0,
-            max_turn_duration=30.0,
+            turn_pause=self.config.buffer.turn_pause,
+            max_turn_duration=self.config.buffer.max_turn_duration,
             on_update=self._on_turn_update,
             on_final=self._on_turn_final,
         )
@@ -66,21 +69,42 @@ class Session:
         self._orchestrator: Optional[object] = None
         self._mic_capture: Optional[object] = None
         self._text_refiner: Optional[TextRefiner] = None
+        self._diarizer: Optional[SpeakerDiarizer] = None
         self._thread: Optional[threading.Thread] = None
         self._mic_thread: Optional[threading.Thread] = None
         self._running = False
+        self._paused = False
         self._start_time: float = 0.0
         self._loading = False
+        self._total_pause_time: float = 0.0
+        self._pause_start: float = 0.0
+        self._single_device_mode = False  # True when mic == system audio device
+
+        # Accumulated trigger results for post-meeting summary
+        self._trigger_history: list[dict] = []
 
     @property
     def is_running(self) -> bool:
         return self._running
 
     @property
+    def is_paused(self) -> bool:
+        return self._paused
+
+    @property
+    def trigger_history(self) -> list[dict]:
+        """Accumulated trigger results for post-meeting summary."""
+        return list(self._trigger_history)
+
+    @property
     def elapsed_seconds(self) -> float:
         if not self._start_time:
             return 0.0
-        return time.time() - self._start_time
+        total = time.time() - self._start_time
+        pause_adjustment = self._total_pause_time
+        if self._paused and self._pause_start:
+            pause_adjustment += time.time() - self._pause_start
+        return total - pause_adjustment
 
     def load_context(self, path: Path) -> Optional[MeetingContext]:
         """Load meeting context from YAML."""
@@ -148,6 +172,36 @@ class Session:
 
         logger.info("Session stopped after %.0fs", self.elapsed_seconds)
 
+    def pause(self) -> None:
+        """Pause audio capture. Models stay loaded, timer pauses."""
+        if not self._running or self._paused:
+            return
+        self._paused = True
+        self._pause_start = time.time()
+        # Flush active turn so it finalizes cleanly
+        self._transcript_buffer.flush()
+        # Pause both audio captures
+        if self._orchestrator and hasattr(self._orchestrator, "audio"):
+            self._orchestrator.audio.pause()
+        if self._mic_capture and hasattr(self._mic_capture, "pause"):
+            self._mic_capture.pause()
+        logger.info("Session paused at %.0fs", self.elapsed_seconds)
+
+    def resume(self) -> None:
+        """Resume audio capture after pause."""
+        if not self._running or not self._paused:
+            return
+        self._paused = False
+        if self._pause_start:
+            self._total_pause_time += time.time() - self._pause_start
+            self._pause_start = 0.0
+        # Resume both audio captures
+        if self._orchestrator and hasattr(self._orchestrator, "audio"):
+            self._orchestrator.audio.resume()
+        if self._mic_capture and hasattr(self._mic_capture, "resume"):
+            self._mic_capture.resume()
+        logger.info("Session resumed at %.0fs", self.elapsed_seconds)
+
     def get_status(self) -> dict:
         """Get current session status."""
         audio_health: dict = {}
@@ -155,6 +209,7 @@ class Session:
             audio_health = self._orchestrator.audio.get_audio_health()
         return {
             "running": self._running,
+            "paused": self._paused,
             "loading": self._loading,
             "elapsed_seconds": self.elapsed_seconds,
             "segment_count": self.transcript.segment_count,
@@ -169,10 +224,12 @@ class Session:
     def _on_transcription(self, text: str, timestamp: float) -> None:
         """Called when valid speech is transcribed from system audio.
 
-        Tags the chunk with source="system" (remote participants).
+        Tags the chunk with source="system" (remote participants), unless
+        running in single-device mode where all speech is source="mic" (You).
         """
-        logger.debug("[system] Valid speech: %r", text[:80])
-        self._transcript_buffer.add_chunk(text, timestamp, source="system")
+        source = "mic" if self._single_device_mode else "system"
+        logger.debug("[%s] Valid speech: %r", source, text[:80])
+        self._transcript_buffer.add_chunk(text, timestamp, source=source)
 
     def _on_mic_transcription(self, text: str, timestamp: float) -> None:
         """Called when valid speech is transcribed from microphone.
@@ -191,7 +248,11 @@ class Session:
         self._transcript_buffer.on_silence(timestamp)
 
     def _on_trigger_result(self, trigger: Trigger, result: GenerationResult) -> None:
-        """Called when a trigger fires and produces a generation result."""
+        """Called when a trigger fires and produces a generation result.
+
+        Note: Q&A memory is handled by the orchestrator's _handle_triggers —
+        no duplicate add_qa_pair here.
+        """
         logger.info(
             "[trigger] %s → %s (conf=%.2f, %dms)",
             trigger.type.value,
@@ -200,8 +261,14 @@ class Session:
             result.latency_ms,
         )
 
-        if trigger.type == TriggerType.QUESTION:
-            self._orchestrator.buffer.add_qa_pair(trigger.text, result.answer)
+        # Store for post-meeting summary
+        self._trigger_history.append({
+            "trigger_type": trigger.type.value,
+            "trigger_text": trigger.text,
+            "answer": result.answer,
+            "confidence": result.confidence,
+            "timestamp": time.time(),
+        })
 
         self._thread_safe_put(self._prompt_queue, {
             "type": "prompt",
@@ -224,6 +291,7 @@ class Session:
             timestamp=turn.start_timestamp,
             end_timestamp=turn.end_timestamp,
             is_final=False,
+            source=turn.source,
         )
         self._thread_safe_put(self._transcript_queue, {
             "type": "transcript_update",
@@ -233,10 +301,11 @@ class Session:
     def _on_turn_final(self, turn: Turn) -> None:
         """Called when a turn is finalized (pause detected).
 
-        Speaker label is set deterministically from source:
-        mic → "You", system → "Others".
+        Speaker label is set deterministically from source (Tier 1):
+        mic → "You", system → "Others". If Tier 2 diarization is enabled,
+        system turns are then relabeled with neural speaker embeddings.
         """
-        # Source-based speaker attribution — deterministic, no ML
+        # Source-based speaker attribution — deterministic, no ML (Tier 1)
         if turn.source == "mic":
             turn.speaker = "You"
         elif turn.source == "system":
@@ -249,22 +318,30 @@ class Session:
             timestamp=turn.start_timestamp,
             end_timestamp=turn.end_timestamp,
             is_final=True,
+            speaker=turn.speaker,
+            source=turn.source,
         )
         self._thread_safe_put(self._transcript_queue, {
             "type": "transcript_final",
             **turn.to_dict(),
         })
 
-        # Polish with text refiner (runs in pipeline thread during silence)
+        # Polish with text refiner (thread-safe via RAGAnswerGenerator.generate_text())
         if self._text_refiner:
+            t0 = time.time()
             polished = self._text_refiner.refine(turn.text)
+            refine_ms = (time.time() - t0) * 1000
             if polished and polished != turn.text:
+                logger.info("Turn %s refined in %.0fms", turn.id, refine_ms)
+                turn.text = polished
                 self.transcript.upsert(
                     seg_id=turn.id,
                     text=polished,
                     timestamp=turn.start_timestamp,
                     end_timestamp=turn.end_timestamp,
                     is_final=True,
+                    speaker=turn.speaker,
+                    source=turn.source,
                 )
                 self._thread_safe_put(self._transcript_queue, {
                     "type": "transcript_polished",
@@ -276,6 +353,63 @@ class Session:
                     "speaker": turn.speaker,
                     "source": turn.source,
                 })
+
+        # Tier 2: neural speaker diarization (system audio only)
+        if self._diarizer and turn.source == "system":
+            self._relabel_speaker(turn)
+
+    def _relabel_speaker(self, turn: Turn) -> None:
+        """Retroactively relabel a system-audio turn via neural diarization.
+
+        Extracts the turn's raw audio segment, computes a speaker embedding,
+        and assigns a speaker label via online clustering. Updates the
+        transcript store and pushes a relabeled message to the UI.
+        """
+        try:
+            audio_segment = self._get_turn_audio(turn)
+            if audio_segment is None:
+                return
+
+            speaker = self._diarizer.process_turn(
+                audio_segment, self.config.audio.sample_rate,
+            )
+            if speaker and speaker != turn.speaker:
+                turn.speaker = speaker
+                self.transcript.upsert(
+                    seg_id=turn.id,
+                    text=turn.text,
+                    timestamp=turn.start_timestamp,
+                    end_timestamp=turn.end_timestamp,
+                    is_final=True,
+                    speaker=speaker,
+                    source=turn.source,
+                )
+                self._thread_safe_put(self._transcript_queue, {
+                    "type": "transcript_relabeled",
+                    "id": turn.id,
+                    "text": turn.text,
+                    "timestamp": turn.start_timestamp,
+                    "end_timestamp": turn.end_timestamp,
+                    "is_final": True,
+                    "speaker": speaker,
+                    "source": turn.source,
+                })
+                logger.info("Turn %s relabeled: Others → %s", turn.id, speaker)
+        except Exception as e:
+            logger.warning("Speaker relabeling failed for %s: %s", turn.id, e)
+
+    def _get_turn_audio(self, turn: Turn) -> Optional["np.ndarray"]:
+        """Retrieve raw audio for a turn's time range from the system AudioCapture."""
+        if not self._orchestrator or not hasattr(self._orchestrator, "audio"):
+            return None
+        import numpy as np
+
+        audio = self._orchestrator.audio.get_audio_segment(
+            turn.start_timestamp, turn.end_timestamp,
+        )
+        if audio is None or len(audio) == 0:
+            return None
+        return audio
 
     # --- Pipeline threads ---
 
@@ -305,7 +439,7 @@ class Session:
             self._orchestrator.on_silence_detected = self._on_silence_detected
             self._orchestrator.on_trigger_result = self._on_trigger_result
 
-            # Create text refiner (shares Llama instance with generator)
+            # Create text refiner (shares RAGAnswerGenerator — thread-safe via generate_text())
             refiner_config = getattr(self.config, "refiner", None)
             refiner_enabled = (
                 getattr(refiner_config, "enabled", True) if refiner_config else True
@@ -321,15 +455,39 @@ class Session:
                 )
                 logger.info("Text refiner enabled (sharing LFM2.5-Instruct instance)")
 
+            # --- Tier 2: speaker diarization on system audio ---
+            if self.config.diarization.enabled:
+                try:
+                    self._diarizer = SpeakerDiarizer(self.config.diarization)
+                    if self._diarizer.available:
+                        logger.info("Tier 2 speaker diarization enabled")
+                    else:
+                        logger.warning("Diarization model unavailable — Tier 1 fallback")
+                        self._diarizer = None
+                except Exception as e:
+                    logger.warning("Diarization init failed: %s — Tier 1 fallback", e)
+                    self._diarizer = None
+
             # --- Mic capture: separate AudioCapture + ASR pipeline ---
-            self._mic_capture = AudioCapture(device=self._mic_device)
-            self._mic_thread = threading.Thread(
-                target=self._run_mic_pipeline,
-                daemon=True,
-                name="mic-pipeline",
-            )
-            self._mic_thread.start()
-            logger.info("Mic pipeline started on: %s", self._mic_device)
+            # Skip mic pipeline if same device as system audio (single-device mode).
+            # In single-device mode, all speech comes from one source → tagged "mic" → "You".
+            if self._audio_device.lower() == self._mic_device.lower():
+                self._single_device_mode = True
+                logger.info(
+                    "Single-device mode: mic == system audio (%s). "
+                    "All speech tagged as 'You'.",
+                    self._audio_device,
+                )
+            else:
+                self._single_device_mode = False
+                self._mic_capture = AudioCapture(device=self._mic_device)
+                self._mic_thread = threading.Thread(
+                    target=self._run_mic_pipeline,
+                    daemon=True,
+                    name="mic-pipeline",
+                )
+                self._mic_thread.start()
+                logger.info("Mic pipeline started on: %s", self._mic_device)
 
             self._loading = False
             logger.info("Models loaded, starting system audio capture...")
@@ -385,9 +543,11 @@ class Session:
             logger.error("Mic pipeline error: %s", e, exc_info=True)
 
     def _handle_mic_triggers(self, triggers: list) -> None:
-        """Handle triggers from mic audio (same as system audio triggers)."""
-        from lib.triggers.types import Trigger as TriggerType_
+        """Handle triggers from mic audio.
 
+        Thread-safe: generation goes through RAGAnswerGenerator.generate_text()
+        which holds an internal lock.
+        """
         for trigger in triggers:
             result = self._orchestrator._process_trigger(trigger)
             if result and result.answer and not result.answer.startswith("["):

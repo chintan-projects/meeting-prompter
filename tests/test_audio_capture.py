@@ -284,6 +284,128 @@ class TestChunkFeatures:
         assert result == []
 
 
+class TestGetAudioSegment:
+    """Tests for get_audio_segment — time-range audio retrieval for diarization."""
+
+    def test_empty_session_returns_none(self, capture: AudioCapture) -> None:
+        """No recorded audio should return None."""
+        result = capture.get_audio_segment(0.0, 10.0)
+        assert result is None
+
+    def test_retrieves_matching_chunks(self, capture: AudioCapture) -> None:
+        """Should return audio chunks that overlap with the time range."""
+        chunk = np.ones(64000, dtype=np.float32) * 0.1
+        with capture._recording_lock:
+            capture._session_audio.append(chunk)
+            capture._session_timestamps.append(100.0)
+            capture._session_audio.append(chunk * 2)
+            capture._session_timestamps.append(104.0)
+
+        result = capture.get_audio_segment(99.0, 105.0)
+        assert result is not None
+        assert len(result) == 128000  # Two 64000-sample chunks
+
+    def test_partial_overlap(self, capture: AudioCapture) -> None:
+        """Chunks partially overlapping the range should be included."""
+        chunk = np.ones(64000, dtype=np.float32) * 0.1
+        with capture._recording_lock:
+            capture._session_audio.append(chunk)
+            capture._session_timestamps.append(100.0)
+            capture._session_audio.append(chunk * 2)
+            capture._session_timestamps.append(104.0)
+            capture._session_audio.append(chunk * 3)
+            capture._session_timestamps.append(108.0)
+
+        # Only first two chunks overlap with [101, 106]
+        result = capture.get_audio_segment(101.0, 106.0)
+        assert result is not None
+        assert len(result) == 128000
+
+    def test_no_overlap_returns_none(self, capture: AudioCapture) -> None:
+        """Time range with no matching chunks should return None."""
+        chunk = np.ones(64000, dtype=np.float32)
+        with capture._recording_lock:
+            capture._session_audio.append(chunk)
+            capture._session_timestamps.append(100.0)
+
+        result = capture.get_audio_segment(200.0, 210.0)
+        assert result is None
+
+    def test_single_chunk_exact_match(self, capture: AudioCapture) -> None:
+        """Exact time range matching one chunk should return it."""
+        chunk = np.full(64000, 0.5, dtype=np.float32)
+        with capture._recording_lock:
+            capture._session_audio.append(chunk)
+            capture._session_timestamps.append(100.0)
+
+        result = capture.get_audio_segment(100.0, 104.0)
+        assert result is not None
+        assert len(result) == 64000
+        assert result[0] == pytest.approx(0.5)
+
+    def test_timestamps_tracked_in_process_chunk(self) -> None:
+        """_process_chunk should store timestamps alongside audio."""
+        cap = AudioCapture(device="test", sample_rate=16000)
+        cap.callback = MagicMock()  # Prevent callback issues
+
+        chunk = np.zeros(64000, dtype=np.float32)
+        cap._process_chunk(chunk, 123.456)
+
+        assert len(cap._session_timestamps) == 1
+        assert cap._session_timestamps[0] == 123.456
+        assert len(cap._session_audio) == 1
+
+
+class TestPauseResume:
+    """Tests for pause/resume behavior."""
+
+    def test_initial_not_paused(self, capture: AudioCapture) -> None:
+        """Fresh capture should not be paused."""
+        assert capture.paused is False
+
+    def test_pause_sets_flag(self, capture: AudioCapture) -> None:
+        """pause() should set the paused property to True."""
+        capture.pause()
+        assert capture.paused is True
+
+    def test_resume_clears_flag(self, capture: AudioCapture) -> None:
+        """resume() should clear the paused flag."""
+        capture.pause()
+        assert capture.paused is True
+        capture.resume()
+        assert capture.paused is False
+
+    def test_resume_clears_buffer(self, capture: AudioCapture) -> None:
+        """resume() should clear the audio buffer to avoid stale overlap."""
+        with capture.buffer_lock:
+            capture.buffer = np.ones(1000, dtype=np.float32)
+        capture.pause()
+        capture.resume()
+        assert len(capture.buffer) == 0
+
+    def test_audio_callback_discards_when_paused(self, capture: AudioCapture) -> None:
+        """Audio callback should not enqueue chunks when paused."""
+        capture.pause()
+        audio = np.ones((1600, 1), dtype=np.float32) * 0.1  # 100ms block
+        capture._audio_callback(audio, 1600, None, MagicMock(spec=False))
+        # Buffer should stay empty since paused early-returns
+        assert len(capture.buffer) == 0
+        assert capture._chunk_queue.empty()
+
+    def test_audio_callback_works_after_resume(self, capture: AudioCapture) -> None:
+        """After resume, audio callback should enqueue chunks normally."""
+        capture.pause()
+        capture.resume()
+
+        # Feed enough audio to create a full chunk (4s * 16000 = 64000 samples)
+        # Feed in 100ms blocks
+        for _ in range(41):  # 41 * 1600 = 65600 > 64000
+            audio = np.ones((1600, 1), dtype=np.float32) * 0.05
+            capture._audio_callback(audio, 1600, None, MagicMock(spec=False))
+
+        assert not capture._chunk_queue.empty()
+
+
 class TestStop:
     """Tests for stop() behavior."""
 

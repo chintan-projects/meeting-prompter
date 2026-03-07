@@ -57,6 +57,7 @@ class AudioCapture:
         self.buffer = np.array([], dtype=np.float32)
         self.buffer_lock = threading.Lock()
         self.running = False
+        self._paused = False
         self.callback: Optional[Callable] = None
 
         # Chunk processing queue — replaces thread-per-chunk
@@ -72,8 +73,9 @@ class AudioCapture:
         self._last_peak: float = 0.0
         self._dropped_chunks: int = 0
 
-        # Session recording — accumulates all raw audio
+        # Session recording — accumulates all raw audio with timestamps
         self._session_audio: List[np.ndarray] = []
+        self._session_timestamps: List[float] = []  # wall-clock time per chunk
         self._recording_lock = threading.Lock()
 
         # Per-chunk audio features for speaker attribution
@@ -92,6 +94,9 @@ class AudioCapture:
         Must not block. Extracts complete chunks from the rolling buffer
         and enqueues them for the worker thread.
         """
+        if self._paused:
+            return
+
         if status:
             logger.warning("Audio status: %s", status)
 
@@ -258,9 +263,10 @@ class AudioCapture:
             with self._features_lock:
                 self._chunk_features.append(features)
 
-            # Accumulate for session recording
+            # Accumulate for session recording (with timestamp for segment retrieval)
             with self._recording_lock:
                 self._session_audio.append(chunk)
+                self._session_timestamps.append(timestamp)
 
             # Save to temporary WAV file for ASR
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
@@ -283,6 +289,7 @@ class AudioCapture:
         self.callback = callback
         self.running = True
         self._session_audio = []
+        self._session_timestamps = []
         self._dropped_chunks = 0
 
         # Start the single worker thread
@@ -322,6 +329,24 @@ class AudioCapture:
             except KeyboardInterrupt:
                 self.running = False
 
+    @property
+    def paused(self) -> bool:
+        """Whether audio capture is paused."""
+        return self._paused
+
+    def pause(self) -> None:
+        """Pause audio capture. Stream stays alive, chunks are discarded."""
+        self._paused = True
+        logger.info("Audio capture paused: %s", self.device)
+
+    def resume(self) -> None:
+        """Resume audio capture after pause."""
+        self._paused = False
+        # Clear buffer so we don't process stale overlap data
+        with self.buffer_lock:
+            self.buffer = np.array([], dtype=np.float32)
+        logger.info("Audio capture resumed: %s", self.device)
+
     def stop(self) -> None:
         """Stop audio capture and drain remaining chunks."""
         self.running = False
@@ -357,6 +382,39 @@ class AudioCapture:
             output_path.stat().st_size / (1024 * 1024),
         )
         return True
+
+    def get_audio_segment(
+        self, start_time: float, end_time: float,
+    ) -> Optional[np.ndarray]:
+        """Retrieve raw audio for a time range (used by speaker diarization).
+
+        Searches the recorded chunks by timestamp and concatenates those
+        that overlap with the requested time range.
+
+        Args:
+            start_time: Start of range (wall-clock timestamp).
+            end_time: End of range (wall-clock timestamp).
+
+        Returns:
+            1D float32 audio array, or None if no audio in range.
+        """
+        with self._recording_lock:
+            if not self._session_audio:
+                return None
+
+            chunks: List[np.ndarray] = []
+            chunk_duration = self.chunk_duration
+
+            for i, ts in enumerate(self._session_timestamps):
+                chunk_end = ts + chunk_duration
+                # Chunk overlaps with requested range
+                if chunk_end >= start_time and ts <= end_time:
+                    chunks.append(self._session_audio[i])
+
+            if not chunks:
+                return None
+
+            return np.concatenate(chunks)
 
 
 def list_audio_devices() -> None:

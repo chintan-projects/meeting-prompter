@@ -26,11 +26,15 @@ models:
     top_k: 5                 # number of chunks to retrieve (was 3)
 
 buffer:
+  # ConversationBuffer (trigger pipeline)
   pause_threshold: 1.5       # seconds of silence to trigger flush
   max_buffer_time: 8.0       # max seconds before forced flush
   min_words: 4               # minimum words for valid question
   confidence_threshold: 0.3  # minimum question confidence
   min_start_score: 0.1       # minimum score to start buffering
+  # TranscriptBuffer (turn detection for UI)
+  turn_pause: 2.0            # seconds of silence to finalize a turn
+  max_turn_duration: 30.0    # safety cap: longest single turn allowed
 
 detection:
   question_score_threshold: 0.25
@@ -58,6 +62,13 @@ refiner:
   enabled: true
   min_words_to_refine: 5    # skip LFM cleanup for very short turns
   max_tokens_ratio: 1.5     # max output tokens = input words * ratio
+
+diarization:
+  enabled: false              # Tier 2: neural speaker diarization on system audio
+  max_speakers: 6             # maximum distinct speakers to track
+  similarity_threshold: 0.65  # cosine similarity for same-speaker match
+  min_audio_duration: 1.0     # skip turns shorter than this (seconds)
+  embedding_model: "speechbrain/spkrec-ecapa-voxceleb"
 
 paths:
   docs_dir: "docs"

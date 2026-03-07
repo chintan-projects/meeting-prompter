@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 from src.api.session import Session
@@ -434,3 +435,491 @@ class TestSessionLifecycle:
         assert status["audio_health"]["total_chunks"] == 10
         assert status["audio_health"]["speech_chunks"] == 3
         assert status["audio_health"]["all_silent"] is False
+
+
+class TestPauseResume:
+    """Tests for session pause/resume and timer tracking."""
+
+    def test_initial_not_paused(self) -> None:
+        """Fresh session should not be paused."""
+        session = Session()
+        assert session.is_paused is False
+
+    def test_pause_sets_flag(self) -> None:
+        """pause() should set is_paused when running."""
+        session = Session()
+        session._running = True
+        session._start_time = time.time()
+        session.pause()
+        assert session.is_paused is True
+
+    def test_pause_noop_when_not_running(self) -> None:
+        """pause() should be a no-op when session is not running."""
+        session = Session()
+        session.pause()
+        assert session.is_paused is False
+
+    def test_pause_noop_when_already_paused(self) -> None:
+        """pause() should be a no-op if already paused."""
+        session = Session()
+        session._running = True
+        session._start_time = time.time()
+        session.pause()
+        first_pause_start = session._pause_start
+        session.pause()  # Should not reset _pause_start
+        assert session._pause_start == first_pause_start
+
+    def test_resume_clears_flag(self) -> None:
+        """resume() should clear the paused flag."""
+        session = Session()
+        session._running = True
+        session._start_time = time.time()
+        session.pause()
+        assert session.is_paused is True
+        session.resume()
+        assert session.is_paused is False
+
+    def test_resume_noop_when_not_paused(self) -> None:
+        """resume() should be a no-op if not paused."""
+        session = Session()
+        session._running = True
+        session._start_time = time.time()
+        session.resume()
+        assert session._total_pause_time == 0.0
+
+    def test_elapsed_excludes_pause_time(self) -> None:
+        """elapsed_seconds should exclude time spent paused."""
+        session = Session()
+        session._start_time = time.time() - 20.0
+        session._total_pause_time = 5.0
+        elapsed = session.elapsed_seconds
+        assert 14.5 < elapsed < 16.0
+
+    def test_elapsed_accounts_for_active_pause(self) -> None:
+        """elapsed_seconds during active pause should exclude current pause duration."""
+        session = Session()
+        session._start_time = time.time() - 10.0
+        session._running = True
+        session._paused = True
+        session._pause_start = time.time() - 3.0  # Paused 3 seconds ago
+        session._total_pause_time = 0.0
+
+        elapsed = session.elapsed_seconds
+        # Total 10s, minus ~3s pause → ~7s
+        assert 6.5 < elapsed < 8.0
+
+    def test_resume_accumulates_pause_duration(self) -> None:
+        """resume() should add the pause duration to _total_pause_time."""
+        session = Session()
+        session._running = True
+        session._start_time = time.time() - 10.0
+        session._paused = True
+        session._pause_start = time.time() - 2.0  # Paused 2 seconds ago
+
+        session.resume()
+        assert session._total_pause_time >= 1.5  # At least ~2 seconds
+        assert session._pause_start == 0.0  # Reset
+
+    def test_pause_flushes_transcript_buffer(self) -> None:
+        """pause() should flush the active turn in transcript buffer."""
+        session = Session()
+        session._running = True
+        session._start_time = time.time()
+
+        # Add a chunk to create an active turn
+        session._on_transcription("some speech here", time.time())
+        assert session._transcript_buffer.active_turn is not None
+
+        session.pause()
+        assert session._transcript_buffer.active_turn is None
+
+    def test_pause_pauses_audio_captures(self) -> None:
+        """pause() should call pause on both orchestrator audio and mic capture."""
+        session = Session()
+        session._running = True
+        session._start_time = time.time()
+
+        mock_orch = MagicMock()
+        session._orchestrator = mock_orch
+        mock_mic = MagicMock()
+        session._mic_capture = mock_mic
+
+        session.pause()
+        mock_orch.audio.pause.assert_called_once()
+        mock_mic.pause.assert_called_once()
+
+    def test_resume_resumes_audio_captures(self) -> None:
+        """resume() should call resume on both orchestrator audio and mic capture."""
+        session = Session()
+        session._running = True
+        session._paused = True
+        session._pause_start = time.time()
+        session._start_time = time.time()
+
+        mock_orch = MagicMock()
+        session._orchestrator = mock_orch
+        mock_mic = MagicMock()
+        session._mic_capture = mock_mic
+
+        session.resume()
+        mock_orch.audio.resume.assert_called_once()
+        mock_mic.resume.assert_called_once()
+
+    def test_status_includes_paused(self) -> None:
+        """get_status() should include the paused flag."""
+        session = Session()
+        status = session.get_status()
+        assert "paused" in status
+        assert status["paused"] is False
+
+        session._running = True
+        session._paused = True
+        status = session.get_status()
+        assert status["paused"] is True
+
+
+class TestContextOnStart:
+    """Tests for meeting context being set during session start."""
+
+    def test_meeting_context_set_before_pipeline(self) -> None:
+        """Meeting context should be available before pipeline runs."""
+        from lib.conversation.meeting_context import MeetingContext
+
+        session = Session()
+        session.meeting_context = MeetingContext(
+            title="Sprint Planning",
+            agenda_items=["Review roadmap", "Sprint goals"],
+            watch_words=["budget", "timeline"],
+            participants=["Alice (PM)", "Bob (Eng)"],
+        )
+
+        assert session.meeting_context.title == "Sprint Planning"
+        assert len(session.meeting_context.agenda_items) == 2
+        assert "budget" in session.meeting_context.watch_words
+
+    def test_status_shows_meeting_title(self) -> None:
+        """get_status() should include the meeting title from context."""
+        from lib.conversation.meeting_context import MeetingContext
+
+        session = Session()
+        session.meeting_context = MeetingContext(
+            title="Design Review",
+            agenda_items=[],
+            watch_words=[],
+            participants=[],
+        )
+
+        status = session.get_status()
+        assert status["meeting_title"] == "Design Review"
+
+    def test_no_context_shows_empty_title(self) -> None:
+        """Without context, meeting_title should be empty."""
+        session = Session()
+        status = session.get_status()
+        assert status["meeting_title"] == ""
+
+
+class TestTriggerHistory:
+    """Tests for trigger result accumulation (F-106)."""
+
+    def test_initial_trigger_history_empty(self) -> None:
+        """Fresh session should have empty trigger history."""
+        session = Session()
+        assert session.trigger_history == []
+
+    @pytest.mark.asyncio
+    async def test_trigger_result_accumulates(self) -> None:
+        """_on_trigger_result should append to trigger_history."""
+        from lib.generation.types import GenerationResult
+        from lib.triggers.types import Trigger, TriggerType
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        trigger = Trigger(
+            type=TriggerType.QUESTION,
+            text="What is the timeline?",
+            confidence=0.8,
+        )
+        result = GenerationResult(
+            answer="Q2 beta release",
+            trigger_type=TriggerType.QUESTION,
+            confidence=0.75,
+            method="hybrid",
+            latency_ms=480,
+            source="docs/roadmap.md",
+        )
+
+        session._on_trigger_result(trigger, result)
+
+        assert len(session.trigger_history) == 1
+        entry = session.trigger_history[0]
+        assert entry["trigger_type"] == "question"
+        assert entry["trigger_text"] == "What is the timeline?"
+        assert entry["answer"] == "Q2 beta release"
+        assert entry["confidence"] == 0.75
+
+    @pytest.mark.asyncio
+    async def test_multiple_triggers_accumulate(self) -> None:
+        """Multiple trigger results should all be stored."""
+        from lib.generation.types import GenerationResult
+        from lib.triggers.types import Trigger, TriggerType
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        for i in range(3):
+            trigger = Trigger(
+                type=TriggerType.QUESTION,
+                text=f"Question {i}?",
+                confidence=0.7,
+            )
+            result = GenerationResult(
+                answer=f"Answer {i}",
+                trigger_type=TriggerType.QUESTION,
+                confidence=0.6,
+                method="hybrid",
+                latency_ms=100,
+                source="test",
+            )
+            session._on_trigger_result(trigger, result)
+
+        assert len(session.trigger_history) == 3
+
+    def test_trigger_history_returns_copy(self) -> None:
+        """trigger_history property should return a copy, not the internal list."""
+        session = Session()
+        history = session.trigger_history
+        history.append({"fake": True})
+        assert len(session.trigger_history) == 0  # Internal list unchanged
+
+
+class TestDiarizationIntegration:
+    """Tests for Tier 2 neural speaker diarization in session pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_relabel_speaker_updates_store_and_queue(self) -> None:
+        """_relabel_speaker should upsert new speaker and emit transcript_relabeled."""
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        # Mock diarizer that returns "Speaker B"
+        mock_diarizer = MagicMock()
+        mock_diarizer.process_turn.return_value = "Speaker B"
+        session._diarizer = mock_diarizer
+
+        # Mock orchestrator with audio segment
+        mock_orch = MagicMock()
+        mock_orch.audio.get_audio_segment.return_value = np.zeros(32000, dtype=np.float32)
+        session._orchestrator = mock_orch
+
+        turn = Turn(
+            id="turn-1", text="hello from system",
+            start_timestamp=100.0, end_timestamp=104.0,
+            is_final=True, source="system", speaker="Others",
+        )
+        session._relabel_speaker(turn)
+
+        await asyncio.sleep(0.02)
+        msg = session._transcript_queue.get_nowait()
+        assert msg["type"] == "transcript_relabeled"
+        assert msg["speaker"] == "Speaker B"
+        assert msg["id"] == "turn-1"
+        assert msg["source"] == "system"
+
+        # Check transcript store was updated
+        merged = session.transcript.get_merged()
+        assert merged[0]["speaker"] == "Speaker B"
+
+    @pytest.mark.asyncio
+    async def test_relabel_skipped_when_speaker_unchanged(self) -> None:
+        """If diarizer returns same speaker, no relabeled message emitted."""
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        mock_diarizer = MagicMock()
+        mock_diarizer.process_turn.return_value = "Others"  # Same as initial
+        session._diarizer = mock_diarizer
+
+        mock_orch = MagicMock()
+        mock_orch.audio.get_audio_segment.return_value = np.zeros(32000, dtype=np.float32)
+        session._orchestrator = mock_orch
+
+        turn = Turn(
+            id="turn-1", text="hello",
+            start_timestamp=100.0, end_timestamp=104.0,
+            is_final=True, source="system", speaker="Others",
+        )
+        session._relabel_speaker(turn)
+
+        await asyncio.sleep(0.02)
+        assert session._transcript_queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_relabel_skipped_when_no_audio(self) -> None:
+        """If no audio segment available, relabeling should be skipped."""
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        mock_diarizer = MagicMock()
+        session._diarizer = mock_diarizer
+
+        mock_orch = MagicMock()
+        mock_orch.audio.get_audio_segment.return_value = None
+        session._orchestrator = mock_orch
+
+        turn = Turn(
+            id="turn-1", text="hello",
+            start_timestamp=100.0, end_timestamp=104.0,
+            is_final=True, source="system", speaker="Others",
+        )
+        session._relabel_speaker(turn)
+
+        mock_diarizer.process_turn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_diarization_only_on_system_turns(self) -> None:
+        """_on_turn_final should only diarize system turns, not mic turns."""
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        mock_diarizer = MagicMock()
+        session._diarizer = mock_diarizer
+
+        # Mic turn — should NOT trigger diarization
+        mic_turn = Turn(
+            id="turn-1", text="my speech",
+            start_timestamp=100.0, end_timestamp=104.0,
+            is_final=True, source="mic",
+        )
+        session._on_turn_final(mic_turn)
+
+        await asyncio.sleep(0.01)
+        mock_diarizer.process_turn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_diarization_disabled_no_relabel(self) -> None:
+        """With diarizer=None, system turns keep 'Others' label."""
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+        session._diarizer = None
+
+        turn = Turn(
+            id="turn-1", text="system speech",
+            start_timestamp=100.0, end_timestamp=104.0,
+            is_final=True, source="system",
+        )
+        session._on_turn_final(turn)
+
+        assert turn.speaker == "Others"
+        await asyncio.sleep(0.01)
+        messages = []
+        while not session._transcript_queue.empty():
+            messages.append(session._transcript_queue.get_nowait())
+
+        types = [m["type"] for m in messages]
+        assert "transcript_relabeled" not in types
+        assert "transcript_final" in types
+
+    @pytest.mark.asyncio
+    async def test_relabel_failure_graceful(self) -> None:
+        """Diarization failure should log warning, not crash."""
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        mock_diarizer = MagicMock()
+        mock_diarizer.process_turn.side_effect = RuntimeError("model error")
+        session._diarizer = mock_diarizer
+
+        mock_orch = MagicMock()
+        mock_orch.audio.get_audio_segment.return_value = np.zeros(32000, dtype=np.float32)
+        session._orchestrator = mock_orch
+
+        turn = Turn(
+            id="turn-1", text="hello",
+            start_timestamp=100.0, end_timestamp=104.0,
+            is_final=True, source="system", speaker="Others",
+        )
+        # Should not raise
+        session._relabel_speaker(turn)
+
+        # No relabeled message should be emitted
+        await asyncio.sleep(0.01)
+        assert session._transcript_queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_on_turn_final_with_refiner_and_diarizer(self) -> None:
+        """Full pipeline: finalize → polish → diarize, all three messages emitted."""
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+
+        # Mock refiner
+        mock_refiner = MagicMock()
+        mock_refiner.refine.return_value = "Polished system speech."
+        session._text_refiner = mock_refiner
+
+        # Mock diarizer
+        mock_diarizer = MagicMock()
+        mock_diarizer.process_turn.return_value = "Speaker C"
+        session._diarizer = mock_diarizer
+
+        # Mock orchestrator with audio
+        mock_orch = MagicMock()
+        mock_orch.audio.get_audio_segment.return_value = np.zeros(32000, dtype=np.float32)
+        session._orchestrator = mock_orch
+
+        turn = Turn(
+            id="turn-1", text="system speech here",
+            start_timestamp=100.0, end_timestamp=104.0,
+            is_final=True, source="system",
+        )
+        session._on_turn_final(turn)
+
+        await asyncio.sleep(0.03)
+        messages = []
+        while not session._transcript_queue.empty():
+            messages.append(session._transcript_queue.get_nowait())
+
+        types = [m["type"] for m in messages]
+        assert "transcript_final" in types
+        assert "transcript_polished" in types
+        assert "transcript_relabeled" in types
+
+        relabeled = next(m for m in messages if m["type"] == "transcript_relabeled")
+        assert relabeled["speaker"] == "Speaker C"
+
+
+class TestConfigWiring:
+    """Tests for config-driven TranscriptBuffer parameters (F-105)."""
+
+    def test_default_buffer_params(self) -> None:
+        """Default config should wire turn_pause=2.0, max_turn_duration=30.0."""
+        session = Session()
+        assert session._transcript_buffer._turn_pause == 2.0
+        assert session._transcript_buffer._max_turn_duration == 30.0
+
+    def test_custom_buffer_params_from_config(self) -> None:
+        """Custom config values should be wired to TranscriptBuffer."""
+        from lib.config import AppConfig, load_config
+
+        config = load_config()
+        config.buffer.turn_pause = 3.5
+        config.buffer.max_turn_duration = 45.0
+
+        session = Session(config=config)
+        assert session._transcript_buffer._turn_pause == 3.5
+        assert session._transcript_buffer._max_turn_duration == 45.0

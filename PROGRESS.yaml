@@ -2,44 +2,42 @@
 # Stays LEAN. Only active/in-progress state here.
 
 current_phase: "app-integration"
-current_focus: "Live end-to-end testing with dual-stream audio"
+current_focus: "Live end-to-end testing with dual-stream + diarization"
 
 active_work:
-  - id: "WS-10"
-    name: "Live dual-stream test in Tauri app"
+  - id: "WS-12"
+    name: "Live dual-stream + Tier 2 diarization test"
     status: pending
-    notes: "Tier 1 dual-stream attribution implemented. Needs real mic + BlackHole validation."
+    notes: "Tier 1 + Tier 2 implemented. Needs real mic + BlackHole validation."
 
 blockers: []
 
 pending_decisions: []
 
 recent_sessions:
+  - id: "session-011"
+    date: "2026-03-06"
+    focus: "Tier 2 neural speaker diarization implementation"
+    completed:
+      - "SpeakerDiarizer with ECAPA-TDNN embeddings + online centroid clustering"
+      - "Async speaker relabeling in session pipeline (zero transcription latency)"
+      - "Multi-speaker color cycling in TranscriptPane (6-color palette)"
+      - "Frontend vitest infrastructure + useKeyboardShortcuts tests"
+      - "274 tests passing (33 new), 16 frontend tests, TypeScript strict passes"
+    next_recommended: "Live test with diarization.enabled=true, verify Speaker A/B/C labels"
   - id: "session-010"
     date: "2026-03-06"
     focus: "Thread-safe LLM, F-103/104 polish, F-105/106 implementation"
     completed:
-      - "Thread-safe RAGAnswerGenerator.generate_text() — replaced monkey-patch lock"
-      - "F-103 Meeting Setup + F-104 Keyboard Shortcuts + Pause/Resume"
-      - "F-105 Config-driven buffer params + refiner latency logging"
-      - "F-106 Post-meeting summary: context + trigger history in notes generation"
-      - "241 tests passing (78 new), TypeScript strict passes"
+      - "Thread-safe RAGAnswerGenerator, F-103/104/105/106, 241 tests"
     next_recommended: "Live test with mic + BlackHole — verify full flow end-to-end"
   - id: "session-009"
     date: "2026-03-06"
     focus: "Tier 1 dual-stream source-based speaker attribution"
     completed:
-      - "Dual-stream audio: mic (You) + system (Others), deterministic attribution"
-      - "Deleted speaker_tracker + audio_features, chat-bubble UI, 163 tests pass"
+      - "Dual-stream audio: mic (You) + system (Others), 163 tests pass"
     next_recommended: "Live test with mic + BlackHole — verify You/Others labels work"
-  - id: "session-008"
-    date: "2026-03-06"
-    focus: "Speaker attribution research + dual-stream architecture plan"
-    completed:
-      - "Deep research into production diarization (Zoom, Teams, wave-apple, pyannote, diart)"
-      - "Created docs/speaker-attribution.md with three-tier progression"
-    next_recommended: "Implement Tier 1 dual-stream source separation"
 
 completed_summary:
-  total_items: 38
-  total_sessions: 10
+  total_items: 39
+  total_sessions: 11

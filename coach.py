@@ -6,11 +6,14 @@ Powered by LFM2.5 models running 100% locally on Apple Silicon.
 Usage:
   python coach.py                              # Live meeting (BlackHole)
   python coach.py --mic                        # Test with microphone
+  python coach.py --app zoom                   # Per-app capture (ScreenCaptureKit)
+  python coach.py --list-apps                  # List capturable apps
   python coach.py --test audio.wav             # Test with audio file
   python coach.py --context meeting_context.yaml  # Load meeting context
   python coach.py --list-devices               # List audio devices
   python coach.py --create-context             # Create template context file
 """
+
 import os
 
 # Suppress tokenizer parallelism warning (must be before HuggingFace imports)
@@ -27,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.audio_capture import list_audio_devices
 from lib.config import load_config
 from lib.conversation.meeting_context import create_meeting_template
-from lib.dashboard import display_header, display_status
+from lib.dashboard import display_status
 from lib.orchestrator import MeetingOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -80,22 +83,26 @@ Examples:
 """,
     )
     parser.add_argument(
-        "--device", "-d",
+        "--device",
+        "-d",
         default="BlackHole 2ch",
         help="Audio input device name (default: BlackHole 2ch)",
     )
     parser.add_argument(
-        "--mic", "-m",
+        "--mic",
+        "-m",
         action="store_true",
         help="Use MacBook microphone instead of BlackHole",
     )
     parser.add_argument(
-        "--test", "-t",
+        "--test",
+        "-t",
         type=Path,
         help="Test mode: transcribe a single audio file",
     )
     parser.add_argument(
-        "--context", "-c",
+        "--context",
+        "-c",
         type=Path,
         help="Path to meeting_context.yaml for pre-meeting config",
     )
@@ -110,12 +117,24 @@ Examples:
         help="Path to config.yaml (default: ./config.yaml)",
     )
     parser.add_argument(
-        "--list-devices", "-l",
+        "--list-devices",
+        "-l",
         action="store_true",
         help="List available audio devices and exit",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--app",
+        type=str,
+        help="Capture audio from a specific app (name or PID) via ScreenCaptureKit",
+    )
+    parser.add_argument(
+        "--list-apps",
+        action="store_true",
+        help="List running apps available for audio capture and exit",
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
         action="store_true",
         help="Enable debug logging",
     )
@@ -129,6 +148,22 @@ Examples:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    if args.list_apps:
+        from lib.system_audio_capture import SystemAudioCapture
+
+        if not SystemAudioCapture.is_available():
+            print("Per-app audio capture not available (requires macOS 13+)")
+            sys.exit(1)
+        apps = SystemAudioCapture.list_apps()
+        if not apps:
+            print("No capturable apps found.")
+        else:
+            print(f"\n{'PID':>7}  {'Name':<30}  Bundle ID")
+            print("-" * 70)
+            for app in apps:
+                print(f"{app['pid']:>7}  {app['name']:<30}  {app.get('bundle_id', '')}")
+        return
 
     if args.list_devices:
         list_audio_devices()
@@ -147,8 +182,40 @@ Examples:
         _test_transcription(args.test)
         return
 
-    # Determine audio device
-    if args.mic:
+    # Determine audio capture mode
+    audio_capture = None
+    if args.app:
+        from lib.system_audio_capture import SystemAudioCapture
+
+        if not SystemAudioCapture.is_available():
+            print("Per-app audio capture not available (requires macOS 13+)")
+            sys.exit(1)
+        # Resolve app name or PID
+        apps = SystemAudioCapture.list_apps()
+        target = None
+        try:
+            target_pid = int(args.app)
+            target = next((a for a in apps if a["pid"] == target_pid), None)
+        except ValueError:
+            # Match by name (case-insensitive substring)
+            query = args.app.lower()
+            target = next((a for a in apps if query in str(a["name"]).lower()), None)
+
+        if not target:
+            print(f"App not found: {args.app}")
+            print("Available apps:")
+            for app in apps:
+                print(f"  {app['pid']:>7}  {app['name']}")
+            sys.exit(1)
+
+        audio_capture = SystemAudioCapture(
+            pid=int(target["pid"]),
+            app_name=str(target["name"]),
+        )
+        audio_device = "none"
+        print(f"\nAPP CAPTURE MODE: {target['name']} (PID {target['pid']})")
+        print("  Audio captured directly from the app via ScreenCaptureKit\n")
+    elif args.mic:
         audio_device = "MacBook Pro Microphone"
         print("\nMIC MODE: Speak into your microphone to test")
         print("  (Use without --mic for live meetings with BlackHole)\n")
@@ -163,6 +230,7 @@ Examples:
         config=config,
         audio_device=audio_device,
         meeting_context_path=args.context,
+        audio_capture=audio_capture,
     )
     orchestrator.run()
 

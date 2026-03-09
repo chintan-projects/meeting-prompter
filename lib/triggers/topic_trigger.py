@@ -7,7 +7,7 @@ proactive information surfacing before a question is asked.
 import logging
 import re
 import time
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from lib.config import TriggerConfig
 from .types import RAGQueryable, Trigger, TriggerType

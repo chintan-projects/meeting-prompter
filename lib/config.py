@@ -1,4 +1,5 @@
 """Application configuration loader with typed dataclasses."""
+
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,7 @@ class AudioConfig:
     peak_threshold: float = 0.02
     device_default: str = "BlackHole 2ch"
     device_mic: str = "MacBook Pro Microphone"
+    capture_mode: str = "auto"  # "auto", "app", "device"
 
 
 @dataclass
@@ -88,10 +90,10 @@ class TriggerConfig:
     followup_pause_threshold: float = 3.0
     followup_rag_threshold: float = 0.40
     watch_words: List[str] = field(default_factory=list)
-    min_answer_length: int = 10           # suppress answers shorter than this (F-202)
-    dismiss_persistent_ms: int = 0        # 0 = no auto-dismiss (Answer, Heads Up)
-    dismiss_standard_ms: int = 90_000     # Suggest cards auto-dismiss (ms)
-    dismiss_ephemeral_ms: int = 45_000    # FYI cards auto-dismiss (ms)
+    min_answer_length: int = 10  # suppress answers shorter than this (F-202)
+    dismiss_persistent_ms: int = 0  # 0 = no auto-dismiss (Answer, Heads Up)
+    dismiss_standard_ms: int = 90_000  # Suggest cards auto-dismiss (ms)
+    dismiss_ephemeral_ms: int = 45_000  # FYI cards auto-dismiss (ms)
 
 
 @dataclass
@@ -151,13 +153,14 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
     """Load configuration from YAML file, falling back to defaults.
 
     Args:
-        config_path: Path to config.yaml. If None, looks in CWD.
+        config_path: Path to config.yaml. If None, uses lib.paths resolver.
 
     Returns:
         Populated AppConfig with values from file or defaults.
     """
-    if config_path is None:
-        config_path = Path("config.yaml")
+    from lib.paths import get_config_path
+
+    config_path = get_config_path(config_path)
 
     if not config_path.exists():
         logger.info("No config.yaml found, using defaults")

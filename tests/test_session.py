@@ -1,8 +1,6 @@
 """Tests for src.api.session — callback-based pipeline and session lifecycle."""
 import asyncio
 import time
-from pathlib import Path
-from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -1010,7 +1008,7 @@ class TestConfigWiring:
 
     def test_custom_buffer_params_from_config(self) -> None:
         """Custom config values should be wired to TranscriptBuffer."""
-        from lib.config import AppConfig, load_config
+        from lib.config import load_config
 
         config = load_config()
         config.buffer.turn_pause = 3.5

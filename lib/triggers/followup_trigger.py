@@ -4,7 +4,6 @@ Fires after a 3+ second pause following a substantive statement, when
 RAG has related content the user might want to bring up.
 """
 import logging
-import time
 from typing import Optional
 
 from lib.config import TriggerConfig

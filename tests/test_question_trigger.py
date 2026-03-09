@@ -1,5 +1,4 @@
 """Tests for question trigger — scoring, rhetorical suppression (F-201)."""
-import pytest
 
 from lib.triggers.question_trigger import (
     score_question,

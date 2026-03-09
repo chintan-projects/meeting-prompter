@@ -5,29 +5,28 @@ use tauri::Manager;
 
 struct PythonBackend(Mutex<Option<Child>>);
 
-/// Resolve project root: src-tauri → app → project root.
-fn project_root() -> PathBuf {
-    // During `cargo run` / `tauri dev`, cwd is app/src-tauri/
-    // Go up two levels to reach the project root.
+/// Resolve project root.
+///
+/// In packaged mode (.app), `MEETING_PROMPTER_ROOT` env var points to the
+/// source tree. In dev mode (`tauri dev`), the cwd is `app/src-tauri/` so
+/// we walk up two levels.
+fn project_root() -> Option<PathBuf> {
+    if let Ok(root) = std::env::var("MEETING_PROMPTER_ROOT") {
+        return Some(PathBuf::from(root));
+    }
+    // Dev: cwd is app/src-tauri/ → parent → parent = project root
     std::env::current_dir()
         .ok()
         .and_then(|p| p.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()))
-        .unwrap_or_default()
 }
 
 /// Spawn the Python FastAPI backend as a sidecar process.
+///
+/// In packaged mode, runs the wrapper script `scripts/meeting-prompter-backend`
+/// which activates the venv and starts uvicorn. In dev mode, runs venv Python
+/// directly.
 fn spawn_backend() -> Option<Child> {
-    let root = project_root();
-
-    // Prefer venv Python over system Python
-    let venv_python = root.join("venv/bin/python3");
-    let python = if venv_python.exists() {
-        venv_python.to_string_lossy().into_owned()
-    } else {
-        "python3".to_string()
-    };
-    eprintln!("[tauri] Project root: {}", root.display());
-    eprintln!("[tauri] Using Python: {python}");
+    let root = project_root()?;
 
     let models_dir = std::env::var("MODELS_DIR").unwrap_or_else(|_| {
         dirs::home_dir()
@@ -35,19 +34,41 @@ fn spawn_backend() -> Option<Child> {
             .unwrap_or_default()
     });
 
-    let child = Command::new(&python)
-        .args([
-            "-m",
-            "uvicorn",
-            "src.api.main:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "8420",
-        ])
-        .env("MODELS_DIR", &models_dir)
-        .current_dir(&root)
-        .spawn();
+    eprintln!("[tauri] Project root: {}", root.display());
+
+    // Check for wrapper script (packaged mode)
+    let wrapper = root.join("scripts/meeting-prompter-backend");
+    let child = if wrapper.exists() && wrapper.is_file() {
+        eprintln!("[tauri] Using wrapper script: {}", wrapper.display());
+        Command::new(&wrapper)
+            .env("MEETING_PROMPTER_ROOT", &root)
+            .env("MODELS_DIR", &models_dir)
+            .current_dir(&root)
+            .spawn()
+    } else {
+        // Dev mode: direct venv Python
+        let venv_python = root.join("venv/bin/python3");
+        let python = if venv_python.exists() {
+            venv_python.to_string_lossy().into_owned()
+        } else {
+            "python3".to_string()
+        };
+        eprintln!("[tauri] Using Python: {python}");
+
+        Command::new(&python)
+            .args([
+                "-m",
+                "uvicorn",
+                "src.api.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8420",
+            ])
+            .env("MODELS_DIR", &models_dir)
+            .current_dir(&root)
+            .spawn()
+    };
 
     match child {
         Ok(c) => {

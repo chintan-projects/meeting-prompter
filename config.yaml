@@ -9,6 +9,7 @@ audio:
   peak_threshold: 0.02       # minimum peak for speech detection
   device_default: "BlackHole 2ch"
   device_mic: "MacBook Pro Microphone"
+  capture_mode: "auto"            # "auto" (prefer app tap), "app", "device" (legacy BlackHole)
 
 models:
   audio:

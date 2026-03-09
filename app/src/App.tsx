@@ -39,6 +39,8 @@ interface MeetingConfig {
   participants: string[];
   audio_device: string;
   mic_device: string;
+  system_audio_pid: number;
+  system_audio_app: string;
 }
 
 function App() {
@@ -184,6 +186,8 @@ function App() {
         body: JSON.stringify({
           audio_device: config.audio_device,
           mic_device: config.mic_device,
+          system_audio_pid: config.system_audio_pid ?? 0,
+          system_audio_app: config.system_audio_app ?? "",
           title: config.title,
           agenda_items: config.agenda_items,
           watch_words: config.watch_words,
@@ -255,6 +259,8 @@ function App() {
       participants: [],
       audio_device: device,
       mic_device: micDevice ?? "MacBook Pro Microphone",
+      system_audio_pid: 0,
+      system_audio_app: "",
     });
   };
 

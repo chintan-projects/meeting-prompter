@@ -20,6 +20,7 @@ interface AudioHealth {
   total_chunks: number;
   speech_chunks: number;
   all_silent: boolean;
+  capture_error: string;
 }
 
 export function StatusBar({
@@ -57,8 +58,14 @@ export function StatusBar({
           setLoading(data.loading ?? false);
 
           const health = data.audio_health as AudioHealth | undefined;
-          if (health && health.total_chunks > 5 && health.all_silent) {
-            setAudioWarning("No audio detected — check microphone permissions in System Settings");
+          const captureMode = (data.capture_mode as string) ?? "device";
+          if (health?.capture_error) {
+            setAudioWarning(health.capture_error);
+          } else if (health && health.total_chunks > 5 && health.all_silent) {
+            const msg = captureMode === "app_tap"
+              ? "No audio detected — add audio-tap to Screen Recording in System Settings"
+              : "No audio detected — check microphone permissions in System Settings";
+            setAudioWarning(msg);
           } else if (health && health.total_chunks > 0 && !health.all_silent) {
             setAudioWarning("");
           }

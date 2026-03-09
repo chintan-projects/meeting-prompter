@@ -8,7 +8,6 @@ Covers:
 """
 import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -72,7 +71,6 @@ class TestDeadEndSuppression:
     def test_empty_answer_suppressed(self) -> None:
         """Generator returns 'suppressed' method for empty answers."""
         from lib.generation.generator import ModeAwareGenerator
-        from lib.generation.types import GenerationResult
         from lib.triggers.types import Trigger, TriggerType
 
         gen = ModeAwareGenerator(
@@ -94,7 +92,6 @@ class TestDeadEndSuppression:
     def test_short_answer_suppressed(self) -> None:
         """Answers shorter than min_answer_length are suppressed."""
         from lib.generation.generator import ModeAwareGenerator
-        from lib.generation.types import GenerationResult
         from lib.triggers.types import Trigger, TriggerType
 
         gen = ModeAwareGenerator(
@@ -115,7 +112,6 @@ class TestDeadEndSuppression:
     def test_adequate_answer_not_suppressed(self) -> None:
         """Answers at or above min_answer_length pass through."""
         from lib.generation.generator import ModeAwareGenerator
-        from lib.generation.types import GenerationResult
         from lib.triggers.types import Trigger, TriggerType
 
         gen = ModeAwareGenerator(

@@ -234,27 +234,27 @@ def print_report(report: EvalReport) -> None:
     print(f"\nQueries: {report.total_queries} total "
           f"({report.positive_queries} positive, {report.negative_queries} negative)")
 
-    print(f"\n--- Retrieval Quality (positive queries) ---")
+    print("\n--- Retrieval Quality (positive queries) ---")
     print(f"  Hit@1:  {report.mean_hit_at_1:.1%}")
     print(f"  Hit@3:  {report.mean_hit_at_3:.1%}")
     print(f"  MRR:    {report.mean_mrr:.3f}")
 
-    print(f"\n--- Confidence Distribution ---")
+    print("\n--- Confidence Distribution ---")
     print(f"  Min:    {report.confidence_min:.4f}")
     print(f"  Max:    {report.confidence_max:.4f}")
     print(f"  Mean:   {report.confidence_mean:.4f}")
     print(f"  Stdev:  {report.confidence_stdev:.4f}")
 
-    print(f"\n  Histogram:")
+    print("\n  Histogram:")
     for bucket, count in report.confidence_histogram.items():
         bar = "#" * count
         print(f"    {bucket}: {bar} ({count})")
 
     if report.negative_max_confidence > 0:
-        print(f"\n--- Negative Query Analysis ---")
+        print("\n--- Negative Query Analysis ---")
         print(f"  Max confidence on no-match query: {report.negative_max_confidence:.4f}")
 
-    print(f"\n--- Per-Query Results ---")
+    print("\n--- Per-Query Results ---")
     for r in report.results:
         status = "HIT" if r.hit_at_1 else ("hit@3" if r.hit_at_3 else "MISS")
         if not r.expected_docs:

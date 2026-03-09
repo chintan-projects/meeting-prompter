@@ -1,8 +1,7 @@
 """Tests for lib.audio_capture — queue-based processing and health tracking."""
 import queue
 import threading
-import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest

@@ -9,7 +9,7 @@ Replaces question_buffer.py with a richer model that:
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from lib.config import BufferConfig

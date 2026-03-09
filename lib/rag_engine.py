@@ -5,6 +5,7 @@ public API the orchestrator and triggers expect: query() returns
 (context, confidence, source). Drop-in replacement for the old
 ColBERT + Jaccard implementation.
 """
+
 import logging
 import sqlite3
 from pathlib import Path
@@ -45,7 +46,9 @@ class RAGEngine:
             chunk_overlap_tokens=50,
         )
 
-        self._conn = sqlite3.connect(str(self._db_path))
+        # check_same_thread=False: safe because WAL mode allows concurrent reads
+        # and query() is called from multiple pipeline threads (mic + system audio)
+        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
 

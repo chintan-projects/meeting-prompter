@@ -10,14 +10,18 @@ Exposes callback hooks (on_transcription, on_silence_detected,
 on_trigger_result) so the API Session can observe pipeline events
 without monkey-patching process_chunk.
 """
+
 import logging
-import os
 import time
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 from lib.audio_capture import AudioCapture
 from lib.config import AppConfig
+from lib.paths import get_docs_dir, get_models_dir, get_output_dir, get_runner_dir
+
+if TYPE_CHECKING:
+    from lib.audio_protocol import AudioCaptureProtocol
 from lib.conversation.buffer import ConversationBuffer
 from lib.conversation.meeting_context import MeetingContext, load_meeting_context
 from lib.dashboard import Dashboard, display_header, display_status
@@ -31,12 +35,11 @@ from lib.triggers.types import Trigger, TriggerType
 
 logger = logging.getLogger(__name__)
 
-# Paths resolved from env + defaults
-BASE_DIR = Path(__file__).parent.parent
-MODELS_DIR = Path(os.path.expandvars(os.environ.get("MODELS_DIR", str(BASE_DIR / "models"))))
+# Paths resolved via lib.paths (supports dev + packaged modes)
+MODELS_DIR = get_models_dir()
 AUDIO_MODELS_DIR = MODELS_DIR / "LFM2.5-Audio-1.5B-GGUF"
-RUNNER_DIR = BASE_DIR / "runners" / "macos-arm64"
-OUTPUT_FILE = BASE_DIR / "output" / "live_analytics.txt"
+RUNNER_DIR = get_runner_dir()
+OUTPUT_FILE = get_output_dir() / "live_analytics.txt"
 
 # Type aliases for callback signatures
 TranscriptionCallback = Callable[[str, float], None]
@@ -73,6 +76,7 @@ class MeetingOrchestrator:
         audio_device: str = "BlackHole 2ch",
         meeting_context_path: Optional[Path] = None,
         headless: bool = False,
+        audio_capture: "Optional[AudioCaptureProtocol]" = None,
     ) -> None:
         self.config = config
         self._headless = headless
@@ -103,7 +107,7 @@ class MeetingOrchestrator:
             self._status("LFM2-Audio ready (legacy)")
 
         # RAG retrieval (hybrid FTS5 + vector)
-        docs_dir = BASE_DIR / config.paths.docs_dir
+        docs_dir = get_docs_dir(config.paths.docs_dir)
         db_path = Path(config.rag.db_path)
         self._status("Loading RAG engine...")
         from lib.rag import RAGConfig as _RAGConfig
@@ -142,8 +146,8 @@ class MeetingOrchestrator:
         )
         self._status("Generation ready")
 
-        # Audio capture (no on_silence — silence driven by ASR output now)
-        self.audio = AudioCapture(device=audio_device)
+        # Audio capture: use provided capture (e.g. SystemAudioCapture) or default
+        self.audio: "AudioCaptureProtocol" = audio_capture or AudioCapture(device=audio_device)
 
         # Dashboard (skipped in headless/API mode)
         self.dashboard: Optional[Dashboard] = None

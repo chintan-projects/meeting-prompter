@@ -1,5 +1,4 @@
 """Tests for lib.filters — two-level filtering and normalization."""
-import pytest
 
 from lib.filters import is_hallucination, is_hallucination_only, is_noise, normalize_text
 
@@ -23,6 +22,29 @@ class TestIsHallucination:
         assert is_hallucination("Can you explain to me?") is True
         assert is_hallucination("Can you tell me?") is True
         assert is_hallucination("What do you mean?") is True
+
+    def test_single_letter_repetition(self) -> None:
+        """Repeated single-letter hallucination (ASR artifact on silence)."""
+        assert is_hallucination("E E E E") is True
+        assert is_hallucination("A A A") is True
+        assert is_hallucination("O O O O O") is True
+        assert is_hallucination("e e e") is True
+
+    def test_single_letter_with_punctuation(self) -> None:
+        """Single-letter repetition with trailing punctuation."""
+        assert is_hallucination("E E E.") is True
+        assert is_hallucination("A, A, A") is True
+        assert is_hallucination("E E!") is True
+
+    def test_single_letter_not_triggered_on_real_words(self) -> None:
+        """Real words should not be caught by single-letter filter."""
+        assert is_hallucination("I am here") is False
+        assert is_hallucination("Go do it") is False
+
+    def test_single_letter_needs_at_least_two(self) -> None:
+        """Single character alone should not trigger (handled by other filters)."""
+        assert is_hallucination("E") is False
+        assert is_hallucination("A") is False
 
     def test_repetitive_phrases(self) -> None:
         assert is_hallucination("the cat sat on the cat sat on") is True
@@ -132,6 +154,13 @@ class TestFilterLevelDifference:
             "She chose to leave early",
             "I don't know what happened here",
         ]
+        for text in texts:
+            assert is_hallucination_only(text) is True, f"{text} should fail transcript"
+            assert is_noise(text) is True, f"{text} should fail trigger"
+
+    def test_single_letter_hallucination_caught_by_both(self) -> None:
+        """Repeated single-letter ASR artifacts caught by both filter levels."""
+        texts = ["E E E E", "A A A", "O O O O O"]
         for text in texts:
             assert is_hallucination_only(text) is True, f"{text} should fail transcript"
             assert is_noise(text) is True, f"{text} should fail trigger"

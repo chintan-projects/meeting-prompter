@@ -4,19 +4,14 @@ Tests the RAGEngine adapter, RAGPipeline, embedder protocol, PDF parser,
 composite parser, and the end-to-end index→retrieve flow.
 """
 import sqlite3
-import tempfile
 from pathlib import Path
-from typing import Tuple
-from unittest.mock import MagicMock
 
 import pytest
 
 from lib.rag import RAGConfig, RAGPipeline
-from lib.rag.embedder import SentenceTransformerEmbedder
 from lib.rag.parser.composite_parser import CompositeParser
 from lib.rag.parser.pdf_parser import PdfParser
 from lib.rag.parser.text_parser import TextParser
-from lib.rag.types import ParsedDocument, ParsedSection
 from lib.rag_engine import RAGEngine, format_confidence
 
 
@@ -135,7 +130,6 @@ class TestRAGEngineContract:
 
     def test_satisfies_rag_queryable(self, rag_engine: RAGEngine) -> None:
         """RAGEngine should satisfy the RAGQueryable protocol."""
-        from lib.triggers.types import RAGQueryable
 
         # Duck typing check — query method exists with right signature
         assert hasattr(rag_engine, "query")

@@ -216,7 +216,7 @@ def display_summary(
     print(f"{Colors.BOLD}{'=' * 60}{Colors.RESET}")
     print(f"  Total chunks processed: {total_chunks}")
     print(f"  Average RAG confidence: {avg_confidence * 100:.1f}%")
-    print(f"  Vibe breakdown:")
+    print("  Vibe breakdown:")
     for vibe, count in sorted(dominant_vibes.items(), key=lambda x: x[1], reverse=True):
         if count > 0:
             pct = (count / total_chunks) * 100

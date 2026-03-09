@@ -9,6 +9,12 @@ interface AudioDevice {
   channels: number;
 }
 
+interface AppInfo {
+  pid: number;
+  name: string;
+  bundle_id: string;
+}
+
 export interface MeetingConfig {
   title: string;
   agenda_items: string[];
@@ -16,6 +22,8 @@ export interface MeetingConfig {
   participants: string[];
   audio_device: string;
   mic_device: string;
+  system_audio_pid: number;
+  system_audio_app: string;
 }
 
 interface MeetingSetupProps {
@@ -32,30 +40,96 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
   const [audioDevice, setAudioDevice] = useState("BlackHole 2ch");
   const [micDevice, setMicDevice] = useState("MacBook Pro Microphone");
   const [devices, setDevices] = useState<AudioDevice[]>([]);
+  const [appTapAvailable, setAppTapAvailable] = useState(false);
+  const [apps, setApps] = useState<AppInfo[]>([]);
+  const [selectedPid, setSelectedPid] = useState(0);
+  const [permissionGranted, setPermissionGranted] = useState(true);
 
   useEffect(() => {
-    fetch(`${API_BASE}/session/devices`)
+    let cancelled = false;
+    let retryCount = 0;
+    const MAX_RETRIES = 5;
+
+    const fetchSetupData = () => {
+      Promise.all([
+        fetch(`${API_BASE}/session/capture-mode`).then((r) => r.json()).catch(() => null),
+        fetch(`${API_BASE}/session/apps`).then((r) => r.json()).catch(() => null),
+        fetch(`${API_BASE}/session/devices`).then((r) => r.json()).catch(() => null),
+      ]).then(([captureMode, appsData, devicesData]) => {
+        if (cancelled) return;
+
+        // Retry if backend not ready yet (all responses null), up to MAX_RETRIES
+        if (!captureMode && !appsData && !devicesData) {
+          if (retryCount < MAX_RETRIES) {
+            retryCount += 1;
+            setTimeout(fetchSetupData, 1000);
+          }
+          return;
+        }
+
+        // Capture mode
+        if (captureMode?.app_tap_available) {
+          setAppTapAvailable(true);
+        }
+
+        // Running apps
+        if (appsData?.available && appsData.apps) {
+          setApps(appsData.apps as AppInfo[]);
+          setPermissionGranted(appsData.permission_granted ?? true);
+          // Auto-select first meeting-like app (exclude our own app)
+          const meetingPatterns = ["zoom", "teams", "google meet", "webex", "slack", "facetime"];
+          const found = (appsData.apps as AppInfo[]).find((a: AppInfo) => {
+            const name = a.name.toLowerCase();
+            if (name.includes("meeting prompter") || name.includes("meeting-prompter")) {
+              return false;
+            }
+            return meetingPatterns.some((m) => name.includes(m));
+          });
+          if (found) {
+            setSelectedPid(found.pid);
+          }
+        } else if (captureMode?.app_tap_available && !appsData && retryCount < MAX_RETRIES) {
+          // capture-mode responded but apps didn't — retry
+          retryCount += 1;
+          setTimeout(fetchSetupData, 1000);
+          return;
+        }
+
+        // Audio devices (fallback)
+        if (devicesData?.devices) {
+          const devs = devicesData.devices as AudioDevice[];
+          setDevices(devs);
+          if (devs.length > 0 && !devs.some((d) => d.name === "BlackHole 2ch")) {
+            setAudioDevice(devs[0].name);
+          }
+          const mic = devs.find((d) =>
+            d.name.toLowerCase().includes("microphone") ||
+            d.name.toLowerCase().includes("macbook")
+          );
+          if (mic) {
+            setMicDevice(mic.name);
+          }
+        }
+      });
+    };
+
+    fetchSetupData();
+    return () => { cancelled = true; };
+  }, []);
+
+  const selectedApp = apps.find((a) => a.pid === selectedPid);
+
+  const refreshApps = () => {
+    fetch(`${API_BASE}/session/apps`)
       .then((r) => r.json())
       .then((data) => {
-        const devs = data.devices as AudioDevice[];
-        setDevices(devs);
-        // Auto-select system audio device
-        if (devs.length > 0 && !devs.some((d) => d.name === "BlackHole 2ch")) {
-          setAudioDevice(devs[0].name);
-        }
-        // Auto-select mic device
-        const mic = devs.find((d) =>
-          d.name.toLowerCase().includes("microphone") ||
-          d.name.toLowerCase().includes("macbook")
-        );
-        if (mic) {
-          setMicDevice(mic.name);
+        if (data?.apps) {
+          setApps(data.apps as AppInfo[]);
+          setPermissionGranted(data.permission_granted ?? true);
         }
       })
-      .catch(() => {
-        // Fallback if API not ready
-      });
-  }, []);
+      .catch(() => {});
+  };
 
   const handleStart = () => {
     onStart({
@@ -74,7 +148,27 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
         .filter(Boolean),
       audio_device: audioDevice,
       mic_device: micDevice,
+      system_audio_pid: appTapAvailable ? selectedPid : 0,
+      system_audio_app: selectedApp?.name ?? "",
     });
+  };
+
+  const handleQuickStartWithApp = () => {
+    // Quick Start should also use per-app capture when available
+    if (appTapAvailable && selectedPid > 0) {
+      onStart({
+        title: "",
+        agenda_items: [],
+        watch_words: [],
+        participants: [],
+        audio_device: audioDevice,
+        mic_device: micDevice,
+        system_audio_pid: selectedPid,
+        system_audio_app: selectedApp?.name ?? "",
+      });
+    } else {
+      onQuickStart(audioDevice, micDevice);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -141,25 +235,62 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
 
         <div style={styles.deviceRow}>
           <label style={{ ...styles.label, flex: 1 }}>
-            System Audio
-            <select
-              style={styles.input}
-              value={audioDevice}
-              onChange={(e) => setAudioDevice(e.target.value)}
-            >
-              {devices.length > 0 ? (
-                devices.map((d) => (
-                  <option key={d.index} value={d.name}>
-                    {d.name} ({d.channels}ch)
-                  </option>
-                ))
-              ) : (
-                <>
-                  <option value="BlackHole 2ch">BlackHole 2ch</option>
-                  <option value="MacBook Pro Microphone">MacBook Microphone</option>
-                </>
-              )}
-            </select>
+            {appTapAvailable ? "Meeting App" : "System Audio"}
+            {appTapAvailable ? (
+              <>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <select
+                    style={{ ...styles.input, flex: 1 }}
+                    value={selectedPid}
+                    onChange={(e) => setSelectedPid(Number(e.target.value))}
+                  >
+                    <option value={0}>-- Select app --</option>
+                    {apps.map((a) => (
+                      <option key={a.pid} value={a.pid}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    style={styles.refreshBtn}
+                    onClick={refreshApps}
+                    title="Refresh app list"
+                  >
+                    ↻
+                  </button>
+                </div>
+                {!permissionGranted && (
+                  <span style={styles.permWarn}>
+                    Screen Recording permission required — grant in System Settings
+                  </span>
+                )}
+                {permissionGranted && selectedPid === 0 && (
+                  <span style={styles.permWarn}>
+                    Select your meeting app above to capture remote participants
+                  </span>
+                )}
+              </>
+            ) : (
+              <select
+                style={styles.input}
+                value={audioDevice}
+                onChange={(e) => setAudioDevice(e.target.value)}
+              >
+                {devices.length > 0 ? (
+                  devices.map((d) => (
+                    <option key={d.index} value={d.name}>
+                      {d.name} ({d.channels}ch)
+                    </option>
+                  ))
+                ) : (
+                  <>
+                    <option value="BlackHole 2ch">BlackHole 2ch</option>
+                    <option value="MacBook Pro Microphone">MacBook Microphone</option>
+                  </>
+                )}
+              </select>
+            )}
           </label>
 
           <label style={{ ...styles.label, flex: 1 }}>
@@ -194,7 +325,7 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
           </button>
           <button
             style={styles.quickBtn}
-            onClick={() => onQuickStart(audioDevice, micDevice)}
+            onClick={handleQuickStartWithApp}
           >
             Quick Start
           </button>
@@ -286,5 +417,21 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     fontWeight: 600,
     cursor: "pointer",
+  },
+  refreshBtn: {
+    background: "var(--bg-primary)",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    color: "var(--text-secondary)",
+    padding: "6px 10px",
+    fontSize: 14,
+    cursor: "pointer",
+    lineHeight: 1,
+    flexShrink: 0,
+  },
+  permWarn: {
+    color: "#ffaa33",
+    fontSize: 11,
+    marginTop: 2,
   },
 };

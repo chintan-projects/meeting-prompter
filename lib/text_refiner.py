@@ -9,7 +9,6 @@ and speaker intent. On any failure, it returns the original text.
 """
 import logging
 import time
-from typing import Optional
 
 from lib.rag_generator import RAGAnswerGenerator
 

@@ -1,0 +1,29 @@
+#!/bin/bash
+# Backend wrapper for packaged .app mode.
+# Activates the project venv, sets PYTHONPATH, creates Application Support
+# directories for mutable data, and starts the uvicorn server.
+
+set -euo pipefail
+
+ROOT="${MEETING_PROMPTER_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+export MEETING_PROMPTER_ROOT="$ROOT"
+
+# Activate venv
+if [ -f "$ROOT/venv/bin/activate" ]; then
+    source "$ROOT/venv/bin/activate"
+else
+    echo "[meeting-prompter] Warning: venv not found at $ROOT/venv" >&2
+fi
+
+export PYTHONPATH="$ROOT"
+
+# Create mutable data directories in Application Support
+APP_SUPPORT="$HOME/Library/Application Support/com.meetingprompter.app"
+mkdir -p "$APP_SUPPORT/data" "$APP_SUPPORT/output"
+
+# Copy default config if not present
+if [ ! -f "$APP_SUPPORT/config.yaml" ] && [ -f "$ROOT/config.yaml" ]; then
+    cp "$ROOT/config.yaml" "$APP_SUPPORT/config.yaml"
+fi
+
+exec python3 -m uvicorn src.api.main:app --host 127.0.0.1 --port 8420

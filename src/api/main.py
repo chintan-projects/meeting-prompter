@@ -10,6 +10,7 @@ Exposes REST and WebSocket endpoints for:
 Run with:
     uvicorn src.api.main:app --host 127.0.0.1 --port 8420
 """
+
 import logging
 import os
 import sys
@@ -23,13 +24,16 @@ logging.basicConfig(
 )
 
 # Ensure project root is on path for lib imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# In packaged mode, MEETING_PROMPTER_ROOT points to source tree.
+# In dev mode, walk up from src/api/ to project root.
+_project_root = os.environ.get("MEETING_PROMPTER_ROOT") or str(Path(__file__).parent.parent.parent)
+sys.path.insert(0, _project_root)
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-from src.api.routes import session, context, transcript, prompts, notes
+from src.api.routes import session, context, transcript, prompts, notes  # noqa: E402
 
 app = FastAPI(
     title="Meeting Prompter",

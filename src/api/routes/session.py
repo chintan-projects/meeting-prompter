@@ -1,4 +1,5 @@
 """Session management routes — start/stop/pause/resume/status/reindex."""
+
 import logging
 from typing import List, Optional
 
@@ -25,6 +26,9 @@ def get_session() -> Session:
 class StartRequest(BaseModel):
     audio_device: str = "BlackHole 2ch"
     mic_device: str = "MacBook Pro Microphone"
+    # Per-app capture (ScreenCaptureKit) — overrides audio_device when pid > 0
+    system_audio_pid: int = 0
+    system_audio_app: str = ""
     # Meeting context (optional — Quick Start omits these)
     title: str = ""
     agenda_items: List[str] = []
@@ -38,6 +42,7 @@ class AudioHealth(BaseModel):
     last_rms: float = 0.0
     last_peak: float = 0.0
     all_silent: bool = False
+    capture_error: str = ""
 
 
 class StatusResponse(BaseModel):
@@ -48,6 +53,7 @@ class StatusResponse(BaseModel):
     segment_count: int
     meeting_title: str
     audio_health: AudioHealth = AudioHealth()
+    capture_mode: str = "device"
 
 
 @router.get("/devices")
@@ -90,11 +96,20 @@ async def start_session(req: StartRequest) -> dict:
             participants=req.participants,
         )
 
-    _session.start(audio_device=req.audio_device, mic_device=req.mic_device)
+    _session.start(
+        audio_device=req.audio_device,
+        mic_device=req.mic_device,
+        system_audio_pid=req.system_audio_pid,
+        system_audio_app=req.system_audio_app,
+    )
+    capture_mode = "app_tap" if req.system_audio_pid > 0 else "device"
     return {
         "status": "started",
+        "capture_mode": capture_mode,
         "audio_device": req.audio_device,
         "mic_device": req.mic_device,
+        "system_audio_pid": req.system_audio_pid,
+        "system_audio_app": req.system_audio_app,
     }
 
 
@@ -161,3 +176,32 @@ async def reindex_documents() -> dict:
         logger.info("RAG index rebuilt: %d chunks", rag.chunk_count)
         return {"status": "reindexed", "chunk_count": rag.chunk_count}
     return {"status": "error", "detail": "No active session with models loaded"}
+
+
+@router.get("/apps")
+async def list_apps() -> dict:
+    """List running apps available for per-app audio capture.
+
+    Returns app names, PIDs, and bundle IDs. Requires macOS 13+ and
+    Screen Recording permission.
+    """
+    from lib.system_audio_capture import SystemAudioCapture
+
+    if not SystemAudioCapture.is_available():
+        return {"available": False, "apps": [], "reason": "Requires macOS 13+ with Xcode tools"}
+    try:
+        permission = SystemAudioCapture.check_permission()
+        apps = SystemAudioCapture.list_apps()
+        return {"available": True, "apps": apps, "permission_granted": permission}
+    except Exception as e:
+        logger.error("Failed to list apps: %s", e)
+        return {"available": False, "apps": [], "reason": str(e)}
+
+
+@router.get("/capture-mode")
+async def capture_mode() -> dict:
+    """Check if per-app audio capture (ScreenCaptureKit) is available."""
+    from lib.system_audio_capture import SystemAudioCapture
+
+    available = SystemAudioCapture.is_available()
+    return {"app_tap_available": available}

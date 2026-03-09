@@ -8,6 +8,7 @@ Two filter levels:
 
 Normalization is a light pass for text cleanup (duplicates, mishearings).
 """
+
 import re
 from typing import List
 
@@ -50,28 +51,90 @@ _VAGUE_QUESTIONS: List[str] = [
 ]
 
 _NOISE_PHRASES: List[str] = [
-    "yeah", "yeah yeah", "yeah yeah yeah",
-    "um", "uh", "uh huh", "um um",
-    "okay", "ok", "oh", "oh well",
-    "i don't know", "i dunno",
-    "and then", "to that one", "so",
-    "a", "the", "is it", "it is",
-    "hmm", "hm", "ah", "eh",
-    "right", "right right",
-    "sure", "sure sure",
-    "well", "well well",
-    "you know", "like",
+    "yeah",
+    "yeah yeah",
+    "yeah yeah yeah",
+    "um",
+    "uh",
+    "uh huh",
+    "um um",
+    "okay",
+    "ok",
+    "oh",
+    "oh well",
+    "i don't know",
+    "i dunno",
+    "and then",
+    "to that one",
+    "so",
+    "a",
+    "the",
+    "is it",
+    "it is",
+    "hmm",
+    "hm",
+    "ah",
+    "eh",
+    "right",
+    "right right",
+    "sure",
+    "sure sure",
+    "well",
+    "well well",
+    "you know",
+    "like",
 ]
 
-_FILLER_WORDS = frozenset({
-    "yeah", "um", "uh", "okay", "ok", "oh", "well", "so", "like",
-    "right", "hmm", "hm", "ah", "eh", "a", "the", "and", "then",
-    "i", "don't", "know", "just", "to", "that", "one", "it", "is",
-})
+_FILLER_WORDS = frozenset(
+    {
+        "yeah",
+        "um",
+        "uh",
+        "okay",
+        "ok",
+        "oh",
+        "well",
+        "so",
+        "like",
+        "right",
+        "hmm",
+        "hm",
+        "ah",
+        "eh",
+        "a",
+        "the",
+        "and",
+        "then",
+        "i",
+        "don't",
+        "know",
+        "just",
+        "to",
+        "that",
+        "one",
+        "it",
+        "is",
+    }
+)
 
 _QUESTION_STARTERS: List[str] = [
-    "how", "what", "why", "when", "where", "who", "which",
-    "can", "could", "would", "help", "tell", "explain", "does", "do", "is", "are",
+    "how",
+    "what",
+    "why",
+    "when",
+    "where",
+    "who",
+    "which",
+    "can",
+    "could",
+    "would",
+    "help",
+    "tell",
+    "explain",
+    "does",
+    "do",
+    "is",
+    "are",
 ]
 
 _MISHEARING_REPLACEMENTS = [
@@ -101,8 +164,12 @@ def is_hallucination(text: str) -> bool:
     if text_clean in _VAGUE_QUESTIONS:
         return True
 
-    # Repetitive/circular phrases (hallucination symptom)
+    # Repeated single-letter hallucination (e.g. "E E E E", "A A A")
     words = text_lower.split()
+    if len(words) >= 2 and all(len(w.rstrip(".,!?")) <= 1 for w in words):
+        return True
+
+    # Repetitive/circular phrases (hallucination symptom)
     if len(words) >= 6:
         for i in range(len(words) - 5):
             seq = " ".join(words[i : i + 3])

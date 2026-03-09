@@ -7,7 +7,7 @@ import logging
 from typing import List, Optional
 
 from lib.config import TriggerConfig
-from .types import RAGQueryable, Trigger, TriggerType
+from .types import RAGQueryable, Trigger
 from .question_trigger import QuestionTrigger
 from .alert_trigger import AlertTrigger
 from .topic_trigger import TopicTrigger

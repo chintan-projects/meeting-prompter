@@ -12,27 +12,41 @@ Pipeline flow:
     Both streams → on_silence → turn boundaries
     Both streams → ConversationBuffer → trigger engine → prompts
 """
+
 import asyncio
 import logging
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    import numpy as np
 
 from lib.config import AppConfig, load_config
 from lib.conversation.meeting_context import MeetingContext, load_meeting_context
 from lib.diarization import SpeakerDiarizer
 from lib.generation.types import GenerationResult
 from lib.text_refiner import TextRefiner
-from lib.triggers.types import Trigger, TriggerType
+from lib.triggers.types import Trigger
 
 from .transcript_buffer import TranscriptBuffer, Turn
 from .transcript_store import TranscriptStore
 
 logger = logging.getLogger(__name__)
 
-# Output directory for session recordings
-_OUTPUT_DIR = Path(__file__).parent.parent.parent / "output"
+# Output directory for session recordings (resolved via lib.paths)
+_OUTPUT_DIR = None  # lazy-resolved to avoid import-time side effects
+
+
+def _get_output_dir() -> Path:
+    """Lazy-resolve output directory on first use."""
+    global _OUTPUT_DIR  # noqa: PLW0603
+    if _OUTPUT_DIR is None:
+        from lib.paths import get_output_dir
+
+        _OUTPUT_DIR = get_output_dir()
+    return _OUTPUT_DIR
 
 
 class Session:
@@ -118,6 +132,8 @@ class Session:
         self,
         audio_device: str = "BlackHole 2ch",
         mic_device: str = "",
+        system_audio_pid: int = 0,
+        system_audio_app: str = "",
     ) -> None:
         """Start the dual audio pipeline in background threads.
 
@@ -125,6 +141,9 @@ class Session:
             audio_device: System audio device (e.g. "BlackHole 2ch").
             mic_device: Microphone device (e.g. "MacBook Pro Microphone").
                 If empty, falls back to config default.
+            system_audio_pid: PID of app to capture via ScreenCaptureKit.
+                When > 0, bypasses BlackHole and uses per-app capture.
+            system_audio_app: Display name of the captured app (for logging).
         """
         if self._running or self._loading:
             logger.warning("Session already running or loading")
@@ -140,11 +159,18 @@ class Session:
         self._start_time = time.time()
         self._audio_device = audio_device
         self._mic_device = mic_device or self.config.audio.device_mic
+        self._system_audio_pid = system_audio_pid
+        self._system_audio_app = system_audio_app
         self._thread = threading.Thread(target=self._run_pipeline, daemon=True)
         self._thread.start()
+        capture_desc = (
+            f"app-tap: {system_audio_app or system_audio_pid}"
+            if system_audio_pid > 0
+            else f"device: {audio_device}"
+        )
         logger.info(
             "Session starting — system: %s, mic: %s",
-            audio_device,
+            capture_desc,
             self._mic_device,
         )
 
@@ -168,9 +194,10 @@ class Session:
 
         # Save session recording (system audio — primary stream)
         if self._orchestrator and hasattr(self._orchestrator, "audio"):
-            _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            out_dir = _get_output_dir()
+            out_dir.mkdir(parents=True, exist_ok=True)
             ts = time.strftime("%Y%m%d_%H%M%S")
-            recording_path = _OUTPUT_DIR / f"session_{ts}.wav"
+            recording_path = out_dir / f"session_{ts}.wav"
             self._orchestrator.audio.save_recording(recording_path)
 
         logger.info("Session stopped after %.0fs", self.elapsed_seconds)
@@ -210,16 +237,16 @@ class Session:
         audio_health: dict = {}
         if self._orchestrator and hasattr(self._orchestrator, "audio"):
             audio_health = self._orchestrator.audio.get_audio_health()
+        capture_mode = "app_tap" if getattr(self, "_system_audio_pid", 0) > 0 else "device"
         return {
             "running": self._running,
             "paused": self._paused,
             "loading": self._loading,
             "elapsed_seconds": self.elapsed_seconds,
             "segment_count": self.transcript.segment_count,
-            "meeting_title": (
-                self.meeting_context.title if self.meeting_context else ""
-            ),
+            "meeting_title": (self.meeting_context.title if self.meeting_context else ""),
             "audio_health": audio_health,
+            "capture_mode": capture_mode,
         }
 
     # --- Orchestrator callbacks (called from system audio pipeline thread) ---
@@ -279,13 +306,15 @@ class Session:
         )
 
         # Store for post-meeting summary
-        self._trigger_history.append({
-            "trigger_type": trigger.type.value,
-            "trigger_text": trigger.text,
-            "answer": result.answer,
-            "confidence": result.confidence,
-            "timestamp": time.time(),
-        })
+        self._trigger_history.append(
+            {
+                "trigger_type": trigger.type.value,
+                "trigger_text": trigger.text,
+                "answer": result.answer,
+                "confidence": result.confidence,
+                "timestamp": time.time(),
+            }
+        )
 
         # Resolve auto-dismiss duration from config
         _dismiss_ms_map = {
@@ -296,20 +325,23 @@ class Session:
         persistence = trigger.type.persistence
         dismiss_ms = _dismiss_ms_map.get(persistence, 90_000)
 
-        self._thread_safe_put(self._prompt_queue, {
-            "type": "prompt",
-            "trigger_type": trigger.type.value,
-            "trigger_text": trigger.text,
-            "answer": result.answer,
-            "confidence": result.confidence,
-            "method": result.method,
-            "latency_ms": result.latency_ms,
-            "source": result.source,
-            "persistence": persistence,
-            "dismiss_ms": dismiss_ms,
-            "display_label": trigger.type.label,
-            "display_emoji": trigger.type.emoji,
-        })
+        self._thread_safe_put(
+            self._prompt_queue,
+            {
+                "type": "prompt",
+                "trigger_type": trigger.type.value,
+                "trigger_text": trigger.text,
+                "answer": result.answer,
+                "confidence": result.confidence,
+                "method": result.method,
+                "latency_ms": result.latency_ms,
+                "source": result.source,
+                "persistence": persistence,
+                "dismiss_ms": dismiss_ms,
+                "display_label": trigger.type.label,
+                "display_emoji": trigger.type.emoji,
+            },
+        )
 
     # --- Turn callbacks (called from TranscriptBuffer in pipeline thread) ---
 
@@ -323,10 +355,13 @@ class Session:
             is_final=False,
             source=turn.source,
         )
-        self._thread_safe_put(self._transcript_queue, {
-            "type": "transcript_update",
-            **turn.to_dict(),
-        })
+        self._thread_safe_put(
+            self._transcript_queue,
+            {
+                "type": "transcript_update",
+                **turn.to_dict(),
+            },
+        )
 
     def _on_turn_final(self, turn: Turn) -> None:
         """Called when a turn is finalized (pause detected).
@@ -351,10 +386,13 @@ class Session:
             speaker=turn.speaker,
             source=turn.source,
         )
-        self._thread_safe_put(self._transcript_queue, {
-            "type": "transcript_final",
-            **turn.to_dict(),
-        })
+        self._thread_safe_put(
+            self._transcript_queue,
+            {
+                "type": "transcript_final",
+                **turn.to_dict(),
+            },
+        )
 
         # Polish with text refiner (thread-safe via RAGAnswerGenerator.generate_text())
         if self._text_refiner:
@@ -373,16 +411,19 @@ class Session:
                     speaker=turn.speaker,
                     source=turn.source,
                 )
-                self._thread_safe_put(self._transcript_queue, {
-                    "type": "transcript_polished",
-                    "id": turn.id,
-                    "text": polished,
-                    "timestamp": turn.start_timestamp,
-                    "end_timestamp": turn.end_timestamp,
-                    "is_final": True,
-                    "speaker": turn.speaker,
-                    "source": turn.source,
-                })
+                self._thread_safe_put(
+                    self._transcript_queue,
+                    {
+                        "type": "transcript_polished",
+                        "id": turn.id,
+                        "text": polished,
+                        "timestamp": turn.start_timestamp,
+                        "end_timestamp": turn.end_timestamp,
+                        "is_final": True,
+                        "speaker": turn.speaker,
+                        "source": turn.source,
+                    },
+                )
 
         # Tier 2: neural speaker diarization (system audio only)
         if self._diarizer and turn.source == "system":
@@ -401,7 +442,8 @@ class Session:
                 return
 
             speaker = self._diarizer.process_turn(
-                audio_segment, self.config.audio.sample_rate,
+                audio_segment,
+                self.config.audio.sample_rate,
             )
             if speaker:
                 speaker = self._speaker_names.get(speaker, speaker)
@@ -416,16 +458,19 @@ class Session:
                     speaker=speaker,
                     source=turn.source,
                 )
-                self._thread_safe_put(self._transcript_queue, {
-                    "type": "transcript_relabeled",
-                    "id": turn.id,
-                    "text": turn.text,
-                    "timestamp": turn.start_timestamp,
-                    "end_timestamp": turn.end_timestamp,
-                    "is_final": True,
-                    "speaker": speaker,
-                    "source": turn.source,
-                })
+                self._thread_safe_put(
+                    self._transcript_queue,
+                    {
+                        "type": "transcript_relabeled",
+                        "id": turn.id,
+                        "text": turn.text,
+                        "timestamp": turn.start_timestamp,
+                        "end_timestamp": turn.end_timestamp,
+                        "is_final": True,
+                        "speaker": speaker,
+                        "source": turn.source,
+                    },
+                )
                 logger.info("Turn %s relabeled: Others → %s", turn.id, speaker)
         except Exception as e:
             logger.warning("Speaker relabeling failed for %s: %s", turn.id, e)
@@ -459,27 +504,32 @@ class Session:
             if idx is None:
                 continue
             seg = self.transcript._segments[idx]
-            self._thread_safe_put(self._transcript_queue, {
-                "type": "transcript_relabeled",
-                "id": seg.id,
-                "text": seg.text,
-                "timestamp": seg.timestamp,
-                "end_timestamp": seg.end_timestamp or seg.timestamp,
-                "is_final": seg.is_final,
-                "speaker": new_name,
-                "source": seg.source,
-            })
+            self._thread_safe_put(
+                self._transcript_queue,
+                {
+                    "type": "transcript_relabeled",
+                    "id": seg.id,
+                    "text": seg.text,
+                    "timestamp": seg.timestamp,
+                    "end_timestamp": seg.end_timestamp or seg.timestamp,
+                    "is_final": seg.is_final,
+                    "speaker": new_name,
+                    "source": seg.source,
+                },
+            )
 
-        logger.info("Renamed speaker '%s' → '%s' (%d segments)", old_name, new_name, len(affected_ids))
+        logger.info(
+            "Renamed speaker '%s' → '%s' (%d segments)", old_name, new_name, len(affected_ids)
+        )
 
-    def _get_turn_audio(self, turn: Turn) -> Optional["np.ndarray"]:
+    def _get_turn_audio(self, turn: Turn) -> "Optional[np.ndarray]":
         """Retrieve raw audio for a turn's time range from the system AudioCapture."""
         if not self._orchestrator or not hasattr(self._orchestrator, "audio"):
             return None
-        import numpy as np
 
         audio = self._orchestrator.audio.get_audio_segment(
-            turn.start_timestamp, turn.end_timestamp,
+            turn.start_timestamp,
+            turn.end_timestamp,
         )
         if audio is None or len(audio) == 0:
             return None
@@ -493,12 +543,29 @@ class Session:
             from lib.audio_capture import AudioCapture
             from lib.orchestrator import MeetingOrchestrator
 
+            # Build per-app capture if PID was provided
+            system_capture = None
+            if self._system_audio_pid > 0:
+                from lib.system_audio_capture import SystemAudioCapture
+
+                system_capture = SystemAudioCapture(
+                    pid=self._system_audio_pid,
+                    app_name=self._system_audio_app,
+                    sample_rate=self.config.audio.sample_rate,
+                )
+                logger.info(
+                    "Using per-app capture: %s (PID %d)",
+                    self._system_audio_app,
+                    self._system_audio_pid,
+                )
+
             logger.info("Loading models in background thread...")
             self._orchestrator = MeetingOrchestrator(
                 config=self.config,
                 audio_device=self._audio_device,
                 meeting_context_path=None,
                 headless=True,
+                audio_capture=system_capture,
             )
 
             # Inject meeting context if loaded
@@ -515,16 +582,12 @@ class Session:
 
             # Create text refiner (shares RAGAnswerGenerator — thread-safe via generate_text())
             refiner_config = getattr(self.config, "refiner", None)
-            refiner_enabled = (
-                getattr(refiner_config, "enabled", True) if refiner_config else True
-            )
+            refiner_enabled = getattr(refiner_config, "enabled", True) if refiner_config else True
             if refiner_enabled and hasattr(self._orchestrator.generator, "_generator"):
                 self._text_refiner = TextRefiner(
                     self._orchestrator.generator._generator,
                     min_words_to_refine=(
-                        getattr(refiner_config, "min_words_to_refine", 5)
-                        if refiner_config
-                        else 5
+                        getattr(refiner_config, "min_words_to_refine", 5) if refiner_config else 5
                     ),
                 )
                 logger.info("Text refiner enabled (sharing LFM2.5-Instruct instance)")
@@ -545,11 +608,15 @@ class Session:
             # --- Mic capture: separate AudioCapture + ASR pipeline ---
             # Skip mic pipeline if same device as system audio (single-device mode).
             # In single-device mode, all speech comes from one source → tagged "mic" → "You".
-            if self._audio_device.lower() == self._mic_device.lower():
+            # App-tap mode is never single-device (mic and app tap are different sources).
+            is_same_device = (
+                self._system_audio_pid <= 0
+                and self._audio_device.lower() == self._mic_device.lower()
+            )
+            if is_same_device:
                 self._single_device_mode = True
                 logger.info(
-                    "Single-device mode: mic == system audio (%s). "
-                    "All speech tagged as 'You'.",
+                    "Single-device mode: mic == system audio (%s). " "All speech tagged as 'You'.",
                     self._audio_device,
                 )
             else:

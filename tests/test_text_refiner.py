@@ -1,5 +1,5 @@
 """Tests for lib.text_refiner — LFM-based text cleanup."""
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 

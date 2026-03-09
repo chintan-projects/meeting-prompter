@@ -15,8 +15,13 @@ Flow:
     Next speech chunk             → add_chunk() → new turn starts
 
 Callbacks fire on every update (partial) and on finalize (complete).
+
+Thread safety: All public methods are guarded by a lock so that mic and
+system audio pipeline threads can call add_chunk/on_silence concurrently.
 """
+
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
@@ -75,9 +80,9 @@ class TranscriptBuffer:
     - on_update: called each time a chunk extends the active turn (partial)
     - on_final: called when a turn is finalized (silence or max duration)
 
-    Thread safety: This class is NOT thread-safe. The caller (Session)
-    must ensure add_chunk/on_silence/flush are called from the same thread
-    (the pipeline background thread).
+    Thread safety: All public methods are guarded by a threading.Lock so
+    that mic and system audio threads can safely call add_chunk/on_silence
+    concurrently. Callbacks fire inside the lock to maintain ordering.
     """
 
     def __init__(
@@ -88,6 +93,7 @@ class TranscriptBuffer:
         on_update: Optional[TurnCallback] = None,
         on_final: Optional[TurnCallback] = None,
     ) -> None:
+        self._lock = threading.Lock()
         self._turn_pause = turn_pause
         self._max_turn_duration = max_turn_duration
         self._min_turn_words = min_turn_words
@@ -110,18 +116,23 @@ class TranscriptBuffer:
     @property
     def all_turns(self) -> List[Turn]:
         """All turns: finalized + active (if any)."""
-        result = list(self._finalized_turns)
-        if self._active_turn:
-            result.append(self._active_turn)
-        return result
+        with self._lock:
+            result = list(self._finalized_turns)
+            if self._active_turn:
+                result.append(self._active_turn)
+            return result
 
     @property
     def turn_count(self) -> int:
         """Total number of turns (finalized + active)."""
-        return len(self._finalized_turns) + (1 if self._active_turn else 0)
+        with self._lock:
+            return len(self._finalized_turns) + (1 if self._active_turn else 0)
 
     def add_chunk(
-        self, text: str, timestamp: float, source: str = "",
+        self,
+        text: str,
+        timestamp: float,
+        source: str = "",
     ) -> Optional[Turn]:
         """Add a transcribed text chunk. Returns the active turn if updated.
 
@@ -138,46 +149,48 @@ class TranscriptBuffer:
         if not text:
             return None
 
-        # Check if we need to finalize the active turn first
-        if self._active_turn is not None:
-            duration = timestamp - self._active_turn.start_timestamp
-            source_changed = source and self._active_turn.source and (
-                source != self._active_turn.source
-            )
+        with self._lock:
+            # Check if we need to finalize the active turn first
+            if self._active_turn is not None:
+                duration = timestamp - self._active_turn.start_timestamp
+                source_changed = (
+                    source and self._active_turn.source and (source != self._active_turn.source)
+                )
 
-            # Finalize if silence, max duration, or source change
-            if self._silence_seen or duration >= self._max_turn_duration or source_changed:
-                self._finalize_active()
+                # Finalize if silence, max duration, or source change
+                if self._silence_seen or duration >= self._max_turn_duration or source_changed:
+                    self._finalize_active()
 
-        # Reset silence flag — we have speech now
-        self._silence_seen = False
+            # Reset silence flag — we have speech now
+            self._silence_seen = False
 
-        # Start a new turn or extend the active one
-        if self._active_turn is None:
-            self._turn_counter += 1
-            self._active_turn = Turn(
-                id=f"turn-{self._turn_counter}",
-                text=text,
-                start_timestamp=timestamp,
-                end_timestamp=timestamp,
-                source=source,
-                chunk_count=1,
-            )
-        else:
-            self._active_turn.text = f"{self._active_turn.text} {text}"
-            self._active_turn.end_timestamp = timestamp
-            self._active_turn.chunk_count += 1
+            # Start a new turn or extend the active one
+            if self._active_turn is None:
+                self._turn_counter += 1
+                self._active_turn = Turn(
+                    id=f"turn-{self._turn_counter}",
+                    text=text,
+                    start_timestamp=timestamp,
+                    end_timestamp=timestamp,
+                    source=source,
+                    chunk_count=1,
+                )
+            else:
+                self._active_turn.text = f"{self._active_turn.text} {text}"
+                self._active_turn.end_timestamp = timestamp
+                self._active_turn.chunk_count += 1
 
-        if self._on_update:
-            self._on_update(self._active_turn)
+            if self._on_update:
+                self._on_update(self._active_turn)
 
-        return self._active_turn
+            return self._active_turn
 
     def flush(self) -> Optional[Turn]:
         """Force-finalize the active turn (e.g., on session stop)."""
-        if self._active_turn is not None:
-            return self._finalize_active()
-        return None
+        with self._lock:
+            if self._active_turn is not None:
+                return self._finalize_active()
+            return None
 
     def on_silence(self, timestamp: float) -> Optional[Turn]:
         """Called when silence is detected in the audio stream.
@@ -187,28 +200,32 @@ class TranscriptBuffer:
         the last speech exceeds turn_pause — this ensures the UI
         updates promptly rather than waiting for the next speech chunk.
         """
-        self._silence_seen = True
+        with self._lock:
+            self._silence_seen = True
 
-        if self._active_turn is None:
+            if self._active_turn is None:
+                return None
+
+            gap = timestamp - self._active_turn.end_timestamp
+            if gap >= self._turn_pause:
+                return self._finalize_active()
             return None
-
-        gap = timestamp - self._active_turn.end_timestamp
-        if gap >= self._turn_pause:
-            return self._finalize_active()
-        return None
 
     def reset(self) -> None:
         """Clear all state for a new session."""
-        self._active_turn = None
-        self._finalized_turns = []
-        self._turn_counter = 0
-        self._silence_seen = False
+        with self._lock:
+            self._active_turn = None
+            self._finalized_turns = []
+            self._turn_counter = 0
+            self._silence_seen = False
 
     def _finalize_active(self) -> Optional[Turn]:
         """Finalize the active turn and move it to the finalized list.
 
         All turns are emitted regardless of length. Short utterances
         like "Yeah." or "Okay." are valid speech and should reach the UI.
+
+        Note: Caller must hold self._lock.
         """
         turn = self._active_turn
         if turn is None:
@@ -220,7 +237,10 @@ class TranscriptBuffer:
 
         logger.debug(
             "Finalized %s: %r (%d chunks, %d words)",
-            turn.id, turn.text[:80], turn.chunk_count, len(turn.text.split()),
+            turn.id,
+            turn.text[:80],
+            turn.chunk_count,
+            len(turn.text.split()),
         )
 
         if self._on_final:

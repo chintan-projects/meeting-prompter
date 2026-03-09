@@ -405,3 +405,13 @@ sessions:
       - "Wired heuristic re-ranking, tuned rag_confidence_minimum to 0.35"
       - "F-201: tag questions, self-answering, rhetorical forms — 46 tests"
       - "399 Python tests + 5 eval tests passing"
+  - id: "session-016"
+    date: "2026-03-09"
+    focus: "WS-14 dual-stream pipeline hardening"
+    completed:
+      - "TranscriptBuffer thread safety: threading.Lock on all public methods"
+      - "Session pipeline cleanup: try/finally for mic capture, pipeline finally stops mic"
+      - "SystemAudioCapture: _capture_error init in __init__, temp WAV try/finally"
+      - "Bounded _trigger_history with deque(maxlen=1000), _thread_safe_put logs drops"
+      - "5 thread safety tests, CLAUDE.md dual-stream architecture"
+      - "464 Python tests passing"

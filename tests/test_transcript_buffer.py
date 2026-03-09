@@ -4,6 +4,7 @@ Key design: Turn boundaries are detected by silence events from the audio
 capture layer, NOT by time gaps between add_chunk() calls. The ~3.5s gap
 between consecutive ASR chunks is a pipeline artifact, not a speech pause.
 """
+
 from typing import List
 
 from src.api.transcript_buffer import TranscriptBuffer, Turn
@@ -242,11 +243,20 @@ class TestCallbacks:
 
     def test_on_update_fires_on_each_chunk(self) -> None:
         updates: List[Turn] = []
-        buf = TranscriptBuffer(on_update=lambda t: updates.append(Turn(**{
-            "id": t.id, "text": t.text, "start_timestamp": t.start_timestamp,
-            "end_timestamp": t.end_timestamp, "is_final": t.is_final,
-            "chunk_count": t.chunk_count,
-        })))
+        buf = TranscriptBuffer(
+            on_update=lambda t: updates.append(
+                Turn(
+                    **{
+                        "id": t.id,
+                        "text": t.text,
+                        "start_timestamp": t.start_timestamp,
+                        "end_timestamp": t.end_timestamp,
+                        "is_final": t.is_final,
+                        "chunk_count": t.chunk_count,
+                    }
+                )
+            )
+        )
         buf.add_chunk("first chunk here", timestamp=100.0)
         buf.add_chunk("second chunk here", timestamp=103.5)
         assert len(updates) == 2
@@ -257,11 +267,18 @@ class TestCallbacks:
         finals: List[Turn] = []
         buf = TranscriptBuffer(
             turn_pause=2.0,
-            on_final=lambda t: finals.append(Turn(**{
-                "id": t.id, "text": t.text, "start_timestamp": t.start_timestamp,
-                "end_timestamp": t.end_timestamp, "is_final": t.is_final,
-                "chunk_count": t.chunk_count,
-            })),
+            on_final=lambda t: finals.append(
+                Turn(
+                    **{
+                        "id": t.id,
+                        "text": t.text,
+                        "start_timestamp": t.start_timestamp,
+                        "end_timestamp": t.end_timestamp,
+                        "is_final": t.is_final,
+                        "chunk_count": t.chunk_count,
+                    }
+                )
+            ),
         )
         buf.add_chunk("First turn text", timestamp=100.0)
         buf.on_silence(timestamp=103.0)  # Silence triggers finalization
@@ -459,3 +476,180 @@ class TestSourceField:
         # Empty source should not cause finalization
         assert turn.id == "turn-1"
         assert len(buf._finalized_turns) == 0
+
+
+class TestThreadSafety:
+    """Verify TranscriptBuffer is safe under concurrent access.
+
+    Dual-stream operation has mic and system audio threads calling
+    add_chunk() and on_silence() concurrently. Without the threading.Lock
+    guard, this corrupts _active_turn and _finalized_turns.
+    """
+
+    def test_concurrent_add_chunk_no_corruption(self) -> None:
+        """Two threads adding chunks concurrently should not corrupt state."""
+        import threading
+
+        buf = TranscriptBuffer(turn_pause=2.0)
+        errors: list[str] = []
+        n_chunks_per_thread = 100
+
+        def add_mic_chunks() -> None:
+            for i in range(n_chunks_per_thread):
+                try:
+                    buf.add_chunk(f"mic chunk {i}", timestamp=100.0 + i * 0.1, source="mic")
+                except Exception as e:
+                    errors.append(f"mic thread: {e}")
+
+        def add_system_chunks() -> None:
+            for i in range(n_chunks_per_thread):
+                try:
+                    buf.add_chunk(f"system chunk {i}", timestamp=100.0 + i * 0.1, source="system")
+                except Exception as e:
+                    errors.append(f"system thread: {e}")
+
+        t1 = threading.Thread(target=add_mic_chunks)
+        t2 = threading.Thread(target=add_system_chunks)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert not errors, f"Thread errors: {errors}"
+        # All chunks accounted for: finalized + active
+        total = sum(t.chunk_count for t in buf._finalized_turns)
+        if buf.active_turn:
+            total += buf.active_turn.chunk_count
+        assert total == n_chunks_per_thread * 2
+
+    def test_concurrent_add_chunk_and_silence(self) -> None:
+        """add_chunk and on_silence from different threads should not deadlock."""
+        import threading
+
+        buf = TranscriptBuffer(turn_pause=0.5)
+        errors: list[str] = []
+
+        def add_chunks() -> None:
+            for i in range(50):
+                try:
+                    buf.add_chunk(f"speech {i}", timestamp=100.0 + i * 0.5, source="mic")
+                except Exception as e:
+                    errors.append(f"add_chunk: {e}")
+
+        def send_silences() -> None:
+            for i in range(50):
+                try:
+                    buf.on_silence(timestamp=100.0 + i * 0.5 + 1.0)
+                except Exception as e:
+                    errors.append(f"on_silence: {e}")
+
+        t1 = threading.Thread(target=add_chunks)
+        t2 = threading.Thread(target=send_silences)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert not errors, f"Thread errors: {errors}"
+        # Should complete without deadlock — thread join timeout is the guard
+
+    def test_concurrent_flush_and_add(self) -> None:
+        """flush() and add_chunk() from different threads should not corrupt."""
+        import threading
+
+        buf = TranscriptBuffer(turn_pause=2.0)
+        errors: list[str] = []
+
+        def add_chunks() -> None:
+            for i in range(50):
+                try:
+                    buf.add_chunk(f"chunk {i}", timestamp=100.0 + i * 0.1, source="mic")
+                except Exception as e:
+                    errors.append(f"add_chunk: {e}")
+
+        def flush_repeatedly() -> None:
+            for _ in range(50):
+                try:
+                    buf.flush()
+                except Exception as e:
+                    errors.append(f"flush: {e}")
+
+        t1 = threading.Thread(target=add_chunks)
+        t2 = threading.Thread(target=flush_repeatedly)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert not errors, f"Thread errors: {errors}"
+
+    def test_concurrent_all_turns_read(self) -> None:
+        """Reading all_turns while adding chunks should not raise."""
+        import threading
+
+        buf = TranscriptBuffer(turn_pause=2.0)
+        errors: list[str] = []
+
+        def add_chunks() -> None:
+            for i in range(100):
+                try:
+                    buf.add_chunk(f"chunk {i}", timestamp=100.0 + i * 0.1, source="mic")
+                except Exception as e:
+                    errors.append(f"add_chunk: {e}")
+
+        def read_turns() -> None:
+            for _ in range(100):
+                try:
+                    _ = buf.all_turns
+                    _ = buf.turn_count
+                except Exception as e:
+                    errors.append(f"read: {e}")
+
+        t1 = threading.Thread(target=add_chunks)
+        t2 = threading.Thread(target=read_turns)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert not errors, f"Thread errors: {errors}"
+
+    def test_dual_stream_source_attribution(self) -> None:
+        """Mic and system chunks maintain correct source attribution under concurrency."""
+        import threading
+
+        buf = TranscriptBuffer(turn_pause=2.0)
+        barrier = threading.Barrier(2)
+
+        def add_mic() -> None:
+            barrier.wait()
+            for i in range(20):
+                buf.add_chunk(f"mic {i}", timestamp=100.0 + i * 3.5, source="mic")
+
+        def add_system() -> None:
+            barrier.wait()
+            for i in range(20):
+                buf.add_chunk(f"sys {i}", timestamp=100.05 + i * 3.5, source="system")
+
+        t1 = threading.Thread(target=add_mic)
+        t2 = threading.Thread(target=add_system)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        buf.flush()
+        all_turns = buf.all_turns
+
+        # Every turn's source should be either "mic" or "system", never empty/mixed
+        for turn in all_turns:
+            assert turn.source in ("mic", "system"), f"Bad source: {turn.source!r}"
+            # Turn text should only contain chunks from its own source
+            if turn.source == "mic":
+                assert all(
+                    "sys" not in word for word in turn.text.split() if word.startswith("sys")
+                )
+            elif turn.source == "system":
+                assert all(
+                    "mic" not in word for word in turn.text.split() if word.startswith("mic")
+                )

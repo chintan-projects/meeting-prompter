@@ -1,20 +1,31 @@
 # meeting-prompter — Active Progress
 # Stays LEAN. Only active/in-progress state here.
 
-current_phase: "rag-tuning"
-current_focus: "F-110 RAG audit complete, F-201 rhetorical suppression done — ready for live test"
+current_phase: "dual-stream-hardening"
+current_focus: "WS-14 pipeline hardened — thread safety, cleanup, bounded history. Ready for live dual-stream test."
 
 active_work:
   - id: "WS-14"
-    name: "Live dual-stream test (mic + BlackHole)"
+    name: "Live dual-stream test (mic + per-app capture)"
     status: pending
-    notes: "Mic-only tested and working. Needs Zoom/Teams call for dual-stream + diarization validation."
+    notes: "Pipeline hardened: TranscriptBuffer thread-safe, session cleanup, bounded history. Needs live Zoom/Teams call to validate dual-stream + diarization."
 
 blockers: []
 
 pending_decisions: []
 
 recent_sessions:
+  - id: "session-016"
+    date: "2026-03-09"
+    focus: "WS-14 dual-stream pipeline hardening — thread safety, cleanup, robustness"
+    completed:
+      - "TranscriptBuffer thread safety: threading.Lock on all public methods (add_chunk, on_silence, flush, reset, all_turns, turn_count)"
+      - "Session pipeline cleanup: try/finally for mic capture, pipeline finally stops mic, _thread_safe_put logs drops"
+      - "SystemAudioCapture: _capture_error init in __init__, temp WAV cleanup in try/finally"
+      - "Bounded _trigger_history with deque(maxlen=1000)"
+      - "5 thread safety tests (concurrent add_chunk, silence, flush, reads, source attribution)"
+      - "CLAUDE.md: added dual-stream architecture, per-app capture paths, updated test count"
+    next_recommended: "Live dual-stream test with Zoom/Teams call, then F-111 section-aware chunking"
   - id: "session-015"
     date: "2026-03-07"
     focus: "F-110 RAG quality audit + F-201 rhetorical question detection"
@@ -31,15 +42,7 @@ recent_sessions:
       - "New lib/rag/ library: storage, parser, chunker, index, retrieval, rank, embedder"
       - "348 Python tests passing"
     next_recommended: "F-110 RAG quality audit + tuning"
-  - id: "session-013"
-    date: "2026-03-07"
-    focus: "Prompt experience overhaul — coaching voice, dead-end suppression, intelligence panel"
-    completed:
-      - "F-202 dead-end suppression, F-203 context surfacing, F-206 coaching voice prompts"
-      - "Intelligence panel: pin/dismiss, persistence tiers, auto-dismiss timers"
-      - "313 Python tests (30 new), TypeScript strict passes, live mic test verified"
-    next_recommended: "Live dual-stream test with Zoom/Teams call"
 
 completed_summary:
-  total_items: 50
-  total_sessions: 15
+  total_items: 56
+  total_sessions: 16

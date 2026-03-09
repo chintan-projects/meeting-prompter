@@ -12,7 +12,12 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │   ├── config.py                  # Typed dataclass config loader
 │   ├── filters.py                 # Hallucination/noise/normalization filters
 │   ├── audio_capture.py           # Streaming mic/BlackHole capture (sounddevice)
+│   ├── system_audio_capture.py    # Per-app audio capture via ScreenCaptureKit
+│   ├── audio_protocol.py          # Shared AudioCapture protocol for type safety
+│   ├── paths.py                   # Project root / runner / output path resolution
 │   ├── lfm2_wrapper.py            # LFM2.5-Audio subprocess wrapper (llama.cpp)
+│   ├── text_refiner.py            # Post-transcription text polishing via LLM
+│   ├── diarization.py             # Neural speaker diarization (Tier 2)
 │   ├── answer_extractor.py        # Sentence extraction for grounding (fallback)
 │   ├── rag_generator.py           # LFM2.5-1.2B-Instruct generation (ChatML)
 │   ├── rag_engine.py              # Hybrid RAG adapter (FTS5 + vector → same query() API)
@@ -76,8 +81,12 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │   └── eval/                      # RAG retrieval quality eval harness
 │       ├── rag_eval_dataset.yaml  # 21 queries against real context docs
 │       └── test_rag_eval.py       # Hit@1, Hit@3, MRR, confidence analysis
+├── tools/audio-tap/               # Swift CLI for per-app audio capture (ScreenCaptureKit)
+│   ├── Sources/AudioTap.swift     # ScreenCaptureKit stream → raw float32 PCM stdout
+│   └── build.sh                   # Build script → runners/audio-tap binary
+├── scripts/                       # Utility scripts (build, setup, diagnostics)
 ├── models/                        # Symlink → ~/Projects/_models
-├── runners/                       # llama.cpp binaries (gitignored)
+├── runners/                       # llama.cpp + audio-tap binaries (gitignored)
 ├── context/                       # Source documents for RAG (PDF + Markdown)
 ├── data/                          # SQLite RAG index (rag.db, gitignored)
 └── output/                        # Saved meeting notes (gitignored)
@@ -106,7 +115,7 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8420
 # Re-index documents (delete data/rag.db and restart, or POST /session/reindex)
 
 # Tests
-pytest                                       # All tests (399 tests)
+pytest                                       # All tests (464 tests)
 pytest tests/test_transcript_buffer.py -v    # Buffer tests only
 pytest tests/eval/ -m slow -v               # RAG retrieval eval (requires real docs)
 cd app && npx tsc --noEmit                   # TypeScript check
@@ -140,6 +149,31 @@ Audio → Transcribe → Noise/Hallucination Filter
             TranscriptPane         │
             (Tauri UI)    RAG → Generator → PromptsPane
 ```
+
+### Dual-Stream Audio Pipeline
+
+Captures mic (you) and system audio (others) simultaneously via two independent
+audio threads feeding a shared, thread-safe TranscriptBuffer:
+
+```
+Mic AudioCapture ──→ LFM2 ASR ──→ source="mic"    ──→ TranscriptBuffer ──→ "You"
+                                                        (threading.Lock)
+System Audio     ──→ LFM2 ASR ──→ source="system" ──→ TranscriptBuffer ──→ "Others"
+ (ScreenCaptureKit)
+```
+
+System audio capture supports two backends:
+- **BlackHole**: Virtual audio device (loopback) — captures all system audio
+- **ScreenCaptureKit** (per-app): Swift CLI (`tools/audio-tap`) captures audio from a specific app via PID
+
+Speaker attribution is two-tier:
+- **Tier 1** (deterministic): source="mic" → "You", source="system" → "Others"
+- **Tier 2** (neural): Optional diarization on system audio to distinguish individual remote speakers
+
+Thread safety: TranscriptBuffer guards all mutations with `threading.Lock`. LFM2Wrapper
+uses `subprocess.run()` per call (independent subprocesses). RAGAnswerGenerator has an
+internal lock for generation. Session pipeline includes try/finally cleanup for both
+audio capture threads.
 
 ### Turn-Based Transcript Architecture
 
@@ -182,6 +216,8 @@ Two independent buffers receive the same raw chunks:
 - **ChatML format**: `<|im_start|>` / `<|im_end|>` delimiters for LFM2.5-Instruct.
 - **Config externalization**: All thresholds in `config.yaml`, typed dataclass loader.
 - **Session lifecycle**: Session kept alive after stop for export access; fresh session created on next start.
+- **Per-app audio capture**: ScreenCaptureKit via Swift CLI (`audio-tap`). Captures audio from a specific app by PID. Requires macOS 13+ and Screen Recording permission. Falls back to BlackHole device capture.
+- **Thread-safe dual-stream**: TranscriptBuffer uses `threading.Lock` on all public methods. Session pipeline uses try/finally for mic capture cleanup. `_trigger_history` bounded with `deque(maxlen=1000)` to prevent memory leaks in long sessions.
 
 ### WebSocket Protocol
 
@@ -219,7 +255,7 @@ Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question
 - Python 3.10+ (Apple Silicon required)
 - All inference runs locally — no external API calls
 - Models resolved via `MODELS_DIR` env var
-- Thread safety: `threading.Lock()` in ConversationBuffer, `loop.call_soon_threadsafe` for queue bridge
+- Thread safety: `threading.Lock()` in TranscriptBuffer, ConversationBuffer, RAGAnswerGenerator; `loop.call_soon_threadsafe` for queue bridge; `deque(maxlen=)` for bounded history
 - All files under 300 lines
 - `logging` module throughout (no `print()` in lib/)
-- 399 Python tests, 16 frontend tests, TypeScript strict mode
+- 464 Python tests, 16 frontend tests, TypeScript strict mode

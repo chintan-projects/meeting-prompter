@@ -94,6 +94,9 @@ class SystemAudioCapture:
         self._chunk_features: Deque[Dict[str, float]] = deque(maxlen=50)
         self._features_lock = threading.Lock()
 
+        # Capture error state (set on permission denial or subprocess failure)
+        self._capture_error: Optional[str] = None
+
     @property
     def paused(self) -> bool:
         """Whether audio capture is paused."""
@@ -193,7 +196,7 @@ class SystemAudioCapture:
         self._session_audio = []
         self._session_timestamps = []
         self._dropped_chunks = 0
-        self._capture_error: Optional[str] = None
+        self._capture_error = None
 
         binary = self._get_binary()
 
@@ -428,16 +431,17 @@ class SystemAudioCapture:
                 self._session_audio.append(chunk)
                 self._session_timestamps.append(timestamp)
 
-            # Write temp WAV for ASR
+            # Write temp WAV for ASR — cleanup in finally to prevent /tmp leaks
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 temp_path = Path(f.name)
 
-            sf.write(temp_path, chunk, self.sample_rate)
+            try:
+                sf.write(temp_path, chunk, self.sample_rate)
 
-            if self.callback:
-                self.callback(temp_path, timestamp)
-
-            temp_path.unlink(missing_ok=True)
+                if self.callback:
+                    self.callback(temp_path, timestamp)
+            finally:
+                temp_path.unlink(missing_ok=True)
 
         except Exception as e:
             logger.error("Chunk processing error: %s", e)
@@ -477,7 +481,7 @@ class SystemAudioCapture:
             "dropped_chunks": self._dropped_chunks,
             "queue_size": self._chunk_queue.qsize(),
         }
-        if hasattr(self, "_capture_error") and self._capture_error:
+        if self._capture_error:
             health["capture_error"] = self._capture_error
         return health
 

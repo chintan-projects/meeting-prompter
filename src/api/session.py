@@ -17,6 +17,7 @@ import asyncio
 import logging
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -94,8 +95,8 @@ class Session:
         self._pause_start: float = 0.0
         self._single_device_mode = False  # True when mic == system audio device
 
-        # Accumulated trigger results for post-meeting summary
-        self._trigger_history: list[dict] = []
+        # Accumulated trigger results for post-meeting summary (bounded for long sessions)
+        self._trigger_history: deque[dict] = deque(maxlen=1000)
 
         # Speaker name mapping: diarizer label → custom name (e.g. "Speaker A" → "Alice")
         self._speaker_names: dict[str, str] = {}
@@ -640,6 +641,12 @@ class Session:
         finally:
             self._loading = False
             self._running = False
+            # Ensure mic capture is stopped if pipeline thread exits unexpectedly
+            if self._mic_capture:
+                try:
+                    self._mic_capture.stop()
+                except Exception:
+                    pass
 
     def _run_mic_pipeline(self) -> None:
         """Mic pipeline thread: capture mic audio, transcribe, tag source.
@@ -679,7 +686,15 @@ class Session:
                 except Exception as e:
                     logger.error("Mic chunk error: %s", e)
 
-            self._mic_capture.start_stream(process_mic_chunk)
+            try:
+                self._mic_capture.start_stream(process_mic_chunk)
+            finally:
+                # Ensure mic capture is cleaned up even if start_stream raises
+                if self._mic_capture:
+                    try:
+                        self._mic_capture.stop()
+                    except Exception:
+                        pass
         except Exception as e:
             logger.error("Mic pipeline error: %s", e, exc_info=True)
 
@@ -703,4 +718,7 @@ class Session:
             try:
                 queue.put_nowait(item)
             except asyncio.QueueFull:
-                pass
+                logger.warning(
+                    "Queue full, dropping %s event",
+                    item.get("type", "unknown"),
+                )

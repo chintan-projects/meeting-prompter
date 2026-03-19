@@ -4,6 +4,7 @@ import { TranscriptPane } from "./components/TranscriptPane";
 import { PromptsPane } from "./components/PromptsPane";
 import { MeetingSetup } from "./components/MeetingSetup";
 import { NoteEditor } from "./components/NoteEditor";
+import { PostMeetingDialog } from "./components/PostMeetingDialog";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useTranscript } from "./hooks/useTranscript";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
@@ -13,8 +14,7 @@ const DEFAULT_TRANSCRIPT_WIDTH = 380;
 const MIN_TRANSCRIPT_WIDTH = 200;
 const MAX_TRANSCRIPT_WIDTH_RATIO = 0.6; // max 60% of viewport
 
-const API_BASE = "http://127.0.0.1:8420";
-const WS_BASE = "ws://127.0.0.1:8420";
+import { API_BASE, WS_BASE } from "./config";
 
 interface PromptResult {
   id: number;
@@ -59,6 +59,12 @@ function App() {
   const [pinnedIds, setPinnedIds] = useState<Set<number>>(new Set());
   const [dismissedIds, setDismissedIds] = useState<Set<number>>(new Set());
   const [showNotes, setShowNotes] = useState(false);
+  const [showPostMeeting, setShowPostMeeting] = useState(false);
+  const [stopMeta, setStopMeta] = useState({
+    hasAudio: false,
+    hasTranscript: false,
+    notionAvailable: false,
+  });
   const promptIdRef = useRef(0);
 
   const handlePinPrompt = useCallback((id: number) => {
@@ -209,7 +215,15 @@ function App() {
 
   const stopSession = async () => {
     try {
-      await fetch(`${API_BASE}/session/stop`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/session/stop`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setStopMeta({
+          hasAudio: data.has_audio ?? false,
+          hasTranscript: data.has_transcript ?? false,
+          notionAvailable: data.notion_available ?? false,
+        });
+      }
     } catch {
       // ignore
     }
@@ -217,9 +231,9 @@ function App() {
     setIsPaused(false);
     transcriptWs.disconnect();
     promptsWs.disconnect();
-    // Show notes editor after stopping
+    // Show post-meeting consent dialog instead of jumping to notes
     if (segments.length > 0) {
-      setShowNotes(true);
+      setShowPostMeeting(true);
     }
   };
 
@@ -294,7 +308,9 @@ function App() {
     },
     onToggleTranscript: () => setTranscriptCollapsed((c) => !c),
     onCloseModal: () => {
-      if (showNotes) {
+      if (showPostMeeting) {
+        // Don't allow escape from consent dialog — must choose save or discard
+      } else if (showNotes) {
         setShowNotes(false);
       } else if (showSetup && !isRunning) {
         setShowSetup(false);
@@ -358,9 +374,30 @@ function App() {
         />
       )}
 
+      {showPostMeeting && (
+        <PostMeetingDialog
+          hasAudio={stopMeta.hasAudio}
+          hasTranscript={stopMeta.hasTranscript}
+          notionAvailable={stopMeta.notionAvailable}
+          elapsedSeconds={elapsed}
+          meetingTitle={meetingTitle}
+          onComplete={(savedToNotion) => {
+            setShowPostMeeting(false);
+            // Optionally show notes editor after saving
+            if (!savedToNotion && segments.length > 0) {
+              setShowNotes(true);
+            }
+          }}
+          onShowNotes={() => {
+            setShowPostMeeting(false);
+            setShowNotes(true);
+          }}
+        />
+      )}
+
       <NoteEditor visible={showNotes} onClose={() => setShowNotes(false)} />
 
-      {!isRunning && !showSetup && !showNotes && segments.length > 0 && (
+      {!isRunning && !showSetup && !showNotes && !showPostMeeting && segments.length > 0 && (
         <button
           style={styles.notesBtn}
           onClick={() => setShowNotes(true)}

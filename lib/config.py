@@ -121,6 +121,38 @@ class DiarizationConfig:
 
 
 @dataclass
+class DualStreamConfig:
+    """Cross-stream deduplication settings for dual audio pipelines.
+
+    When mic and system audio both capture the same speech (acoustic
+    coupling without headphones), the deduplicator suppresses the echo
+    using text similarity between streams.
+    """
+
+    enabled: bool = True
+    window_seconds: float = 8.0  # temporal window for comparing chunks
+    similarity_threshold: float = 0.55  # SequenceMatcher ratio to suppress
+    short_text_threshold: float = 0.75  # stricter threshold for short chunks
+    short_text_min_words: int = 4  # word count below which short_text_threshold applies
+
+
+@dataclass
+class NotionConfig:
+    """Notion integration settings for RAG ingestion and meeting export."""
+
+    enabled: bool = False
+    api_token_env: str = "NOTION_API_TOKEN"  # env var name (token never in config)
+    export_parent_page_id: str = ""
+    rag_source_page_ids: List[str] = field(default_factory=list)
+    rag_source_database_ids: List[str] = field(default_factory=list)
+    max_pages_per_database: int = 100
+    max_retries: int = 3
+    initial_backoff_s: float = 1.0
+    timeout_s: int = 30
+    max_block_depth: int = 10
+
+
+@dataclass
 class PathsConfig:
     docs_dir: str = "context"
     output_dir: str = "output"
@@ -137,6 +169,8 @@ class AppConfig:
     triggers: TriggerConfig = field(default_factory=TriggerConfig)
     refiner: RefinerConfig = field(default_factory=RefinerConfig)
     diarization: DiarizationConfig = field(default_factory=DiarizationConfig)
+    dual_stream: DualStreamConfig = field(default_factory=DualStreamConfig)
+    notion: NotionConfig = field(default_factory=NotionConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
 
 
@@ -194,5 +228,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         triggers=_build_dataclass(TriggerConfig, raw.get("triggers")),
         refiner=_build_dataclass(RefinerConfig, raw.get("refiner")),
         diarization=_build_dataclass(DiarizationConfig, raw.get("diarization")),
+        dual_stream=_build_dataclass(DualStreamConfig, raw.get("dual_stream")),
+        notion=_build_dataclass(NotionConfig, raw.get("notion")),
         paths=_build_dataclass(PathsConfig, raw.get("paths")),
     )

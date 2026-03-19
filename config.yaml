@@ -68,12 +68,31 @@ refiner:
   min_words_to_refine: 5    # skip LFM cleanup for very short turns
   max_tokens_ratio: 1.5     # max output tokens = input words * ratio
 
+dual_stream:
+  enabled: true                 # cross-stream echo suppression for dual audio pipelines
+  window_seconds: 8.0           # temporal window for comparing chunks across streams
+  similarity_threshold: 0.55    # SequenceMatcher ratio to flag as echo (0.0–1.0)
+  short_text_threshold: 0.75    # stricter threshold for chunks < short_text_min_words
+  short_text_min_words: 4       # word count below which short_text_threshold applies
+
 diarization:
   enabled: false              # Tier 2: neural speaker diarization on system audio
   max_speakers: 6             # maximum distinct speakers to track
   similarity_threshold: 0.65  # cosine similarity for same-speaker match
   min_audio_duration: 1.0     # skip turns shorter than this (seconds)
   embedding_model: "speechbrain/spkrec-ecapa-voxceleb"
+
+notion:
+  enabled: false                   # set true + NOTION_API_TOKEN env var to activate
+  api_token_env: "NOTION_API_TOKEN"
+  export_parent_page_id: ""        # Notion page ID where exported meetings go
+  rag_source_page_ids: []          # Notion page IDs to index for RAG context
+  rag_source_database_ids: []      # Notion database IDs to index all child pages
+  max_pages_per_database: 100
+  max_retries: 3                   # retry attempts on Notion API 429 rate limits
+  initial_backoff_s: 1.0           # initial retry backoff (doubles per attempt)
+  timeout_s: 30                    # HTTP timeout for Notion API calls
+  max_block_depth: 10              # max recursion depth for nested block fetching
 
 paths:
   docs_dir: "context"

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
 # ─── Parser types ─────────────────────────────────────────────────────────────
 
 
@@ -128,3 +127,13 @@ class IndexResult:
     chunks_created: int = 0
     sections_created: int = 0
     errors: list[str] = field(default_factory=list)
+
+    def merge(self, other: IndexResult) -> None:
+        """Accumulate counts from another ``IndexResult``."""
+        self.documents_indexed += other.documents_indexed
+        self.documents_skipped += other.documents_skipped
+        self.documents_updated += other.documents_updated
+        self.documents_removed += other.documents_removed
+        self.chunks_created += other.chunks_created
+        self.sections_created += other.sections_created
+        self.errors.extend(other.errors)

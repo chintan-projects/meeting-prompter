@@ -25,7 +25,7 @@ from lib.rag.rank.heuristic import HeuristicRanker
 from lib.rag.rank.protocol import Ranker
 from lib.rag.retrieval.engine import retrieve as _retrieve
 from lib.rag.storage.schema import init_schema, migrate_from_v1
-from lib.rag.types import IndexResult, RetrievalResult
+from lib.rag.types import IndexResult, ParsedDocument, RetrievalResult
 
 # Re-export public types
 __all__ = ["RAGPipeline", "RAGConfig", "IndexResult", "RetrievalResult"]
@@ -108,6 +108,17 @@ class RAGPipeline:
             ranker=self._ranker,
         )
 
+    def index_document(self, doc: ParsedDocument) -> IndexResult:
+        """Index a pre-parsed document (e.g. from Notion API or other sources).
+
+        Bypasses file I/O — accepts a ``ParsedDocument`` directly.  Uses the
+        same hash-based dedup, chunking, and embedding as ``index()``.
+        """
+        result = IndexResult()
+        self._store_document(doc, result)
+        self._conn.commit()
+        return result
+
     def close(self) -> None:
         """Cleanup. Matches setup() for resource symmetry."""
         # Currently a no-op; reserved for future resource cleanup
@@ -126,10 +137,13 @@ class RAGPipeline:
             result.errors.append(f"{file_path}: {exc}")
             return
 
+        self._store_document(doc, result)
+
+    def _store_document(self, doc: ParsedDocument, result: IndexResult) -> None:
+        """Hash-check, chunk, embed, and store a parsed document."""
         file_hash = hashlib.sha256(doc.full_text.encode("utf-8")).hexdigest()
         abs_path = doc.path
 
-        # Check if document exists and is unchanged
         existing = self._conn.execute(
             "SELECT id, file_hash FROM documents WHERE path = ?",
             (abs_path,),
@@ -146,13 +160,8 @@ class RAGPipeline:
                 "token_count=?, indexed_at=datetime('now') WHERE id=?",
                 (doc.full_text, file_hash, doc.mime_type, doc.token_count, doc_id),
             )
-            # Clear old sections and chunks (cascades via FK)
-            self._conn.execute(
-                "DELETE FROM sections WHERE document_id=?", (doc_id,)
-            )
-            self._conn.execute(
-                "DELETE FROM chunks WHERE document_id=?", (doc_id,)
-            )
+            self._conn.execute("DELETE FROM sections WHERE document_id=?", (doc_id,))
+            self._conn.execute("DELETE FROM chunks WHERE document_id=?", (doc_id,))
             result.documents_updated += 1
         else:
             cursor = self._conn.execute(
@@ -207,7 +216,6 @@ class RAGPipeline:
         for idx, (chunk, emb) in enumerate(zip(chunks, embeddings)):
             emb_bytes = struct.pack(pack_fmt, *emb)
 
-            # Map section_index to section_id
             section_id = None
             if chunk.section_index < len(section_ids):
                 section_id = section_ids[chunk.section_index]

@@ -28,6 +28,7 @@ from lib.config import AppConfig, load_config
 from lib.conversation.meeting_context import MeetingContext, load_meeting_context
 from lib.diarization import SpeakerDiarizer
 from lib.generation.types import GenerationResult
+from lib.stream_dedup import StreamDeduplicator
 from lib.text_refiner import TextRefiner
 from lib.triggers.types import Trigger
 
@@ -101,6 +102,10 @@ class Session:
         # Speaker name mapping: diarizer label → custom name (e.g. "Speaker A" → "Alice")
         self._speaker_names: dict[str, str] = {}
 
+        # Cross-stream echo suppression: detects when mic and system audio
+        # both capture the same speech (acoustic coupling without headphones)
+        self._deduplicator = StreamDeduplicator(self.config.dual_stream)
+
     @property
     def is_running(self) -> bool:
         return self._running
@@ -113,6 +118,12 @@ class Session:
     def trigger_history(self) -> list[dict]:
         """Accumulated trigger results for post-meeting summary."""
         return list(self._trigger_history)
+
+    def get_rag_engine(self) -> Optional[object]:
+        """Public accessor for the RAG engine (if models are loaded)."""
+        if self._orchestrator and hasattr(self._orchestrator, "rag"):
+            return self._orchestrator.rag
+        return None
 
     @property
     def elapsed_seconds(self) -> float:
@@ -176,7 +187,11 @@ class Session:
         )
 
     def stop(self) -> None:
-        """Stop both audio pipelines, finalize active turn, save recording."""
+        """Stop both audio pipelines and finalize active turn.
+
+        Audio recording is NOT saved automatically — call ``save_audio()``
+        after obtaining user consent via the post-meeting dialog.
+        """
         self._running = False
         if self._orchestrator:
             self._orchestrator._running = False
@@ -185,23 +200,45 @@ class Session:
         if self._mic_capture:
             self._mic_capture.stop()
 
-        # Flush any in-progress turn
+        # Flush any in-progress turn and reset dedup state
         self._transcript_buffer.flush()
+        self._deduplicator.reset()
 
         if self._thread:
             self._thread.join(timeout=10.0)
         if self._mic_thread:
             self._mic_thread.join(timeout=10.0)
 
-        # Save session recording (system audio — primary stream)
-        if self._orchestrator and hasattr(self._orchestrator, "audio"):
-            out_dir = _get_output_dir()
-            out_dir.mkdir(parents=True, exist_ok=True)
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            recording_path = out_dir / f"session_{ts}.wav"
-            self._orchestrator.audio.save_recording(recording_path)
-
         logger.info("Session stopped after %.0fs", self.elapsed_seconds)
+
+    def save_audio(self, output_dir: Optional[Path] = None) -> Optional[Path]:
+        """Save the session's audio recording to WAV.
+
+        Call after ``stop()`` and before the session is replaced by a new
+        ``start()``.  The audio buffer persists in the ``AudioCapture``
+        object until then.
+
+        Returns:
+            Path to the saved WAV file, or *None* if no audio is available.
+        """
+        if not self._orchestrator or not hasattr(self._orchestrator, "audio"):
+            return None
+        out_dir = output_dir or _get_output_dir()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        recording_path = out_dir / f"session_{ts}.wav"
+        saved = self._orchestrator.audio.save_recording(recording_path)
+        if saved:
+            logger.info("Audio saved to %s", recording_path)
+            return recording_path
+        return None
+
+    @property
+    def has_audio(self) -> bool:
+        """True if audio data is available for saving."""
+        if not self._orchestrator or not hasattr(self._orchestrator, "audio"):
+            return False
+        return hasattr(self._orchestrator.audio, "save_recording")
 
     def pause(self) -> None:
         """Pause audio capture. Models stay loaded, timer pauses."""
@@ -238,7 +275,12 @@ class Session:
         audio_health: dict = {}
         if self._orchestrator and hasattr(self._orchestrator, "audio"):
             audio_health = self._orchestrator.audio.get_audio_health()
-        capture_mode = "app_tap" if getattr(self, "_system_audio_pid", 0) > 0 else "device"
+        if self._single_device_mode:
+            capture_mode = "single_device"
+        elif getattr(self, "_system_audio_pid", 0) > 0:
+            capture_mode = "app_tap"
+        else:
+            capture_mode = "device"
         return {
             "running": self._running,
             "paused": self._paused,
@@ -257,8 +299,21 @@ class Session:
 
         Tags the chunk with source="system" (remote participants), unless
         running in single-device mode where all speech is source="mic" (You).
+        Cross-stream echo suppression runs before buffering.
         """
         source = "mic" if self._single_device_mode else "system"
+        dedup = self._deduplicator.check(text, source, timestamp)
+        if dedup.action == "suppress":
+            logger.info(
+                "[dedup] Suppressed %s echo: %r (%.0f%% match with %s: %r)",
+                source,
+                text[:60],
+                dedup.similarity * 100,
+                dedup.matched_source,
+                dedup.matched_text[:60],
+            )
+            self._on_silence_detected(timestamp, source=source)
+            return
         logger.debug("[%s] Valid speech: %r", source, text[:80])
         self._transcript_buffer.add_chunk(text, timestamp, source=source)
 
@@ -266,17 +321,30 @@ class Session:
         """Called when valid speech is transcribed from microphone.
 
         Tags the chunk with source="mic" (local user).
+        Cross-stream echo suppression runs before buffering.
         """
+        dedup = self._deduplicator.check(text, "mic", timestamp)
+        if dedup.action == "suppress":
+            logger.info(
+                "[dedup] Suppressed mic echo: %r (%.0f%% match with %s: %r)",
+                text[:60],
+                dedup.similarity * 100,
+                dedup.matched_source,
+                dedup.matched_text[:60],
+            )
+            self._on_silence_detected(timestamp, source="mic")
+            return
         logger.debug("[mic] Valid speech: %r", text[:80])
         self._transcript_buffer.add_chunk(text, timestamp, source="mic")
 
-    def _on_silence_detected(self, timestamp: float) -> None:
+    def _on_silence_detected(self, timestamp: float, source: str = "") -> None:
         """Called when ASR returns empty/hallucination (silence).
 
-        Notifies the TranscriptBuffer so it can finalize the active turn
-        if the silence gap exceeds the turn_pause threshold.
+        Notifies the TranscriptBuffer with the source so that system
+        audio silence doesn't prematurely finalize mic turns (and vice
+        versa). Source is "system" or "mic".
         """
-        self._transcript_buffer.on_silence(timestamp)
+        self._transcript_buffer.on_silence(timestamp, source=source)
 
     def _on_trigger_result(self, trigger: Trigger, result: GenerationResult) -> None:
         """Called when a trigger fires and produces a generation result.
@@ -669,11 +737,11 @@ class Session:
                     text = lfm2.transcribe(audio_path)
 
                     if not text or text.startswith("["):
-                        self._on_silence_detected(timestamp)
+                        self._on_silence_detected(timestamp, source="mic")
                         return
 
                     if is_hallucination_only(text):
-                        self._on_silence_detected(timestamp)
+                        self._on_silence_detected(timestamp, source="mic")
                         return
 
                     # Valid speech from mic

@@ -6,14 +6,20 @@ public API the orchestrator and triggers expect: query() returns
 ColBERT + Jaccard implementation.
 """
 
+from __future__ import annotations
+
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
-from lib.rag import RAGPipeline, RAGConfig
+from lib.rag import RAGConfig, RAGPipeline
 from lib.rag.embedder import SentenceTransformerEmbedder
 from lib.rag.parser.composite_parser import CompositeParser
+
+if TYPE_CHECKING:
+    from lib.config import NotionConfig
+    from lib.rag.types import IndexResult
 
 logger = logging.getLogger(__name__)
 
@@ -107,15 +113,81 @@ class RAGEngine:
         combined_context = "\n\n---\n\n".join(combined_chunks)
         return combined_context, top_score, top_source
 
-    def rebuild_index(self) -> None:
-        """Force rebuild: clear all data and re-index documents."""
+    def rebuild_index(
+        self,
+        notion_config: Optional[NotionConfig] = None,
+    ) -> None:
+        """Force rebuild: clear all data and re-index local + Notion documents."""
+
         self._conn.execute("DELETE FROM chunks")
         self._conn.execute("DELETE FROM sections")
         self._conn.execute("DELETE FROM documents")
         self._conn.commit()
         self._index_documents()
+        if notion_config and notion_config.enabled:
+            self.index_notion_sources(notion_config)
         self._chunk_count = self._get_chunk_count()
         logger.info("Index rebuilt: %d chunks", self._chunk_count)
+
+    def index_notion_sources(self, notion_config: NotionConfig) -> IndexResult:
+        """Fetch and index Notion pages/databases into the RAG pipeline."""
+        import os
+
+        from lib.notion.client import NotionClient, NotionClientError
+        from lib.notion.parser import NotionDocumentParser
+        from lib.rag.types import IndexResult as _IndexResult
+
+        combined = _IndexResult()
+        token = os.environ.get(notion_config.api_token_env, "")
+        if not token:
+            logger.warning("Notion token env var %s not set, skipping", notion_config.api_token_env)
+            return combined
+
+        try:
+            client = NotionClient(api_token=token)
+        except NotionClientError as exc:
+            logger.warning("Notion client init failed: %s", exc)
+            return combined
+
+        parser = NotionDocumentParser(client)
+
+        for page_id in notion_config.rag_source_page_ids:
+            try:
+                doc = parser.parse_page(page_id)
+                result = self._pipeline.index_document(doc)
+                combined.merge(result)
+            except Exception as exc:
+                logger.warning("Failed to index Notion page %s: %s", page_id, exc)
+                combined.errors.append(f"notion://{page_id}: {exc}")
+
+        for db_id in notion_config.rag_source_database_ids:
+            try:
+                pages = client.get_database_pages(
+                    db_id, max_pages=notion_config.max_pages_per_database
+                )
+                for page in pages:
+                    pid = page.get("id", "")
+                    if not pid:
+                        continue
+                    try:
+                        doc = parser.parse_page(pid)
+                        result = self._pipeline.index_document(doc)
+                        combined.merge(result)
+                    except Exception as exc:
+                        logger.warning("Failed to index Notion db page %s: %s", pid, exc)
+                        combined.errors.append(f"notion://{pid}: {exc}")
+            except Exception as exc:
+                logger.warning("Failed to query Notion database %s: %s", db_id, exc)
+                combined.errors.append(f"notion-db://{db_id}: {exc}")
+
+        logger.info(
+            "Notion indexing: %d new, %d skipped, %d chunks, %d errors",
+            combined.documents_indexed,
+            combined.documents_skipped,
+            combined.chunks_created,
+            len(combined.errors),
+        )
+        return combined
 
     @property
     def is_using_colbert(self) -> bool:

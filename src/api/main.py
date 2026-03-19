@@ -33,7 +33,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-from src.api.routes import session, context, transcript, prompts, notes  # noqa: E402
+from src.api.routes import context, notes, notion, prompts, session, transcript  # noqa: E402
 
 app = FastAPI(
     title="Meeting Prompter",
@@ -56,6 +56,7 @@ app.include_router(context.router)
 app.include_router(transcript.router)
 app.include_router(prompts.router)
 app.include_router(notes.router)
+app.include_router(notion.router)
 
 
 @app.get("/health")

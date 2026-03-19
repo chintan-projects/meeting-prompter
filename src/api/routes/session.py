@@ -1,6 +1,7 @@
 """Session management routes — start/stop/pause/resume/status/reindex."""
 
 import logging
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -125,8 +126,71 @@ async def stop_session() -> dict:
     if not session.is_running:
         raise HTTPException(status_code=409, detail="No session running")
     elapsed = session.elapsed_seconds
+    import os
+
     session.stop()
-    return {"status": "stopped", "elapsed_seconds": elapsed}
+    notion_config = session.config.notion
+    notion_token = os.environ.get(notion_config.api_token_env, "")
+    return {
+        "status": "stopped",
+        "elapsed_seconds": elapsed,
+        "has_audio": session.has_audio,
+        "has_transcript": session.transcript.segment_count > 0,
+        "notion_available": notion_config.enabled and bool(notion_token),
+    }
+
+
+class SaveRequest(BaseModel):
+    save_transcript: bool = True
+    save_audio: bool = True
+    save_notes: bool = True
+    notes_markdown: str = ""
+
+
+def _output_path(session: Session, suffix: str) -> "Path":
+    """Build a timestamped output path with meeting title slug."""
+    import time as _time
+
+    from lib.paths import get_output_dir
+
+    out_dir = get_output_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = _time.strftime("%Y%m%d_%H%M%S")
+    title_slug = (
+        session.meeting_context.title.replace(" ", "-")[:40]
+        if session.meeting_context and session.meeting_context.title
+        else "meeting"
+    )
+    return out_dir / f"{ts}_{title_slug}_{suffix}"
+
+
+@router.post("/save")
+async def save_session(req: SaveRequest) -> dict:
+    """Save session data based on user consent choices.
+
+    Called after stop, before the next start. Saves only what the user
+    opted into via the post-meeting consent dialog.
+    """
+    session = get_session()
+    saved: dict = {}
+
+    if req.save_audio:
+        audio_path = session.save_audio()
+        if audio_path:
+            saved["audio_path"] = str(audio_path)
+
+    if req.save_transcript:
+        transcript_path = _output_path(session, "transcript.md")
+        transcript_md = session.transcript.export_markdown()
+        transcript_path.write_text(transcript_md, encoding="utf-8")
+        saved["transcript_path"] = str(transcript_path)
+
+    if req.save_notes and req.notes_markdown:
+        notes_path = _output_path(session, "notes.md")
+        notes_path.write_text(req.notes_markdown, encoding="utf-8")
+        saved["notes_path"] = str(notes_path)
+
+    return {"status": "saved", "saved": saved}
 
 
 @router.post("/pause")

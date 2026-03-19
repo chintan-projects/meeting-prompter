@@ -18,7 +18,7 @@ from lib.rag.types import ParsedDocument, ParsedSection
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 
 
-def _estimate_tokens(text: str) -> int:
+def estimate_tokens(text: str) -> int:
     """Approximate token count. ~1.3 tokens per whitespace-delimited word."""
     return max(1, int(len(text.split()) * 1.3))
 
@@ -37,7 +37,7 @@ class TextParser:
             raise ParseError(f"Cannot read file: {path}: {exc}") from exc
 
         mime_type = mimetypes.guess_type(str(path))[0] or "text/plain"
-        sections = _extract_sections(text)
+        sections = extract_sections(text)
 
         return ParsedDocument(
             path=str(path.resolve()),
@@ -45,11 +45,11 @@ class TextParser:
             mime_type=mime_type,
             sections=sections,
             full_text=text,
-            token_count=_estimate_tokens(text),
+            token_count=estimate_tokens(text),
         )
 
 
-def _extract_sections(text: str) -> list[ParsedSection]:
+def extract_sections(text: str) -> list[ParsedSection]:
     """Split text into sections based on markdown headings."""
     headings: list[tuple[int, int, str]] = []  # (start_pos, level, title)
 

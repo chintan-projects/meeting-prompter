@@ -1,6 +1,6 @@
 # CLAUDE.md — meeting-prompter
 
-Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-Audio, detects 4 trigger types (questions, topics, alerts, follow-ups), retrieves context via hybrid FTS5 + vector RAG, and generates mode-aware responses using LFM2.5-1.2B-Instruct. Everything runs locally on Apple Silicon. Includes a Tauri desktop app with dual-pane UI (editable transcript + live prompts).
+Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-Audio, detects 4 trigger types (questions, topics, alerts, follow-ups), retrieves context via hybrid FTS5 + vector RAG, and generates mode-aware responses using LFM2.5-1.2B-Instruct. Everything runs locally on Apple Silicon. Includes a Tauri desktop app with dual-pane UI (editable transcript + live prompts) and optional Notion export/ingest.
 
 ## Key Paths
 
@@ -17,6 +17,7 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │   ├── paths.py                   # Project root / runner / output path resolution
 │   ├── lfm2_wrapper.py            # LFM2.5-Audio subprocess wrapper (llama.cpp)
 │   ├── text_refiner.py            # Post-transcription text polishing via LLM
+│   ├── stream_dedup.py             # Cross-stream echo suppression (SequenceMatcher)
 │   ├── diarization.py             # Neural speaker diarization (Tier 2)
 │   ├── answer_extractor.py        # Sentence extraction for grounding (fallback)
 │   ├── rag_generator.py           # LFM2.5-1.2B-Instruct generation (ChatML)
@@ -31,11 +32,16 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │   │   └── followup_trigger.py    # Pause-based follow-up suggestions
 │   ├── conversation/              # Conversation intelligence
 │   │   ├── buffer.py              # Rolling 90s transcript + trigger routing
-│   │   └── meeting_context.py     # YAML meeting context loader
+│   │   └── meeting_context.py     # YAML meeting context loader (watch words, agenda)
 │   ├── generation/                # Mode-aware generation
 │   │   ├── prompts.py             # ChatML prompt templates per trigger type
 │   │   ├── generator.py           # ModeAwareGenerator — trigger-routed generation
 │   │   └── types.py               # GenerationResult dataclass
+│   ├── notion/                    # Notion integration (export + RAG ingest)
+│   │   ├── client.py              # Notion API client (retry/backoff, rate-limit safe)
+│   │   ├── exporter.py            # Meeting notes/transcript → Notion page
+│   │   ├── parser.py              # Notion page → markdown
+│   │   └── block_converter.py     # Notion block tree ↔ markdown
 │   └── rag/                       # Hybrid retrieval pipeline
 │       ├── storage/               # SQLite schema + migrations
 │       ├── parser/                # Document parsers (text, PDF, composite)
@@ -47,7 +53,7 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │       ├── config.py              # RAGConfig dataclass (14 tunables)
 │       └── types.py               # Citation, RetrievalResult, FusedHit
 ├── src/api/                       # FastAPI backend for Tauri app
-│   ├── main.py                    # FastAPI server + WebSocket endpoints
+│   ├── main.py                    # FastAPI server + WebSocket endpoints (router registration)
 │   ├── session.py                 # Session manager (bridges audio pipeline → WebSocket)
 │   ├── transcript_buffer.py       # Turn-based ASR chunk accumulator
 │   ├── transcript_store.py        # Append-only transcript with edit overlay + upsert
@@ -57,6 +63,7 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │       ├── transcript.py          # WebSocket /ws/transcript (turn updates + edits)
 │       ├── prompts.py             # WebSocket /ws/prompts (trigger results)
 │       ├── notes.py               # Notes generate/export/save/download endpoints
+│       ├── notion.py              # GET /notion/status, POST /notion (export + RAG sync)
 │       └── context.py             # Meeting context upload
 ├── app/                           # Tauri + React frontend
 │   ├── src-tauri/src/lib.rs       # Rust shell: spawns Python backend, manages lifecycle
@@ -66,30 +73,26 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │   │   ├── PromptsPane.tsx        # Right pane: live trigger results
 │   │   ├── StatusBar.tsx          # Session controls, audio health, elapsed time
 │   │   ├── MeetingSetup.tsx       # Pre-meeting context config dialog
-│   │   └── NoteEditor.tsx         # Post-meeting structured notes editor
+│   │   └── NoteEditor.tsx         # Post-meeting structured notes editor (export + consent)
 │   ├── src/hooks/
 │   │   ├── useWebSocket.ts        # WebSocket connection + reconnect hook
-│   │   └── useTranscript.ts       # Transcript state with turn-based upsert
+│   │   ├── useTranscript.ts       # Transcript state with turn-based upsert
+│   │   └── useKeyboardShortcuts.ts # Keyboard shortcut bindings
 │   └── src/styles/global.css      # Theme variables and animations
-├── tests/                         # Colocated Python tests
-│   ├── test_audio_capture.py      # Audio level detection + health diagnostics
-│   ├── test_lfm2_wrapper.py       # LFM2.5-Audio output parsing
-│   ├── test_question_trigger.py   # Rhetorical/tag/self-answer suppression (46 tests)
-│   ├── test_session.py            # Thread-safe queue bridge + turn callbacks
-│   ├── test_transcript_buffer.py  # Turn accumulation, boundaries, callbacks
-│   ├── test_transcript_store.py   # Append, upsert, edit overlay, export
+├── tests/                         # Colocated Python tests (see Testing below)
 │   └── eval/                      # RAG retrieval quality eval harness
 │       ├── rag_eval_dataset.yaml  # 21 queries against real context docs
-│       └── test_rag_eval.py       # Hit@1, Hit@3, MRR, confidence analysis
+│       └── test_rag_eval.py       # Hit@1, Hit@3, MRR, confidence analysis (@slow)
 ├── tools/audio-tap/               # Swift CLI for per-app audio capture (ScreenCaptureKit)
 │   ├── Sources/AudioTap.swift     # ScreenCaptureKit stream → raw float32 PCM stdout
 │   └── build.sh                   # Build script → runners/audio-tap binary
-├── scripts/                       # Utility scripts (build, setup, diagnostics)
+├── scripts/                       # Utility scripts (backend launcher, packaging)
 ├── models/                        # Symlink → ~/Projects/_models
 ├── runners/                       # llama.cpp + audio-tap binaries (gitignored)
 ├── context/                       # Source documents for RAG (PDF + Markdown)
 ├── data/                          # SQLite RAG index (rag.db, gitignored)
-└── output/                        # Saved meeting notes (gitignored)
+├── output/                        # Saved meeting notes (gitignored)
+└── .claude/                       # Claude Code setup — see "Claude Code Workflow" below
 ```
 
 ## Commands
@@ -111,13 +114,14 @@ cd app && npm run tauri dev                  # Dev mode (hot reload)
 
 # API server (standalone)
 uvicorn src.api.main:app --host 0.0.0.0 --port 8420
+curl -s localhost:8420/notion/status | jq    # Notion integration readiness
 
 # Re-index documents (delete data/rag.db and restart, or POST /session/reindex)
 
 # Tests
-pytest                                       # All tests (464 tests)
+pytest                                       # Full unit suite (~585 tests)
 pytest tests/test_transcript_buffer.py -v    # Buffer tests only
-pytest tests/eval/ -m slow -v               # RAG retrieval eval (requires real docs)
+pytest tests/eval/ -m slow -v                # RAG retrieval eval (requires real docs)
 cd app && npx tsc --noEmit                   # TypeScript check
 ```
 
@@ -170,10 +174,19 @@ Speaker attribution is two-tier:
 - **Tier 1** (deterministic): source="mic" → "You", source="system" → "Others"
 - **Tier 2** (neural): Optional diarization on system audio to distinguish individual remote speakers
 
+Cross-stream echo suppression: `StreamDeduplicator` (lib/stream_dedup.py) detects
+when both streams produce near-duplicate ASR text from the same speech (acoustic
+coupling without headphones). Uses `difflib.SequenceMatcher` with config-driven
+thresholds (dual_stream section in config.yaml). Suppressed chunks still signal
+silence to maintain turn boundaries.
+
+Per-source silence: TranscriptBuffer tracks silence flags per source (`dict[str, bool]`),
+so system audio silence doesn't prematurely finalize mic turns and vice versa.
+
 Thread safety: TranscriptBuffer guards all mutations with `threading.Lock`. LFM2Wrapper
 uses `subprocess.run()` per call (independent subprocesses). RAGAnswerGenerator has an
 internal lock for generation. Session pipeline includes try/finally cleanup for both
-audio capture threads.
+audio capture threads. StreamDeduplicator uses its own lock for concurrent check() calls.
 
 ### Turn-Based Transcript Architecture
 
@@ -202,6 +215,25 @@ Two independent buffers receive the same raw chunks:
 | TOPIC_MATCH | FYI | Surface new fact from docs (not conversation echo) | 100 | ephemeral (45s) |
 | FOLLOW_UP | SUGGEST | Coaching nudge — "Ask about...", "Mention that..." | 75 | standard (90s) |
 
+Adding a new mode touches six files in a fixed order — use the `add-trigger` skill.
+
+### Post-Meeting Notes & Notion Export
+
+After a session stops, the session is kept alive so notes/transcript remain available
+for export (see BUG-003). `notes_generator.py` produces structured meeting notes via the
+LLM; `NoteEditor.tsx` lets the user review/edit before anything leaves the machine.
+Export is **consent-gated** — notes leave the device only when the user exports.
+
+Notion integration (`lib/notion/`, `routes/notion.py`) does two independent things:
+- **Export**: `POST /notion` creates a child page under `export_parent_page_id` from
+  notes + optional transcript (`include_transcript` opt-in). Returns the page URL.
+- **RAG ingest**: pages/databases in `rag_source_page_ids` / `rag_source_database_ids`
+  are fetched, converted to markdown, chunked, and indexed alongside `context/` docs.
+
+Disabled by default; enable in `config.yaml` (`notion.enabled`) + `NOTION_API_TOKEN`
+env var. Rate limits (429) handled via `max_retries` / `initial_backoff_s`. Use the
+`notion-sync` skill for setup and operation.
+
 ### Key Design Decisions
 
 - **Turn-based transcript buffering**: Backend accumulates raw ASR chunks into speech turns via pause detection. Frontend receives coherent paragraphs, not fragmented chunks.
@@ -216,6 +248,7 @@ Two independent buffers receive the same raw chunks:
 - **ChatML format**: `<|im_start|>` / `<|im_end|>` delimiters for LFM2.5-Instruct.
 - **Config externalization**: All thresholds in `config.yaml`, typed dataclass loader.
 - **Session lifecycle**: Session kept alive after stop for export access; fresh session created on next start.
+- **Consent-gated export**: Notes/transcript stay local until the user explicitly exports (e.g. to Notion).
 - **Per-app audio capture**: ScreenCaptureKit via Swift CLI (`audio-tap`). Captures audio from a specific app by PID. Requires macOS 13+ and Screen Recording permission. Falls back to BlackHole device capture.
 - **Thread-safe dual-stream**: TranscriptBuffer uses `threading.Lock` on all public methods. Session pipeline uses try/finally for mic capture cleanup. `_trigger_history` bounded with `deque(maxlen=1000)` to prevent memory leaks in long sessions.
 
@@ -229,6 +262,9 @@ Two independent buffers receive the same raw chunks:
 **`/ws/prompts`** — Intelligence results with display metadata:
 - Server → Client: `{"type": "prompt", "trigger_type": "question", "trigger_text": "...", "answer": "...", "confidence": 0.75, "method": "hybrid", "latency_ms": 480, "source": "deployment.md", "persistence": "persistent", "dismiss_ms": 0, "display_label": "ANSWER", "display_emoji": "💡"}`
 - Dead-end results (`no_match`, `no_context`, `suppressed`, or empty answer) are filtered server-side and never sent to the client.
+
+When adding or changing a message shape, update this section in the same change — it is
+the contract both sides read. Use the `add-api-endpoint` skill.
 
 ### Fallback Chains
 
@@ -248,14 +284,72 @@ Models in `~/Projects/_models/` (shared). Set `MODELS_DIR` env var to override.
 
 All thresholds externalized to `config.yaml`. Loader: `lib/config.py` with typed dataclasses. Falls back to defaults if no YAML present.
 
-Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question_score_threshold=0.25, topic_match_threshold=0.50, rag_confidence_minimum=0.35, turn_pause=2.0s, max_turn_duration=30s, watch_words configurable per meeting. RAG: lexical_weight=0.05, semantic_weight=0.95, max_chunk_tokens=400, db_path=data/rag.db. Intelligence panel: min_answer_length=10, dismiss_persistent_ms=0, dismiss_standard_ms=90000, dismiss_ephemeral_ms=45000.
+Key settings: n_ctx=4096, max_context_chars=6000, pause_threshold=1.5s, question_score_threshold=0.25, topic_match_threshold=0.50, rag_confidence_minimum=0.35, turn_pause=2.0s, max_turn_duration=30s, watch_words configurable per meeting. RAG: lexical_weight=0.05, semantic_weight=0.95, max_chunk_tokens=400, db_path=data/rag.db. Intelligence panel: min_answer_length=10, dismiss_persistent_ms=0, dismiss_standard_ms=90000, dismiss_ephemeral_ms=45000. Dual-stream echo suppression: window_seconds=8.0, similarity_threshold=0.55, short_text_threshold=0.75. Notion: enabled=false, api_token_env=NOTION_API_TOKEN, max_retries=3.
+
+## Testing
+
+~585 Python tests across ~22 files (colocated in `tests/`), plus 16 frontend tests
+and TypeScript strict mode. Notable suites:
+
+- `test_question_trigger.py` — rhetorical/tag/self-answer suppression
+- `test_stream_dedup.py` — cross-stream echo detection
+- `test_transcript_buffer.py` / `test_transcript_store.py` — turn accumulation, upsert, edit overlay, export
+- `test_session.py` — thread-safe queue bridge + turn callbacks
+- `test_prompt_experience.py` — coaching persona + dead-end suppression contracts
+- `test_notion_exporter.py` / `test_notion_parser.py` / `test_notion_block_converter.py` — Notion export + ingest
+- `test_notes_generator.py`, `test_diarization.py`, `test_system_audio_capture.py`, `test_rag_engine.py`, `test_rag_pipeline_document.py`
+- `tests/eval/` — RAG retrieval eval (`@pytest.mark.slow`): Hit@1, Hit@3, MRR
+
+Run `pytest` for the fast suite; `pytest -m slow` for the retrieval eval (needs real docs).
+
+## Claude Code Workflow
+
+This repo is set up for Claude Code (`.claude/`). Keep it healthy — it is how sessions
+stay grounded across handoffs.
+
+### Tracking files (source of truth for state)
+- `PROGRESS.yaml` — LEAN active state only (current phase, active work, blockers). Must stay under ~50 lines.
+- `PROGRESS-archive.yaml` — completed items and old sessions.
+- `BUGS.yaml` — bug tracker (severity + status), captured via `/log-bug`, fixed via `/fix-bug`.
+- `FEATURES.yaml` — feature/workstream backlog with IDs (F-NNN), status, effort, dependencies.
+
+### Slash commands (`.claude/commands/`)
+- `/progress` — status dashboard (read-only) from PROGRESS.yaml + BUGS.yaml.
+- `/log-bug` — interrupt-safe bug capture; appends to BUGS.yaml and returns to work.
+- `/fix-bug BUG-NNN` — TDD micro-session: regression test → minimal fix → verify.
+- `/session-end` — checkpoint: update PROGRESS.yaml, archive old sessions, commit state.
+- `/rag-eval` — run the retrieval eval and report Hit@1 / Hit@3 / MRR.
+- `/add-trigger <name>` — scaffold a new intelligence trigger type end-to-end.
+- `/audio-check` — diagnose the dual-stream audio pipeline.
+- `/meeting-setup` — author a meeting_context.yaml to prime the coach.
+
+### Skills (`.claude/skills/`, project-local)
+- `architecture-map`, `principles-check`, `prd-to-features`, `bug-fix`
+- `add-trigger` — new trigger type across enum, engine, config, prompts, tests.
+- `tune-rag` — run the eval harness, tune fusion weights/thresholds safely.
+- `audio-debug` — diagnose devices, levels, echo, speaker labels.
+- `add-api-endpoint` — FastAPI route/WS message + matching React hook, protocol kept in sync.
+- `tune-prompts` — refine the coaching-voice prompts per intelligence mode.
+- `meeting-context` — build meeting_context.yaml (watch words, agenda, participants).
+- `notion-sync` — configure/operate Notion export + RAG ingest.
+
+(Personal workflow skills — gstack `ship`/`review`/`qa`/etc. — are symlinked in and are
+not project-specific.)
+
+### Agents (`.claude/agents/`)
+`architecture-scout`, `bug-triager`, `code-reviewer`, `test-writer`.
+
+### Hooks (`.claude/settings.json`)
+SessionStart loads state; PreToolUse validates Bash + protects files; PostToolUse
+auto-formats (ruff/black) and notifies on test failures; Stop runs a smoke test and a
+diff-review agent; TaskCompleted validates completion.
 
 ## Conventions
 
 - Python 3.10+ (Apple Silicon required)
-- All inference runs locally — no external API calls
+- All inference runs locally — no external API calls (Notion export is the only opt-in, consent-gated network egress)
 - Models resolved via `MODELS_DIR` env var
 - Thread safety: `threading.Lock()` in TranscriptBuffer, ConversationBuffer, RAGAnswerGenerator; `loop.call_soon_threadsafe` for queue bridge; `deque(maxlen=)` for bounded history
 - All files under 300 lines
 - `logging` module throughout (no `print()` in lib/)
-- 464 Python tests, 16 frontend tests, TypeScript strict mode
+- ~585 Python tests, 16 frontend tests, TypeScript strict mode

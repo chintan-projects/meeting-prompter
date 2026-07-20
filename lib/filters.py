@@ -164,9 +164,19 @@ def is_hallucination(text: str) -> bool:
     if text_clean in _VAGUE_QUESTIONS:
         return True
 
+    # Single character after cleanup (e.g. "E", "A.", "I.")
+    text_clean_chars = text_lower.rstrip(".,!? ")
+    if len(text_clean_chars) <= 1:
+        return True
+
     # Repeated single-letter hallucination (e.g. "E E E E", "A A A")
     words = text_lower.split()
     if len(words) >= 2 and all(len(w.rstrip(".,!?")) <= 1 for w in words):
+        return True
+
+    # All words are the same short token (e.g. "ba ba ba", "de de de")
+    stripped_words = [w.rstrip(".,!?") for w in words]
+    if len(words) >= 2 and len(set(stripped_words)) == 1 and len(stripped_words[0]) <= 2:
         return True
 
     # Repetitive/circular phrases (hallucination symptom)

@@ -234,26 +234,64 @@ class TestPermissionPreCheck:
 
         cap = SystemAudioCapture(pid=123, app_name="zoom.us")
 
-        # Mock Popen — subprocess exits immediately with error
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = 1
-        mock_proc.returncode = 1
-        mock_proc.stdout = MagicMock()
-        mock_proc.stderr = MagicMock()
-        mock_proc.stderr.read.return_value = b"permission denied"
-        mock_proc.stderr.__iter__ = MagicMock(return_value=iter([]))
-
-        with patch("lib.system_audio_capture.subprocess.Popen", return_value=mock_proc):
-            t = threading.Thread(target=cap.start_stream, args=(MagicMock(),), daemon=True)
-            t.start()
-            t.join(timeout=2.0)
-            cap.running = False
-            t.join(timeout=2.0)
+        # Permission denied → start_stream blocks without launching subprocess
+        t = threading.Thread(target=cap.start_stream, args=(MagicMock(),), daemon=True)
+        t.start()
+        t.join(timeout=1.0)
+        cap.running = False
+        t.join(timeout=2.0)
 
         assert cap._capture_error is not None
         assert "permission denied" in cap._capture_error.lower()
         health = cap.get_audio_health()
         assert "capture_error" in health
+
+    @patch("lib.system_audio_capture.SystemAudioCapture.check_permission")
+    @patch("lib.system_audio_capture.SystemAudioCapture._get_binary")
+    def test_permission_denied_no_subprocess(
+        self, mock_binary: MagicMock, mock_permission: MagicMock
+    ) -> None:
+        """When permission denied, no subprocess should be launched."""
+        import threading
+
+        mock_binary.return_value = Path("/fake/audio-tap")
+        mock_permission.return_value = False
+
+        cap = SystemAudioCapture(pid=123, app_name="zoom.us")
+
+        with patch("lib.system_audio_capture.subprocess.Popen") as mock_popen:
+            t = threading.Thread(target=cap.start_stream, args=(MagicMock(),), daemon=True)
+            t.start()
+            t.join(timeout=1.0)
+            cap.running = False
+            t.join(timeout=2.0)
+
+            # Subprocess.Popen should never have been called
+            mock_popen.assert_not_called()
+
+    @patch("lib.system_audio_capture.SystemAudioCapture.check_permission")
+    @patch("lib.system_audio_capture.SystemAudioCapture._get_binary")
+    def test_permission_denied_no_audio_processed(
+        self, mock_binary: MagicMock, mock_permission: MagicMock
+    ) -> None:
+        """When permission denied, no audio should be processed (zero chunks)."""
+        import threading
+
+        mock_binary.return_value = Path("/fake/audio-tap")
+        mock_permission.return_value = False
+
+        cap = SystemAudioCapture(pid=123, app_name="zoom.us")
+        callback = MagicMock()
+
+        t = threading.Thread(target=cap.start_stream, args=(callback,), daemon=True)
+        t.start()
+        t.join(timeout=1.0)
+        cap.running = False
+        t.join(timeout=2.0)
+
+        # No chunks should have been processed
+        assert cap._total_chunks == 0
+        callback.assert_not_called()
 
     @patch("lib.system_audio_capture.SystemAudioCapture.check_permission")
     @patch("lib.system_audio_capture.SystemAudioCapture._get_binary")
@@ -344,6 +382,72 @@ class TestPermissionPreCheck:
 
         # _capture_error should be None for clean exit
         assert cap._capture_error is None
+
+
+class TestAudioLevelGate:
+    """Tests for audio level gate — prevents hallucination on noise."""
+
+    def test_speech_chunk_passed_to_asr(self, capture: SystemAudioCapture) -> None:
+        """Speech-level audio should be written to WAV and sent to ASR."""
+
+        callback = MagicMock()
+        capture.callback = callback
+
+        # Generate speech-level audio (well above thresholds)
+        t = np.linspace(0, 1, 16000, dtype=np.float32)
+        speech = 0.1 * np.sin(2 * np.pi * 440 * t)
+        capture._process_chunk(speech, 100.0)
+
+        callback.assert_called_once()
+        wav_path = callback.call_args[0][0]
+        # The temp WAV is cleaned up, but callback was called with speech data
+        assert isinstance(wav_path, Path)
+
+    def test_silent_chunk_replaced_with_zeros(self, capture: SystemAudioCapture) -> None:
+        """Below-threshold audio should be replaced with silence before ASR.
+
+        This prevents hallucination artifacts (like 'E E E') when the
+        capture produces low-level noise instead of actual speech.
+        """
+        import soundfile as sf
+
+        written_data: list = []
+
+        # Capture what gets written to the WAV
+        original_write = sf.write
+
+        def spy_write(path: object, data: np.ndarray, sr: int) -> None:
+            written_data.append(data.copy())
+            original_write(path, data, sr)
+
+        callback = MagicMock()
+        capture.callback = callback
+
+        # Generate low-level noise (below speech threshold)
+        noise = np.random.randn(16000).astype(np.float32) * 0.001
+        assert float(np.sqrt(np.mean(noise**2))) < 0.002  # below RMS threshold
+
+        with patch("lib.system_audio_capture.sf.write", side_effect=spy_write):
+            capture._process_chunk(noise, 100.0)
+
+        # The ASR callback should still be called (for silence detection)
+        callback.assert_called_once()
+        # But the audio written to WAV should be zeros (gated silence)
+        assert len(written_data) == 1
+        assert np.allclose(written_data[0], 0.0)
+
+    def test_raw_audio_always_recorded(self, capture: SystemAudioCapture) -> None:
+        """Session recording should contain raw audio, not gated silence."""
+        callback = MagicMock()
+        capture.callback = callback
+
+        # Low-level noise
+        noise = np.random.randn(16000).astype(np.float32) * 0.001
+        capture._process_chunk(noise, 100.0)
+
+        # Raw audio should be in session recording (not zeros)
+        assert len(capture._session_audio) == 1
+        assert not np.allclose(capture._session_audio[0], 0.0)
 
 
 class TestWorkerLoop:

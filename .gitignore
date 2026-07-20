@@ -49,6 +49,8 @@ archive*
 data/colbert_index/
 data/*.json
 data/*.db
+data/*.db-shm
+data/*.db-wal
 CLAUDE.local.md
 .claude/settings.local.json
 .claude/agent-memory-local/

@@ -104,9 +104,10 @@ class TranscriptBuffer:
         self._active_turn: Optional[Turn] = None
         self._finalized_turns: List[Turn] = []
 
-        # Set by on_silence() to signal a pause was detected.
-        # Checked by add_chunk() to finalize before starting/extending.
-        self._silence_seen: bool = False
+        # Per-source silence flags: set by on_silence(source=...) so that
+        # system audio silence doesn't prematurely finalize mic turns and
+        # vice versa. Key "" is the global fallback for sourceless callers.
+        self._silence_seen: dict[str, bool] = {}
 
     @property
     def active_turn(self) -> Optional[Turn]:
@@ -157,12 +158,22 @@ class TranscriptBuffer:
                     source and self._active_turn.source and (source != self._active_turn.source)
                 )
 
+                # Check silence for the active turn's source specifically,
+                # falling back to global ("") for sourceless callers.
+                active_src = self._active_turn.source
+                silence_for_source = self._silence_seen.get(
+                    active_src, self._silence_seen.get("", False)
+                )
+
                 # Finalize if silence, max duration, or source change
-                if self._silence_seen or duration >= self._max_turn_duration or source_changed:
+                if silence_for_source or duration >= self._max_turn_duration or source_changed:
                     self._finalize_active()
 
-            # Reset silence flag — we have speech now
-            self._silence_seen = False
+            # Reset silence flags for this source — we have speech now
+            if source:
+                self._silence_seen[source] = False
+            else:
+                self._silence_seen[""] = False
 
             # Start a new turn or extend the active one
             if self._active_turn is None:
@@ -192,23 +203,32 @@ class TranscriptBuffer:
                 return self._finalize_active()
             return None
 
-    def on_silence(self, timestamp: float) -> Optional[Turn]:
+    def on_silence(self, timestamp: float, source: str = "") -> Optional[Turn]:
         """Called when silence is detected in the audio stream.
 
-        Sets a flag so the next add_chunk() knows a pause occurred.
-        Also immediately finalizes the active turn if the gap since
-        the last speech exceeds turn_pause — this ensures the UI
-        updates promptly rather than waiting for the next speech chunk.
+        Sets a per-source flag so the next add_chunk() from the SAME
+        source knows a pause occurred. This prevents system audio silence
+        from prematurely finalizing mic turns and vice versa.
+
+        Also immediately finalizes the active turn if the gap exceeds
+        turn_pause AND the silence source matches the active turn.
         """
         with self._lock:
-            self._silence_seen = True
+            key = source or ""
+            self._silence_seen[key] = True
 
             if self._active_turn is None:
                 return None
 
-            gap = timestamp - self._active_turn.end_timestamp
-            if gap >= self._turn_pause:
-                return self._finalize_active()
+            # Only finalize if silence matches the active turn's source
+            # (or if either is sourceless for backward compatibility)
+            active_src = self._active_turn.source
+            source_matches = not source or not active_src or source == active_src
+
+            if source_matches:
+                gap = timestamp - self._active_turn.end_timestamp
+                if gap >= self._turn_pause:
+                    return self._finalize_active()
             return None
 
     def reset(self) -> None:
@@ -217,7 +237,7 @@ class TranscriptBuffer:
             self._active_turn = None
             self._finalized_turns = []
             self._turn_counter = 0
-            self._silence_seen = False
+            self._silence_seen = {}
 
     def _finalize_active(self) -> Optional[Turn]:
         """Finalize the active turn and move it to the finalized list.

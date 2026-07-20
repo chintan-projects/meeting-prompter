@@ -208,6 +208,15 @@ class SystemAudioCapture:
                 f"Screen & System Audio Recording: {binary}"
             )
             logger.error(self._capture_error)
+            # Block without processing — keeps orchestrator thread alive so
+            # the mic pipeline can share its loaded models. No audio gets
+            # processed, preventing ASR hallucination on noise/silence.
+            try:
+                while self.running:
+                    time.sleep(0.5)
+            except KeyboardInterrupt:
+                self.running = False
+            return
 
         # Launch Swift subprocess
         cmd = [
@@ -414,9 +423,15 @@ class SystemAudioCapture:
         )
 
     def _process_chunk(self, chunk: np.ndarray, timestamp: float) -> None:
-        """Process a chunk: update metrics, record, write WAV, call callback."""
+        """Process a chunk: update metrics, record, write WAV, call callback.
+
+        Audio level gate: if the chunk has no meaningful speech (below RMS
+        and peak thresholds), feeds clean silence to ASR instead of the raw
+        noise. This prevents hallucination artifacts on background noise or
+        when ScreenCaptureKit isn't capturing real audio.
+        """
         try:
-            self._update_audio_metrics(chunk)
+            has_audio = self._update_audio_metrics(chunk)
 
             # Compute features
             from lib.audio_capture import AudioCapture
@@ -426,17 +441,22 @@ class SystemAudioCapture:
             with self._features_lock:
                 self._chunk_features.append(features)
 
-            # Accumulate for recording
+            # Accumulate for recording (raw audio, not gated)
             with self._recording_lock:
                 self._session_audio.append(chunk)
                 self._session_timestamps.append(timestamp)
+
+            # Audio level gate: feed clean silence to ASR when no speech
+            # detected. ASR reliably returns empty on true silence, but
+            # hallucinates on low-level noise (producing "E E E" artifacts).
+            audio_for_asr = chunk if has_audio else np.zeros_like(chunk)
 
             # Write temp WAV for ASR — cleanup in finally to prevent /tmp leaks
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 temp_path = Path(f.name)
 
             try:
-                sf.write(temp_path, chunk, self.sample_rate)
+                sf.write(temp_path, audio_for_asr, self.sample_rate)
 
                 if self.callback:
                     self.callback(temp_path, timestamp)

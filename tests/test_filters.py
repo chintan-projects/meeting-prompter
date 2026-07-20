@@ -41,10 +41,25 @@ class TestIsHallucination:
         assert is_hallucination("I am here") is False
         assert is_hallucination("Go do it") is False
 
-    def test_single_letter_needs_at_least_two(self) -> None:
-        """Single character alone should not trigger (handled by other filters)."""
-        assert is_hallucination("E") is False
-        assert is_hallucination("A") is False
+    def test_single_character_is_hallucination(self) -> None:
+        """Single character from ASR is a hallucination artifact on silence."""
+        assert is_hallucination("E") is True
+        assert is_hallucination("A") is True
+        assert is_hallucination("E.") is True
+        assert is_hallucination("A!") is True
+
+    def test_repeated_short_token(self) -> None:
+        """All-same short token repetition (e.g. 'ba ba ba')."""
+        assert is_hallucination("ba ba ba") is True
+        assert is_hallucination("de de de de") is True
+        assert is_hallucination("na na na") is True
+        assert is_hallucination("la la la.") is True
+
+    def test_repeated_short_token_not_real_words(self) -> None:
+        """Longer repeated words should not be caught as hallucinations."""
+        # These could be legitimate (though unusual) speech
+        assert is_hallucination("hello hello hello") is False
+        assert is_hallucination("yes yes yes") is False
 
     def test_repetitive_phrases(self) -> None:
         assert is_hallucination("the cat sat on the cat sat on") is True
@@ -162,6 +177,18 @@ class TestFilterLevelDifference:
         """Repeated single-letter ASR artifacts caught by both filter levels."""
         texts = ["E E E E", "A A A", "O O O O O"]
         for text in texts:
+            assert is_hallucination_only(text) is True, f"{text} should fail transcript"
+            assert is_noise(text) is True, f"{text} should fail trigger"
+
+    def test_single_char_caught_by_both(self) -> None:
+        """Single character ASR output caught by both filter levels."""
+        for text in ["E", "A", "E.", "A!"]:
+            assert is_hallucination_only(text) is True, f"{text} should fail transcript"
+            assert is_noise(text) is True, f"{text} should fail trigger"
+
+    def test_repeated_short_token_caught_by_both(self) -> None:
+        """Repeated short token artifacts caught by both filter levels."""
+        for text in ["ba ba ba", "de de de", "na na na"]:
             assert is_hallucination_only(text) is True, f"{text} should fail transcript"
             assert is_noise(text) is True, f"{text} should fail trigger"
 

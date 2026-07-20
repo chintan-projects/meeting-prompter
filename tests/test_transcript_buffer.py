@@ -653,3 +653,113 @@ class TestThreadSafety:
                 assert all(
                     "mic" not in word for word in turn.text.split() if word.startswith("mic")
                 )
+
+
+class TestPerSourceSilence:
+    """Per-source silence tracking prevents cross-stream turn fragmentation.
+
+    Without per-source silence, system audio silence prematurely finalizes
+    mic turns and vice versa. These tests verify the fix.
+    """
+
+    def test_system_silence_does_not_finalize_mic_turn(self) -> None:
+        """System audio silence should NOT finalize an active mic turn."""
+        buf = TranscriptBuffer(turn_pause=2.0)
+        buf.add_chunk("mic speech here", timestamp=100.0, source="mic")
+
+        # System audio reports silence — should NOT affect mic turn
+        buf.on_silence(timestamp=103.0, source="system")
+
+        # Next mic chunk should extend the same turn (not start a new one)
+        turn = buf.add_chunk("more mic speech", timestamp=104.0, source="mic")
+        assert turn is not None
+        assert turn.id == "turn-1"
+        assert "more mic speech" in turn.text
+
+    def test_mic_silence_does_not_finalize_system_turn(self) -> None:
+        """Mic silence should NOT finalize an active system turn."""
+        buf = TranscriptBuffer(turn_pause=2.0)
+        buf.add_chunk("system speech here", timestamp=100.0, source="system")
+
+        # Mic reports silence — should NOT affect system turn
+        buf.on_silence(timestamp=103.0, source="mic")
+
+        turn = buf.add_chunk("more system speech", timestamp=104.0, source="system")
+        assert turn is not None
+        assert turn.id == "turn-1"
+        assert "more system speech" in turn.text
+
+    def test_matching_source_silence_finalizes_turn(self) -> None:
+        """Silence from the same source as the active turn SHOULD finalize it."""
+        buf = TranscriptBuffer(turn_pause=2.0)
+        buf.add_chunk("mic speech here", timestamp=100.0, source="mic")
+
+        # Mic reports silence with enough gap
+        finalized = buf.on_silence(timestamp=103.0, source="mic")
+        assert finalized is not None
+        assert finalized.is_final
+        assert finalized.source == "mic"
+
+    def test_sourceless_silence_finalizes_any_turn(self) -> None:
+        """Silence without source (backward compat) should finalize any turn."""
+        buf = TranscriptBuffer(turn_pause=2.0)
+        buf.add_chunk("some speech here", timestamp=100.0, source="mic")
+
+        # Sourceless silence — should still finalize (backward compat)
+        finalized = buf.on_silence(timestamp=103.0, source="")
+        assert finalized is not None
+        assert finalized.is_final
+
+    def test_sourceless_turn_finalized_by_any_silence(self) -> None:
+        """A turn without source should be finalized by any silence."""
+        buf = TranscriptBuffer(turn_pause=2.0)
+        buf.add_chunk("sourceless speech", timestamp=100.0, source="")
+
+        finalized = buf.on_silence(timestamp=103.0, source="system")
+        assert finalized is not None
+        assert finalized.is_final
+
+    def test_cross_stream_silence_then_speech_preserves_turn(self) -> None:
+        """Full scenario: mic speaking, system silence, mic continues."""
+        buf = TranscriptBuffer(turn_pause=2.0)
+
+        # Mic starts speaking
+        buf.add_chunk("first mic chunk", timestamp=100.0, source="mic")
+        buf.add_chunk("second mic chunk", timestamp=103.5, source="mic")
+
+        # System reports silence (ASR returned empty)
+        buf.on_silence(timestamp=104.0, source="system")
+
+        # Mic continues — should still be the same turn
+        turn = buf.add_chunk("third mic chunk", timestamp=107.0, source="mic")
+        assert turn is not None
+        assert turn.id == "turn-1"
+        assert turn.chunk_count == 3
+
+    def test_same_source_silence_deferred_to_next_chunk(self) -> None:
+        """Silence flag from same source triggers finalization on next add_chunk."""
+        buf = TranscriptBuffer(turn_pause=2.0)
+        buf.add_chunk("mic speech here", timestamp=100.0, source="mic")
+
+        # Mic silence — gap too small for immediate finalization
+        result = buf.on_silence(timestamp=101.0, source="mic")
+        assert result is None  # gap < turn_pause, no immediate finalize
+
+        # Next mic chunk sees the silence flag → finalizes first, starts new
+        turn = buf.add_chunk("new mic speech", timestamp=105.0, source="mic")
+        assert turn is not None
+        assert turn.id == "turn-2"
+        assert len(buf._finalized_turns) == 1
+
+    def test_reset_clears_silence_state(self) -> None:
+        """reset() should clear per-source silence flags."""
+        buf = TranscriptBuffer(turn_pause=2.0)
+        buf.on_silence(timestamp=100.0, source="mic")
+        buf.on_silence(timestamp=100.0, source="system")
+        buf.reset()
+
+        # After reset, silence flags should be clear
+        buf.add_chunk("fresh start", timestamp=200.0, source="mic")
+        turn = buf.add_chunk("continues", timestamp=203.5, source="mic")
+        assert turn is not None
+        assert turn.id == "turn-1"  # no stale silence caused finalization

@@ -43,7 +43,7 @@ OUTPUT_FILE = get_output_dir() / "live_analytics.txt"
 
 # Type aliases for callback signatures
 TranscriptionCallback = Callable[[str, float], None]
-SilenceCallback = Callable[[float], None]
+SilenceCallback = Callable[[float, str], None]  # (timestamp, source)
 TriggerResultCallback = Callable[[Trigger, GenerationResult], None]
 
 
@@ -233,7 +233,7 @@ class MeetingOrchestrator:
     def _notify_silence(self, timestamp: float) -> None:
         """Notify silence via callback and conversation buffer."""
         if self.on_silence_detected:
-            self.on_silence_detected(timestamp)
+            self.on_silence_detected(timestamp, "system")
         triggers = self.buffer.on_silence(timestamp)
         self._handle_triggers(triggers)
 

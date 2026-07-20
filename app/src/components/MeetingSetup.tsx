@@ -76,15 +76,31 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
         if (appsData?.available && appsData.apps) {
           setApps(appsData.apps as AppInfo[]);
           setPermissionGranted(appsData.permission_granted ?? true);
-          // Auto-select first meeting-like app (exclude our own app)
-          const meetingPatterns = ["zoom", "teams", "google meet", "webex", "slack", "facetime"];
-          const found = (appsData.apps as AppInfo[]).find((a: AppInfo) => {
+          // Auto-select: dedicated meeting apps first, then browsers (for
+          // web-based meetings like Google Meet, Hangouts, Teams web, etc.)
+          const meetingAppPatterns = [
+            "zoom", "teams", "webex", "slack", "facetime", "discord",
+          ];
+          const browserPatterns = [
+            "chrome", "safari", "firefox", "arc", "brave", "edge", "opera",
+          ];
+          const appList = appsData.apps as AppInfo[];
+          const isSelf = (name: string) =>
+            name.includes("meeting prompter") || name.includes("meeting-prompter");
+
+          // Tier 1: dedicated meeting apps (highest priority)
+          const meetingApp = appList.find((a: AppInfo) => {
             const name = a.name.toLowerCase();
-            if (name.includes("meeting prompter") || name.includes("meeting-prompter")) {
-              return false;
-            }
-            return meetingPatterns.some((m) => name.includes(m));
+            if (isSelf(name)) return false;
+            return meetingAppPatterns.some((m) => name.includes(m));
           });
+          // Tier 2: browsers (for web-based meetings)
+          const browserApp = appList.find((a: AppInfo) => {
+            const name = a.name.toLowerCase();
+            if (isSelf(name)) return false;
+            return browserPatterns.some((m) => name.includes(m));
+          });
+          const found = meetingApp ?? browserApp;
           if (found) {
             setSelectedPid(found.pid);
           }
@@ -262,12 +278,14 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
                 </div>
                 {!permissionGranted && (
                   <span style={styles.permWarn}>
-                    Screen Recording permission required — grant in System Settings
+                    ⚠ Screen Recording permission required — grant in System Settings →
+                    Privacy & Security → Screen & System Audio Recording
                   </span>
                 )}
                 {permissionGranted && selectedPid === 0 && (
                   <span style={styles.permWarn}>
-                    Select your meeting app above to capture remote participants
+                    ⚠ Select your meeting app or browser above — without it, all audio
+                    will be labeled &quot;You&quot; and remote speakers won&apos;t be distinguished
                   </span>
                 )}
               </>

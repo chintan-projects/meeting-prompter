@@ -61,6 +61,11 @@ export function StatusBar({
           const captureMode = (data.capture_mode as string) ?? "device";
           if (health?.capture_error) {
             setAudioWarning(health.capture_error);
+          } else if (captureMode === "single_device") {
+            setAudioWarning(
+              "Single-device mode — all audio labeled \"You\". " +
+              "Stop and re-start with a meeting app selected to distinguish speakers."
+            );
           } else if (health && health.total_chunks > 5 && health.all_silent) {
             const msg = captureMode === "app_tap"
               ? "No audio detected — add audio-tap to Screen Recording in System Settings"

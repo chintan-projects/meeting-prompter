@@ -44,6 +44,13 @@ class AnalyzeRequest(BaseModel):
     max_tokens: Optional[int] = None
 
 
+class RateRequest(BaseModel):
+    span: str
+    chunk_id: int
+    doc: str
+    rating: str  # good | partial | wrong | noise
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return _PAGE.read_text(encoding="utf-8")
@@ -61,3 +68,17 @@ def analyze(req: AnalyzeRequest) -> JSONResponse:
         return JSONResponse({"error": "empty span"}, status_code=400)
     result = engine().analyze(span, max_tokens=req.max_tokens)
     return JSONResponse(result)
+
+
+@app.post("/rate")
+def rate(req: RateRequest) -> JSONResponse:
+    if req.rating not in ("good", "partial", "wrong", "noise"):
+        return JSONResponse({"error": f"bad rating: {req.rating}"}, status_code=400)
+    eng = engine()
+    eng.record_rating(req.span, req.chunk_id, req.doc, req.rating)
+    return JSONResponse(eng.coverage())
+
+
+@app.get("/coverage")
+def coverage() -> JSONResponse:
+    return JSONResponse(engine().coverage())

@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
+import re
 import sqlite3
+import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -57,6 +59,42 @@ SAMPLE_SPANS = [
     "What teacher model should we use for distillation, and what are the licensing risks?",
     "Can we run LFM2 on device, and what are the memory and latency numbers?",
 ]
+
+# Ratings persist here so corpus coverage can be aggregated across questions/sessions.
+RATINGS_PATH = Path("data/corpus_ratings.jsonl")
+# A question is "covered" only if some retrieved chunk is a genuinely borrowable answer.
+RATING_RANK = {"good": 3, "partial": 2, "wrong": 1, "noise": 0}
+BORROWABLE_MIN_WORDS = 8  # below this, a cleaned chunk isn't an answer-shaped unit
+
+
+def clean_markdown(text: str) -> str:
+    """Reduce a raw chunk to readable, borrowable prose.
+
+    Drops what you would never *say* out loud — fenced code, table rows, heading
+    hashes, blockquote/list markers, inline emphasis/link syntax — and collapses
+    whitespace. Tables/code are removed on purpose: a chunk that's mostly table is
+    not an answer-shaped unit, and the near-empty result is itself a corpus signal
+    (surfaced via BORROWABLE_MIN_WORDS).
+    """
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)  # fenced code blocks
+    kept: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("|") or re.fullmatch(r"[-|:\s]+", line):
+            continue  # table row / separator
+        line = re.sub(r"^#{1,6}\s*", "", line)  # heading hashes
+        line = re.sub(r"^>\s*", "", line)  # blockquote
+        line = re.sub(r"^[-*+]\s+", "", line)  # bullet
+        line = re.sub(r"^\d+\.\s+", "", line)  # ordered list
+        kept.append(line)
+    out = " ".join(kept)
+    out = re.sub(r"\*\*(.+?)\*\*", r"\1", out)  # bold
+    out = re.sub(r"\*(.+?)\*", r"\1", out)  # italic
+    out = re.sub(r"`([^`]+)`", r"\1", out)  # inline code
+    out = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", out)  # links → text
+    return re.sub(r"\s+", " ", out).strip()
 
 
 class LabEngine:
@@ -208,41 +246,92 @@ class LabEngine:
         row = self._conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
         return row[0] if row else ""
 
-    # --- live view: retrieve-big, display-small (NO LLM) --------------------
-    def build_live_view(
-        self, span: str, retrieval: dict[str, Any], top_chunks: int = 3
+    # --- borrowable answers: retrieve-big, clean, rate ----------------------
+    def build_borrowable(
+        self, span: str, retrieval: dict[str, Any], top_k: int = TOP_K
     ) -> dict[str, Any]:
-        """The retrieval-first live experience: for each top chunk, pull the single
-        most relevant sentence (heuristic, no LLM) and show it with its source.
+        """The judging surface: each top chunk as a full, cleaned, *borrowable*
+        answer — markdown stripped to readable prose — with source and score.
 
-        This is what a live meeting would surface — glanceable, grounded, verbatim,
-        sub-second. Latency = retrieval (embed+search) + extraction only.
+        This is what the user reads/says verbatim, and it doubles as the corpus
+        instrument: a chunk that cleans down to almost nothing is a table/code blob,
+        i.e. not answer-shaped — a corpus gap, flagged inline.
         """
-        from lib.answer_extractor import extract_answer
-
         t0 = time.time()
         cards: list[dict[str, Any]] = []
-        for row in retrieval["reranked"][:top_chunks]:
-            full = self._chunk_text(row["chunk_id"])
-            sentence, conf = extract_answer(full, span, max_sentences=1)
+        for row in retrieval["reranked"][:top_k]:
+            raw = self._chunk_text(row["chunk_id"])
+            cleaned = clean_markdown(raw)
+            words = len(cleaned.split())
+            shaped = words >= BORROWABLE_MIN_WORDS
             cards.append(
                 {
+                    "chunk_id": row["chunk_id"],
                     "doc": row["doc"],
                     "heading": row["heading"],
-                    "sentence": sentence or "(no clean sentence — showing chunk)",
-                    "confidence": round(float(conf), 3),
                     "cosine": row.get("cosine"),
-                    "full_chunk": " ".join(full.split()),
+                    "fused": row.get("fused"),
+                    "text": cleaned if shaped else (cleaned or "(empty after cleaning)"),
+                    "words": words,
+                    "answer_shaped": shaped,
+                    "note": (
+                        ""
+                        if shaped
+                        else "mostly table/code/heading — not answer-shaped (corpus gap)"
+                    ),
                 }
             )
-        extract_ms = round((time.time() - t0) * 1000)
-        retrieval_ms = int(retrieval.get("retrieval_ms") or 0)
+        clean_ms = round((time.time() - t0) * 1000)
         return {
-            "retrieval_ms": retrieval_ms,
-            "extract_ms": extract_ms,
-            "total_ms": retrieval_ms + extract_ms,
+            "retrieval_ms": int(retrieval.get("retrieval_ms") or 0),
+            "clean_ms": clean_ms,
             "cards": cards,
         }
+
+    # --- ratings + corpus coverage -----------------------------------------
+    def record_rating(self, span: str, chunk_id: int, doc: str, rating: str) -> None:
+        """Append one operator judgement (good/partial/wrong/noise) to the log."""
+        RATINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        rec = {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "span": span.strip(),
+            "chunk_id": chunk_id,
+            "doc": doc,
+            "rating": rating,
+        }
+        with open(RATINGS_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+
+    def coverage(self) -> dict[str, Any]:
+        """Aggregate ratings into a fit-for-purpose score: what fraction of the
+        questions asked have a genuinely borrowable ('good') answer in the corpus.
+        """
+        if not RATINGS_PATH.exists():
+            return {"questions": 0, "good": 0, "partial": 0, "gap": 0, "rows": []}
+        best: dict[str, tuple[int, str, str]] = {}
+        for line in RATINGS_PATH.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            span = str(rec.get("span", "")).strip()
+            if not span:
+                continue
+            rank = RATING_RANK.get(rec.get("rating", ""), 0)
+            if span not in best or rank > best[span][0]:
+                best[span] = (rank, rec.get("rating", ""), rec.get("doc", ""))
+        good = partial = gap = 0
+        rows: list[dict[str, Any]] = []
+        for span, (rank, rating, doc) in best.items():
+            rows.append({"span": span, "best": rating, "doc": doc})
+            if rank >= 3:
+                good += 1
+            elif rank == 2:
+                partial += 1
+            else:
+                gap += 1
+        rows.sort(key=lambda r: RATING_RANK.get(r["best"], 0))  # gaps first
+        return {"questions": len(best), "good": good, "partial": partial, "gap": gap, "rows": rows}
 
     # --- stage 4: answers ---------------------------------------------------
     def answer_llama(self, key: str, span: str, context: str, max_tokens: int) -> dict[str, Any]:
@@ -312,14 +401,14 @@ class LabEngine:
         mt = max_tokens or DEFAULT_MAX_TOKENS
         classification = self.classify(span)
         retrieval = self.retrieve_stages(span)
-        live = self.build_live_view(span, retrieval)
+        borrowable = self.build_borrowable(span, retrieval)
         answers = self.answers(span, retrieval["context"], mt)
         return {
             "span": span,
             "docs_dir": self.cfg.paths.docs_dir,
             "answer_model_in_config": self.cfg.models.generation.model_file,
             "classification": classification,
-            "live": live,
+            "borrowable": borrowable,
             "retrieval": retrieval,
             "answers": answers,
         }

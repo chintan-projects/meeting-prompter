@@ -104,6 +104,26 @@
       .lcard .chunk { display: none; font-size: 12.5px; color: var(--mut); margin-top: 7px;
         padding: 9px 11px; background: var(--panel2); border-radius: 6px; line-height: 1.55; }
       .lcard.open .chunk { display: block; }
+      .lcard.gap { opacity: .72; }
+      .lcard .gapnote { color: var(--warn); font-size: 12px; margin: 3px 0 2px; }
+      .lcard .rank { color: var(--mut); font-family: var(--mono); font-size: 11px; margin-right: 6px; }
+      .rate { display: flex; gap: 6px; margin-top: 9px; }
+      .rbtn { background: transparent; border: 1px solid var(--line); color: var(--mut); padding: 3px 11px; font-size: 12px; font-weight: 500; border-radius: 6px; }
+      .rbtn:hover { color: var(--ink); }
+      .rbtn.on.r-good { background: var(--good); color: #08160f; border-color: var(--good); }
+      .rbtn.on.r-partial { background: var(--warn); color: #1a1206; border-color: var(--warn); }
+      .rbtn.on.r-wrong, .rbtn.on.r-noise { background: #c56b6b; color: #180808; border-color: #c56b6b; }
+
+      #coverage { margin-top: 22px; }
+      .covbar { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; margin-bottom: 10px; }
+      .covnum { font-size: 15px; } .covnum b { font-size: 22px; color: var(--good); font-family: var(--mono); }
+      .covchips { display: flex; gap: 8px; }
+      .cc { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); font-family: var(--mono); }
+      .cc.good { color: var(--good); } .cc.partial { color: var(--warn); } .cc.gap { color: #d98b8b; }
+      #coverage table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+      #coverage td, #coverage th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+      #coverage th { color: var(--mut); font-weight: 600; }
+      tr.rr-wrong, tr.rr-noise { color: #d98b8b; } tr.rr-partial { color: var(--warn); }
 
       #picks { margin-top: 30px; }
       #picks table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -117,9 +137,9 @@
   </head>
   <body>
     <header>
-      <h1>Model &amp; Retrieval Lab</h1>
+      <h1>Corpus &amp; Retrieval Lab</h1>
       <div class="sub">
-        Pick a span → see every retrieval stage and all three answer candidates. <b>You make the model call.</b>
+        Pick a span → read the borrowable answers → <b>rate each</b>. Coverage tells you if the corpus is fit for purpose.
         <span id="cfgnote"></span>
       </div>
     </header>
@@ -131,6 +151,8 @@
         <span id="status" class="muted"></span>
       </div>
       <div class="chips" id="chips"></div>
+
+      <section id="coverage" style="display:none"></section>
 
       <div id="out"></div>
 
@@ -184,37 +206,70 @@
         return c;
       }
 
-      function liveSection(live) {
-        const l = live || {};
+      const RATINGS = ["good", "partial", "wrong", "noise"];
+
+      function borrowableSection(b, span) {
+        const l = b || {};
         const s = el("section");
-        s.appendChild(el("h2", null, "★ Live view — retrieval-first <span class='muted' style='text-transform:none;letter-spacing:0'>— glanceable · grounded · no LLM</span>"));
+        s.appendChild(el("h2", null, "★ Borrowable answers — rank &amp; rate <span class='muted' style='text-transform:none;letter-spacing:0'>— what you'd read/say verbatim · retrieval " + (l.retrieval_ms ?? "?") + "ms</span>"));
         const box = el("div", "live");
-        box.appendChild(el("div", "lat muted",
-          `latency: retrieval <b>${l.retrieval_ms}ms</b> + extract <b>${l.extract_ms}ms</b> = <b>${l.total_ms}ms</b>`));
-        (l.cards || []).forEach((c) => {
-          const card = el("div", "lcard");
-          card.appendChild(el("div", "sent", esc(c.sentence)));
+        (l.cards || []).forEach((c, i) => {
+          const card = el("div", "lcard" + (c.answer_shaped ? "" : " gap"));
           card.appendChild(el("div", "src",
-            `<b>${esc(c.doc)}</b>${c.heading ? " › " + esc(c.heading) : ""} · conf ${c.confidence}${c.cosine != null ? " · cos " + c.cosine : ""}`));
-          const exp = el("span", "exp", "▸ expand source chunk");
-          exp.onclick = () => {
-            card.classList.toggle("open");
-            exp.textContent = card.classList.contains("open") ? "▾ hide source chunk" : "▸ expand source chunk";
-          };
-          card.appendChild(exp);
-          card.appendChild(el("div", "chunk", esc(c.full_chunk)));
+            `<span class="rank">#${i + 1}</span><b>${esc(c.doc)}</b>${c.heading ? " › " + esc(c.heading) : ""} · cos ${c.cosine ?? "—"} · ${c.words} words`));
+          if (c.note) card.appendChild(el("div", "gapnote", "⚠ " + esc(c.note)));
+          card.appendChild(el("div", "sent", esc(c.text)));
+          const rate = el("div", "rate");
+          RATINGS.forEach((r) => {
+            const btn = el("button", "rbtn r-" + r, r);
+            btn.onclick = () => {
+              rate.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
+              btn.classList.add("on");
+              postRating(span, c.chunk_id, c.doc, r);
+            };
+            rate.appendChild(btn);
+          });
+          card.appendChild(rate);
           box.appendChild(card);
         });
         s.appendChild(box);
         return s;
       }
 
+      async function postRating(span, chunk_id, doc, rating) {
+        try {
+          const r = await fetch("/rate", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ span, chunk_id, doc, rating }),
+          });
+          if (r.ok) renderCoverage(await r.json());
+        } catch (e) { /* non-fatal */ }
+      }
+
+      function renderCoverage(cov) {
+        const c = cov || {};
+        const wrap = $("#coverage");
+        wrap.style.display = "block";
+        const pct = c.questions ? Math.round((c.good / c.questions) * 100) : 0;
+        let html =
+          `<h2>Corpus coverage <span class='muted' style='text-transform:none;letter-spacing:0'>— fit-for-purpose = has a borrowable answer</span></h2>` +
+          `<div class="covbar"><div class="covnum"><b>${pct}%</b> of ${c.questions} questions have a good answer</div>` +
+          `<div class="covchips"><span class="cc good">${c.good} good</span><span class="cc partial">${c.partial} partial</span><span class="cc gap">${c.gap} gap</span></div></div>`;
+        if ((c.rows || []).length) {
+          html += `<table><thead><tr><th>Question</th><th>Best</th><th>Doc</th></tr></thead><tbody>` +
+            c.rows.map((r) => `<tr class="rr-${r.best}"><td>${esc(r.span)}</td><td><b>${esc(r.best)}</b></td><td class="muted">${esc(r.doc)}</td></tr>`).join("") +
+            `</tbody></table>`;
+        }
+        wrap.innerHTML = html;
+      }
+      fetch("/coverage").then((r) => r.json()).then(renderCoverage).catch(() => {});
+
       function render(d) {
         const out = $("#out");
         out.innerHTML = "";
 
-        // live view (retrieval-first) — the recommended live experience
-        out.appendChild(liveSection(d.live));
+        // borrowable answers (retrieval-first) — the primary judging surface
+        out.appendChild(borrowableSection(d.borrowable, d.span));
 
         // classification
         const cl = d.classification || {};

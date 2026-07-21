@@ -178,7 +178,9 @@ f173f22 F-508  persistent warm-model runtime
 5. **Zoom Meeting SDK creds / dev account** for F-608; **live Zoom window** for F-602.
 
 ## Notes
-- `ruff` / `mypy` are not installed in `./venv`; pytest was the enforced gate. Auto-format
-  hooks (black/prettier) ran on write. Recommend adding ruff+mypy to the venv for the lint gate.
+- Gates: `pytest -q` (704), `pytest -m slow` (10), `ruff check .` (clean), `mypy --strict`
+  (clean on the new Wave A modules), `tsc --noEmit` (clean), 16 frontend tests. `ruff`/`mypy`
+  are on `PATH` via pyenv (not in `./venv`); recommend adding them to `./venv` so `python -m
+  ruff/mypy` works too. Auto-format hooks (black/prettier) ran on write.
 - One pre-existing benign warning remains (`pytest.mark.slow` unregistered) — left as-is to
   avoid introducing global pytest config mid-run.

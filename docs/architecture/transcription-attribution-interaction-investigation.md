@@ -236,6 +236,33 @@ two even need to do.
 
 ---
 
+## 5b. Model footprint — right model for each task (raised during review)
+
+Verified wiring:
+
+| Stage | Model | Kind |
+|-------|-------|------|
+| ASR | LFM2.5-Audio | generative (speech→text) |
+| Retrieval embeddings | LFM2.5-Embedding-350M | encoder (retrieval) |
+| Trigger classification | LFM2.5-Encoder-350M | encoder (classify) |
+| **Answer after RAG** | **LFM2.5-1.2B-Instruct** | **generative** |
+| Transcript polish | LFM2.5-1.2B-Instruct (same) | generative |
+| Post-meeting notes | LFM2.5-350M-Extract | extractive |
+
+The live "extraction grounding" before the answer is a **heuristic**
+(`answer_extractor.py`), not a model. The 350M-Extract model is wired for notes
+only (F-507, not yet live).
+
+**The open question:** should the *live RAG answer* stay a 1.2B **generation**, or
+become a 350M **extraction** (pull the answer span from retrieved context)?
+`answer_extractor.py`'s own thesis — *"small models are weak at 'only use this
+context'; extraction structurally prevents hallucination"* — argues extraction is
+more faithful, smaller, faster, traceable, at the cost of fluent synthesis. The
+interaction redesign (generation becomes rare/user-gated) removes the "must be
+instant" pressure, so we can afford to optimize for faithfulness. All three
+candidates (350M-Extract, 1.2B-Instruct, 2.6B) are GGUF-runnable through the same
+path → decide empirically via experiment **E-01** (see open-decisions-log.md).
+
 ## 5. Open questions for decision
 - AEC path: extend the existing `audio-tap` Swift helper to add a Voice-Processing
   mic mode, or a separate small helper? (Leaning: extend — one capture toolchain.)

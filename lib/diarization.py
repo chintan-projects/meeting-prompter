@@ -11,6 +11,7 @@ Architecture:
 Thread safety: all model inference guarded by a lock so multiple
 pipeline threads can call process_turn() concurrently.
 """
+
 import logging
 import threading
 from typing import Dict, List, Optional, Tuple
@@ -23,9 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Label format for auto-discovered speakers
 _SPEAKER_PREFIX = "Speaker"
-_SPEAKER_LABELS = [
-    f"{_SPEAKER_PREFIX} {chr(65 + i)}" for i in range(26)
-]  # Speaker A .. Speaker Z
+_SPEAKER_LABELS = [f"{_SPEAKER_PREFIX} {chr(65 + i)}" for i in range(26)]  # Speaker A .. Speaker Z
 
 
 class SpeakerDiarizer:
@@ -44,6 +43,11 @@ class SpeakerDiarizer:
 
         # Speaker state: list of (centroid_embedding, count) pairs
         self._centroids: List[Tuple[np.ndarray, int]] = []
+
+        # Roster-bounded clustering (F-604): when the expected participant count
+        # is known (from meeting context), it caps the number of clusters instead
+        # of the looser max_speakers default.
+        self._roster_size: Optional[int] = None
 
         # Load speechbrain embedding model
         self._model: Optional[object] = None
@@ -79,34 +83,133 @@ class SpeakerDiarizer:
         """Number of distinct speakers identified so far."""
         return len(self._centroids)
 
-    def process_turn(
-        self, audio_data: np.ndarray, sample_rate: int = 16000,
-    ) -> Optional[str]:
-        """Extract embedding and assign speaker label for a turn's audio.
+    def set_roster_size(self, size: Optional[int]) -> None:
+        """Bound clustering to the known roster size (F-604).
 
-        Args:
-            audio_data: Raw audio samples (1D float32 array).
-            sample_rate: Sample rate in Hz.
+        When set (> 0), the diarizer creates at most ``size`` clusters and
+        re-assigns further speech to the nearest existing speaker — the roster
+        is the ground-truth ceiling on distinct remote speakers.
+        """
+        self._roster_size = size if (size and size > 0) else None
+        logger.info("Diarization roster size: %s", self._roster_size)
+
+    def _max_clusters(self) -> int:
+        """Effective cluster cap: roster size when known, else max_speakers."""
+        if self._roster_size is not None:
+            return self._roster_size
+        return self._config.max_speakers
+
+    def process_turn(
+        self,
+        audio_data: np.ndarray,
+        sample_rate: int = 16000,
+    ) -> Optional[str]:
+        """Assign the dominant speaker label for a turn's audio.
+
+        A turn is not guaranteed to be one speaker: with a shared far-field mic,
+        a second person can interject mid-turn. So the turn is segmented at
+        speaker-change points (F-604) and each homogeneous slice is assigned;
+        the label covering the most windows is returned. Backward-compatible —
+        a single-speaker turn still yields one label.
 
         Returns:
-            Speaker label (e.g. "Speaker A") or None if unavailable.
+            Speaker label (e.g. "Speaker A") or None if unavailable/too short.
+        """
+        segments = self.process_turn_segments(audio_data, sample_rate)
+        if not segments:
+            return None
+        # Dominant speaker by total window span.
+        by_speaker: Dict[str, int] = {}
+        for label, w_start, w_end in segments:
+            by_speaker[label] = by_speaker.get(label, 0) + (w_end - w_start)
+        return max(by_speaker, key=lambda k: by_speaker[k])
+
+    def process_turn_segments(
+        self,
+        audio_data: np.ndarray,
+        sample_rate: int = 16000,
+    ) -> List[Tuple[str, int, int]]:
+        """Segment a turn at speaker-change points and label each slice.
+
+        Windows the audio, embeds each window, detects speaker-change boundaries
+        by a drop in adjacent-window cosine similarity, then assigns each
+        homogeneous slice to a (roster-bounded) speaker cluster.
+
+        Returns:
+            List of (speaker_label, window_start_idx, window_end_idx). Empty if
+            the model is unavailable or the turn is below min_audio_duration.
         """
         if not self.available:
-            return None
+            return []
 
         duration = len(audio_data) / sample_rate
         if duration < self._config.min_audio_duration:
             logger.debug("Turn too short (%.1fs) for diarization", duration)
-            return None
+            return []
 
+        windows = self._window_audio(audio_data, sample_rate)
         with self._lock:
-            embedding = self._extract_embedding(audio_data, sample_rate)
-            if embedding is None:
-                return None
-            return self._assign_speaker(embedding)
+            embeddings: List[np.ndarray] = []
+            for w in windows:
+                emb = self._extract_embedding(w, sample_rate)
+                if emb is not None:
+                    embeddings.append(emb)
+            if not embeddings:
+                return []
+
+            boundaries = self.detect_change_points(embeddings, self._config.change_threshold)
+            # Group windows into homogeneous slices, assign each to a speaker.
+            segments: List[Tuple[str, int, int]] = []
+            start = 0
+            cut_points = boundaries + [len(embeddings)]
+            for cut in cut_points:
+                slice_embs = embeddings[start:cut]
+                if not slice_embs:
+                    continue
+                mean_emb = np.mean(np.stack(slice_embs), axis=0).astype(np.float32)
+                label = self._assign_speaker(mean_emb)
+                segments.append((label, start, cut))
+                start = cut
+            return segments
+
+    def _window_audio(self, audio_data: np.ndarray, sample_rate: int) -> List[np.ndarray]:
+        """Slice audio into overlapping windows for intra-turn segmentation.
+
+        Short turns (< 2 windows) return a single whole-turn window, preserving
+        the original single-embedding behavior.
+        """
+        win = max(1, int(self._config.window_seconds * sample_rate))
+        hop = max(1, int(self._config.window_hop_seconds * sample_rate))
+        if len(audio_data) <= win + hop:
+            return [audio_data]
+        windows: List[np.ndarray] = []
+        start = 0
+        while start < len(audio_data):
+            chunk = audio_data[start : start + win]
+            if len(chunk) < win // 2 and windows:
+                break  # trailing sliver — fold into the previous window
+            windows.append(chunk)
+            start += hop
+        return windows or [audio_data]
+
+    @staticmethod
+    def detect_change_points(embeddings: List[np.ndarray], threshold: float) -> List[int]:
+        """Indices where adjacent windows differ enough to mark a speaker change.
+
+        Returns boundary indices i (1..n-1) where cosine(emb[i-1], emb[i]) is
+        below ``threshold`` — i.e. a new segment starts at index i.
+        """
+        boundaries: List[int] = []
+        for i in range(1, len(embeddings)):
+            sim = SpeakerDiarizer._cosine_similarity(embeddings[i - 1], embeddings[i])
+            if sim < threshold:
+                boundaries.append(i)
+        return boundaries
 
     def _extract_embedding(
-        self, audio_data: np.ndarray, sample_rate: int,
+        self,
+        audio_data: np.ndarray,
+        sample_rate: int,
     ) -> Optional[np.ndarray]:
         """Extract a speaker embedding from raw audio.
 
@@ -169,28 +272,40 @@ class SpeakerDiarizer:
             if norm > 0:
                 new_centroid = new_centroid / norm
             self._centroids[best_idx] = (new_centroid, count + 1)
-            label = _SPEAKER_LABELS[best_idx] if best_idx < len(_SPEAKER_LABELS) else f"{_SPEAKER_PREFIX} {best_idx}"
+            label = (
+                _SPEAKER_LABELS[best_idx]
+                if best_idx < len(_SPEAKER_LABELS)
+                else f"{_SPEAKER_PREFIX} {best_idx}"
+            )
             logger.debug("Matched %s (sim=%.3f, count=%d)", label, best_sim, count + 1)
             return label
 
-        if len(self._centroids) < self._config.max_speakers:
+        if len(self._centroids) < self._max_clusters():
             # New speaker
             self._centroids.append((embedding.copy(), 1))
             idx = len(self._centroids) - 1
-            label = _SPEAKER_LABELS[idx] if idx < len(_SPEAKER_LABELS) else f"{_SPEAKER_PREFIX} {idx}"
+            label = (
+                _SPEAKER_LABELS[idx] if idx < len(_SPEAKER_LABELS) else f"{_SPEAKER_PREFIX} {idx}"
+            )
             logger.info("New speaker: %s (sim=%.3f to nearest)", label, best_sim)
             return label
 
-        # At max speakers — assign to closest
+        # At the cluster cap (roster-bounded) — re-assign to the closest speaker
         old_centroid, count = self._centroids[best_idx]
         new_centroid = (old_centroid * count + embedding) / (count + 1)
         norm = np.linalg.norm(new_centroid)
         if norm > 0:
             new_centroid = new_centroid / norm
         self._centroids[best_idx] = (new_centroid, count + 1)
-        label = _SPEAKER_LABELS[best_idx] if best_idx < len(_SPEAKER_LABELS) else f"{_SPEAKER_PREFIX} {best_idx}"
+        label = (
+            _SPEAKER_LABELS[best_idx]
+            if best_idx < len(_SPEAKER_LABELS)
+            else f"{_SPEAKER_PREFIX} {best_idx}"
+        )
         logger.debug(
-            "Max speakers reached — assigned to %s (sim=%.3f)", label, best_sim,
+            "Max speakers reached — assigned to %s (sim=%.3f)",
+            label,
+            best_sim,
         )
         return label
 

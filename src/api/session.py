@@ -685,6 +685,9 @@ class Session:
             if self.config.diarization.enabled:
                 try:
                     self._diarizer = SpeakerDiarizer(self.config.diarization)
+                    # F-604: bound clustering to the known roster when available.
+                    if self.meeting_context and self.meeting_context.participants:
+                        self._diarizer.set_roster_size(len(self.meeting_context.participants))
                     if self._diarizer.available:
                         logger.info("Tier 2 speaker diarization enabled")
                     else:

@@ -120,6 +120,10 @@ class DiarizationConfig:
     similarity_threshold: float = 0.65
     min_audio_duration: float = 1.0
     embedding_model: str = "speechbrain/spkrec-ecapa-voxceleb"
+    # F-604 speaker-change segmentation within a turn
+    window_seconds: float = 1.5  # embedding window length for intra-turn segmentation
+    window_hop_seconds: float = 0.75  # hop between windows (overlap = window - hop)
+    change_threshold: float = 0.55  # cosine sim below this between windows = speaker change
 
 
 @dataclass

@@ -79,10 +79,13 @@ dual_stream:
 
 diarization:
   enabled: false              # Tier 2: neural speaker diarization on system audio
-  max_speakers: 6             # maximum distinct speakers to track
+  max_speakers: 6             # maximum distinct speakers to track (roster size overrides when known)
   similarity_threshold: 0.65  # cosine similarity for same-speaker match
   min_audio_duration: 1.0     # skip turns shorter than this (seconds)
   embedding_model: "speechbrain/spkrec-ecapa-voxceleb"
+  window_seconds: 1.5         # F-604: embedding window for intra-turn speaker-change segmentation
+  window_hop_seconds: 0.75    # hop between windows
+  change_threshold: 0.55      # cosine sim below this between adjacent windows = speaker change
 
 notion:
   enabled: false                   # set true + NOTION_API_TOKEN env var to activate

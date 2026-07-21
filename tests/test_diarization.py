@@ -1,4 +1,5 @@
 """Tests for lib.diarization — speaker embedding clustering without real models."""
+
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -142,7 +143,8 @@ class TestProcessTurn:
         assert result is None
 
     def test_process_turn_calls_extract_and_assign(
-        self, diarizer: SpeakerDiarizer,
+        self,
+        diarizer: SpeakerDiarizer,
     ) -> None:
         """process_turn should call _extract_embedding then _assign_speaker."""
         fake_emb = _make_embedding(42)
@@ -151,7 +153,8 @@ class TestProcessTurn:
         assert label == "Speaker A"
 
     def test_process_turn_none_when_extraction_fails(
-        self, diarizer: SpeakerDiarizer,
+        self,
+        diarizer: SpeakerDiarizer,
     ) -> None:
         """If _extract_embedding returns None, process_turn returns None."""
         with patch.object(diarizer, "_extract_embedding", return_value=None):
@@ -253,3 +256,94 @@ class TestGracefulFallback:
 
         assert d.available is False
         assert d.process_turn(np.zeros(32000, dtype=np.float32)) is None
+
+
+# ─── F-604: roster-bounded clustering ────────────────────────────────────
+
+
+class TestRosterBoundedClustering:
+    """set_roster_size caps clusters below/independent of max_speakers."""
+
+    def test_roster_size_caps_clusters(self, diarizer: SpeakerDiarizer) -> None:
+        # max_speakers is 4, but a roster of 2 caps clusters at 2.
+        diarizer.set_roster_size(2)
+        labels = {diarizer._assign_speaker(_make_embedding(s)) for s in range(10)}
+        assert len(labels) <= 2
+        assert diarizer.speaker_count == 2
+
+    def test_roster_reassigns_to_nearest(self, diarizer: SpeakerDiarizer) -> None:
+        diarizer.set_roster_size(2)
+        a = diarizer._assign_speaker(_make_embedding(1))
+        diarizer._assign_speaker(_make_embedding(500))
+        # A third distinct speaker must re-assign to one of the two clusters.
+        third = diarizer._assign_speaker(_make_embedding(999))
+        assert third in {_SPEAKER_LABELS[0], _SPEAKER_LABELS[1]}
+        assert diarizer.speaker_count == 2
+
+    def test_none_roster_falls_back_to_max_speakers(self, diarizer: SpeakerDiarizer) -> None:
+        diarizer.set_roster_size(None)
+        assert diarizer._max_clusters() == 4  # max_speakers from config
+
+    def test_zero_roster_ignored(self, diarizer: SpeakerDiarizer) -> None:
+        diarizer.set_roster_size(0)
+        assert diarizer._max_clusters() == 4
+
+
+# ─── F-604: speaker-change segmentation ──────────────────────────────────
+
+
+class TestChangePointDetection:
+    def test_no_change_when_similar(self) -> None:
+        base = _make_embedding(7)
+        embs = [base, base.copy(), base.copy()]
+        assert SpeakerDiarizer.detect_change_points(embs, threshold=0.55) == []
+
+    def test_change_detected_between_speakers(self) -> None:
+        a = _make_embedding(1)
+        b = _make_embedding(500)
+        # a, a, b, b → one boundary at index 2
+        embs = [a, a.copy(), b, b.copy()]
+        assert SpeakerDiarizer.detect_change_points(embs, threshold=0.55) == [2]
+
+    def test_empty_and_single(self) -> None:
+        assert SpeakerDiarizer.detect_change_points([], 0.55) == []
+        assert SpeakerDiarizer.detect_change_points([_make_embedding(1)], 0.55) == []
+
+
+class TestTurnSegmentation:
+    def test_single_speaker_turn_one_segment(self, diarizer: SpeakerDiarizer) -> None:
+        emb = _make_embedding(3)
+        with patch.object(diarizer, "_extract_embedding", return_value=emb):
+            segs = diarizer.process_turn_segments(np.zeros(48000, dtype=np.float32))
+        labels = {s[0] for s in segs}
+        assert labels == {"Speaker A"}
+
+    def test_two_speaker_turn_segments_and_dominant(self, diarizer: SpeakerDiarizer) -> None:
+        a = _make_embedding(1)
+        b = _make_embedding(500)
+        # 5 windows: A A A B B → dominant is A, two segments.
+        five_windows = [np.zeros(24000, dtype=np.float32)] * 5
+        seq = [a, a, a, b, b]
+        with patch.object(diarizer, "_window_audio", return_value=five_windows), patch.object(
+            diarizer, "_extract_embedding", side_effect=seq
+        ):
+            segs = diarizer.process_turn_segments(np.zeros(160000, dtype=np.float32))
+        seg_labels = [s[0] for s in segs]
+        assert len(segs) == 2
+        assert seg_labels[0] == "Speaker A"
+        assert seg_labels[1] == "Speaker B"
+
+    def test_process_turn_returns_dominant_speaker(self, diarizer: SpeakerDiarizer) -> None:
+        a = _make_embedding(1)
+        b = _make_embedding(500)
+        five_windows = [np.zeros(24000, dtype=np.float32)] * 5
+        seq = [a, a, a, b, b]  # A dominates by window span
+        with patch.object(diarizer, "_window_audio", return_value=five_windows), patch.object(
+            diarizer, "_extract_embedding", side_effect=seq
+        ):
+            label = diarizer.process_turn(np.zeros(160000, dtype=np.float32))
+        assert label == "Speaker A"
+
+    def test_window_audio_short_turn_single_window(self, diarizer: SpeakerDiarizer) -> None:
+        windows = diarizer._window_audio(np.zeros(16000, dtype=np.float32), 16000)
+        assert len(windows) == 1

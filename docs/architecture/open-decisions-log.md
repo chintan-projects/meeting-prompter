@@ -27,7 +27,7 @@ Reasoning source: [transcription-attribution-interaction-investigation.md](trans
 
 | ID | Experiment | Status | Feeds | Ref |
 |----|------------|--------|-------|-----|
-| **E-01** | **Select-driven model + retrieval comparison harness** — see spec below. | building | D-03, D-02 (select-to-answer) | §5b |
+| **E-01** | **Select-driven model + retrieval comparison harness** — `scripts/exp_model_retrieval_compare.py`. v1 ran; findings below. | ran v1 | D-03, D-02 (select-to-answer) | §5b |
 
 ## Related (tracked elsewhere)
 - **BUG-004** Chrome crash on per-app capture — `investigating`, evidence overturns the tap hypothesis (see BUGS.yaml).
@@ -59,3 +59,30 @@ promote the winning model + the select flow into the Tauri select-to-answer UI.
 
 **Decision output:** which model for D-03 (per trigger type if it differs), and
 whether extraction beats generation on faithfulness/latency for live answers.
+
+### E-01 v1 findings (2026-07-21)
+Ran on the curated Finetuning-Strategy corpus, span = *"How should we generate
+synthetic data to fine-tune a small model without a GPU?"*
+
+1. **Retrieval works, but it's effectively pure-vector.** Top-5 chunks are the
+   right docs (fine-tuning-lessons, Synthetic-Data-Guide, SLM-pipeline), but
+   `bm25=0.000` on *every* hit — the lexical arm (weight 0.05) contributes
+   nothing for this query. Retrieval quality is fine; the BM25 half is idle.
+   → tuning question: is 0.05 too low, or is FTS not matching (stopwords/OR)?
+2. **The 3-way model comparison is blocked by the inference runtime, not the
+   harness.** With the bundled `llama-cpp-python`:
+   - **350M-Extract** (`extract-023-v1.gguf`) → "Failed to load model from file"
+     (arch/format not supported by this llama.cpp build).
+   - **2.6B** (`Q4_K_M.gguf`) → chat-template parse error at load
+     (`unknown tag 'generation'` — newer Jinja tag the bundled minja can't parse).
+   - Only **1.2B-Instruct** loads. So comparing Extract/2.6B needs the runtime
+     updated (or the models reconverted) **first** — a real D-03 prerequisite.
+3. **Live-quality flag:** the 1.2B (current live model) answered *"I don't have
+   that information in my documents"* on well-retrieved on-topic context. The
+   harness fed raw joined chunks (the app does extraction-grounding first), so
+   verify whether it's the prompt, context formatting, or an over-conservative
+   model. If it reproduces in-app, it's a live under-answering bug.
+
+**Next for E-01:** (a) update/align the llama.cpp runtime to load Extract + 2.6B,
+(b) give Extract its field-schema prompt for a fair test, (c) chase the 1.2B
+refusal. Then re-run and record the model choice against D-03.

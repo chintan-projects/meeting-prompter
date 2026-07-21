@@ -101,3 +101,28 @@ synthetic data to fine-tune a small model without a GPU?"*
 fair 3-way, (b) add **classifier** (encoder trigger router) + **re-ranker
 before/after** panels, (c) `tune-prompts` pass on the answer prompt, then record
 the D-03 decision.
+
+### E-01 full pipeline probe (`scripts/exp_pipeline_probe.py`, 2026-07-21)
+Detached, one span through **classify → retrieve → rerank → answer**:
+
+- **Classify** works: encoder trigger router (LFM2.5-Encoder-350M + on-disk
+  `LFM2.5-TriggerRouter-350M` adapter) → `question` (conf 0.971); heuristic
+  question-score 1.000. Agreement.
+- **Rerank is idle for this query:** pre- and post-heuristic-rerank order is
+  *identical* ("order unchanged"). Combined with `bm25=0.000` on every hit, two
+  retrieval components (BM25 arm, heuristic re-ranker) contribute nothing here.
+  → revisit whether they earn their place, or need tuning/harder queries.
+- **Answer:** 1.2B flat-refuses (~0.8s); **2.6B** gives the graceful, useful
+  partial answer (~3.5s). Consistent with the earlier run → **D-03 leans 2.6B.**
+- **350M-Extract is runtime-blocked, definitively.** This build is incompatible
+  with *both* pinned runtimes: GGUF won't load in llama-cpp-python 0.3.16
+  (tensor-count 149≠148); safetensors won't run in transformers 4.56.2 (unknown
+  `TokenizersBackend` tokenizer class, then a tensor-shape bug in the LFM2
+  remote-code generate path). Works elsewhere on newer runtimes. **To compare
+  Extract fairly, run it in an upgraded env (newer transformers) — a runtime
+  decision, not a model problem.**
+
+**D-03 status:** leaning **2.6B** for the live answer model on the evidence so far;
+final call pending (a) an Extract run on an upgraded runtime and (b) a
+`tune-prompts` pass (the 1.2B refusal is prompt-brittleness). BM25 weight and the
+heuristic re-ranker are open **tuning** items (both idle on the test query).

@@ -62,6 +62,8 @@ class SentenceTransformerEmbedder:
         model_name: str = _DEFAULT_MODEL,
         dimension: Optional[int] = None,
         trust_remote_code: Optional[bool] = None,
+        query_prompt: str = "",
+        document_prompt: str = "",
     ) -> None:
         load_target, is_local = _resolve_model(model_name)
         self._model_name = load_target
@@ -71,6 +73,10 @@ class SentenceTransformerEmbedder:
             if dimension is not None
             else (_LIQUID_DIMENSION if is_local else _MINILM_DIMENSION)
         )
+        # Asymmetric query/passage prompts (E5-style). Empty = symmetric encoding.
+        # LFM2.5-Embedding documents "query: " / "document: " in its ST config.
+        self._query_prompt = query_prompt
+        self._document_prompt = document_prompt
         self._model: Optional[object] = None
 
     def _load_model(self) -> None:
@@ -91,24 +97,40 @@ class SentenceTransformerEmbedder:
         logger.info("Embedding model ready (dim=%d)", self._dimension)
 
     def embed(self, text: str) -> list[float]:
-        """Embed a single text string into a float vector."""
+        """Embed a single passage/document string into a float vector."""
         self._load_model()
         assert self._model is not None
-        embedding = self._model.encode(text, convert_to_numpy=True)  # type: ignore[union-attr]
+        embedding = self._model.encode(  # type: ignore[union-attr]
+            self._document_prompt + text, convert_to_numpy=True
+        )
         return embedding.tolist()  # type: ignore[union-attr]
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed multiple texts in a single batch."""
+        """Embed multiple passages/documents in a single batch."""
         if not texts:
             return []
         self._load_model()
         assert self._model is not None
+        prefixed = [self._document_prompt + t for t in texts]
         embeddings = self._model.encode(  # type: ignore[union-attr]
-            texts,
+            prefixed,
             convert_to_numpy=True,
             batch_size=32,
         )
         return [e.tolist() for e in embeddings]  # type: ignore[union-attr]
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a search query (applies the query prompt for asymmetric models).
+
+        Retrieval calls this instead of ``embed`` so queries and passages can use
+        distinct instruction prompts. With empty prompts this equals ``embed``.
+        """
+        self._load_model()
+        assert self._model is not None
+        embedding = self._model.encode(  # type: ignore[union-attr]
+            self._query_prompt + text, convert_to_numpy=True
+        )
+        return embedding.tolist()  # type: ignore[union-attr]
 
     @property
     def dimension(self) -> int:

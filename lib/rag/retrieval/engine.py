@@ -37,15 +37,13 @@ def retrieve(
     5. Build citations for each result
     """
     # Lexical search via FTS5
-    lexical_hits = fts_search(
-        conn, query, config.lexical_top_k, config, filter_path
-    )
+    lexical_hits = fts_search(conn, query, config.lexical_top_k, config, filter_path)
 
-    # Semantic search via embeddings
-    query_emb = embedder.embed(query)
-    semantic_hits = vector_search(
-        conn, query_emb, config.semantic_top_k, filter_path
-    )
+    # Semantic search via embeddings. Prefer embed_query() when the embedder
+    # supports asymmetric query/passage prompts; fall back to embed() otherwise.
+    embed_query = getattr(embedder, "embed_query", None)
+    query_emb = embed_query(query) if callable(embed_query) else embedder.embed(query)
+    semantic_hits = vector_search(conn, query_emb, config.semantic_top_k, filter_path)
 
     # Fuse results
     fused = weighted_fusion(
@@ -64,9 +62,7 @@ def retrieve(
     return _build_results(conn, fused)
 
 
-def _build_results(
-    conn: sqlite3.Connection, fused_hits: list[FusedHit]
-) -> list[RetrievalResult]:
+def _build_results(conn: sqlite3.Connection, fused_hits: list[FusedHit]) -> list[RetrievalResult]:
     """Enrich fused hits with chunk content and citations."""
     if not fused_hits:
         return []
@@ -94,8 +90,7 @@ def _build_results(
 
         if row[2] is not None:  # section_id
             sec_row = conn.execute(
-                "SELECT heading, heading_path, start_page, end_page "
-                "FROM sections WHERE id = ?",
+                "SELECT heading, heading_path, start_page, end_page " "FROM sections WHERE id = ?",
                 (row[2],),
             ).fetchone()
             if sec_row:

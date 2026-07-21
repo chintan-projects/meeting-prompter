@@ -80,6 +80,8 @@ class RAGPipelineConfig:
     lexical_top_k: int = 20
     semantic_top_k: int = 20
     db_path: str = "data/rag.db"
+    embedding_model: str = "LFM2.5-Embedding-350M"
+    embedding_dimension: int = 1024
 
 
 @dataclass

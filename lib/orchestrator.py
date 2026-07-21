@@ -119,6 +119,8 @@ class MeetingOrchestrator:
             semantic_weight=config.rag.semantic_weight,
             lexical_top_k=config.rag.lexical_top_k,
             semantic_top_k=config.rag.semantic_top_k,
+            embedding_model=config.rag.embedding_model,
+            embedding_dimension=config.rag.embedding_dimension,
         )
         self.rag = RAGEngine(docs_dir, db_path=db_path, config=rag_config)
         self._status("RAG engine ready")

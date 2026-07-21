@@ -50,6 +50,8 @@ rag:
   lexical_top_k: 20          # candidates from FTS5 before fusion
   semantic_top_k: 20         # candidates from vector search before fusion
   db_path: "data/rag.db"     # SQLite database for index storage
+  embedding_model: "LFM2.5-Embedding-350M"  # Liquid retriever (F-502); local via trust_remote_code
+  embedding_dimension: 1024  # LFM2.5-Embedding-350M is 1024-dim (all-MiniLM-L6-v2 was 384)
 
 triggers:
   question_score_threshold: 0.25

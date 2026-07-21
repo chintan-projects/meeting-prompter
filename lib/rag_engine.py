@@ -45,11 +45,14 @@ class RAGEngine:
         self._db_path = Path(db_path or _DEFAULT_DB_PATH)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self._embedder = SentenceTransformerEmbedder()
         self._config = config or RAGConfig(
             file_types=(".pdf", ".md", ".txt", ".markdown"),
             max_chunk_tokens=400,
             chunk_overlap_tokens=50,
+        )
+        self._embedder = SentenceTransformerEmbedder(
+            model_name=self._config.embedding_model,
+            dimension=self._config.embedding_dimension,
         )
 
         # check_same_thread=False: safe because WAL mode allows concurrent reads
@@ -66,6 +69,7 @@ class RAGEngine:
         )
 
         self._pipeline.setup()
+        self._purge_stale_dimension()
         self._index_documents()
 
         self._chunk_count = self._get_chunk_count()
@@ -208,6 +212,30 @@ class RAGEngine:
         """Close the database connection."""
         self._pipeline.close()
         self._conn.close()
+
+    def _purge_stale_dimension(self) -> None:
+        """Drop chunks whose stored embedding width no longer matches the model.
+
+        Embeddings are packed as ``<dim>f`` (4 bytes each). Swapping the embedder
+        (e.g. MiniLM 384-d → LFM2.5-Embedding 1024-d) leaves stale-width vectors
+        that would fail to unpack at query time and silently break retrieval.
+        Clearing them forces a clean re-index against the current model.
+        """
+        expected_bytes = self._embedder.dimension * 4
+        row = self._conn.execute(
+            "SELECT length(embedding) FROM chunks WHERE embedding IS NOT NULL LIMIT 1"
+        ).fetchone()
+        if row is not None and row[0] != expected_bytes:
+            logger.warning(
+                "Embedding dimension changed (stored=%d bytes, expected=%d) — "
+                "clearing index for a clean re-embed",
+                row[0],
+                expected_bytes,
+            )
+            self._conn.execute("DELETE FROM chunks")
+            self._conn.execute("DELETE FROM sections")
+            self._conn.execute("DELETE FROM documents")
+            self._conn.commit()
 
     def _index_documents(self) -> None:
         """Index all documents in docs_dir."""

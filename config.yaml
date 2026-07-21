@@ -115,9 +115,10 @@ notion:
 
 paths:
   # RAG document library. Relative → under project root; absolute → used as-is.
-  # Pointed at a curated symlink folder of the top-level Finetuning-Strategy docs
-  # (18 files; the leap/ and liquid-vlm/ code repos are deliberately excluded).
-  # Revert to "context" to restore the default library.
-  docs_dir: "/Users/chintan/Projects/Finetuning-Strategy-rag"
+  # Single-doc corpus for the fit-for-purpose loop (D-08): on-device-capability-
+  # playbook.md only. Delete data/rag.db after changing this to force a clean
+  # rebuild. Revert to "Finetuning-Strategy-rag" (18-file set) or "context" for
+  # the broader libraries.
+  docs_dir: "/Users/chintan/Projects/Finetuning-Strategy-playbook"
   output_dir: "output"
   index_dir: "data"

@@ -54,10 +54,13 @@ ARM_DISPLAY_K = 8
 TOP_K = 5
 DEFAULT_MAX_TOKENS = 160
 
+# Sample questions matched to the on-device-capability-playbook corpus (D-08 loop).
+# Replace with the actual questions from a real meeting to get a true coverage baseline.
 SAMPLE_SPANS = [
-    "How should we generate synthetic data to fine-tune a small model without a GPU?",
-    "What teacher model should we use for distillation, and what are the licensing risks?",
-    "Can we run LFM2 on device, and what are the memory and latency numbers?",
+    "How much does INT4 quantization hurt accuracy, and where does it degrade most?",
+    "What are the three levels of distillation and when do we use each?",
+    "Is speculative decoding lossless, and how much speedup does it give?",
+    "When should we prune versus quantize — do they stack?",
 ]
 
 # Ratings persist here so corpus coverage can be aggregated across questions/sessions.

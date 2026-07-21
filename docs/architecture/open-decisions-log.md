@@ -18,7 +18,7 @@ Reasoning source: [transcription-attribution-interaction-investigation.md](trans
 |----|----------|--------|-----|-----------|-----|
 | **D-01** | **AEC mic capture** (macOS Voice-Processing I/O) — cancel speaker→mic echo at capture so channel attribution is correct by construction, invariant to headphones/speakers/BlackHole. Foundational: fixes attribution **and** ASR quality **and** prompt trust. | open | high | yes | §1 |
 | **D-02** | **User-gated interaction** — default **quiet**; user opens the tap via **armed listen-window** (temporal) or **select-to-answer** (spatial). ALERTs stay the only always-on channel. Replaces always-on push that produced a stream of irrelevant prompts. | open | high | yes | §3 |
-| **D-03** | **Answer model selection** — DECIDED: **2.6B** for the live answer (config-driven, `models.generation.model_file`, 1.2B fallback). 350M-Extract returns structured JSON fields (extraction), not answers → stays in the notes/F-507 lane. Prompt tuned: strict grounding + empty-`<think>` prefill + think-strip. | decided | high | yes | §5b, E-01 |
+| **D-03** | **Answer model selection** — 2.6B is currently *wired* (config-driven, `models.generation.model_file`, 1.2B fallback) but the call is the operator's, made from the **lab (E-02)**, not by me. 350M-Extract returns structured JSON fields (extraction), not answers → notes/F-507 lane. Prompt tuned: strict grounding + empty-`<think>` prefill + think-strip. **Correction:** I earlier wrote this "DECIDED" and committed the switch without the operator's call — reverted to provisional; 2.6B stays wired pending their judgement via the lab. | leaning 2.6B (provisional; operator to confirm via E-02) | high | yes | §5b, E-01, E-02 |
 | **D-07** | **Refiner/answer model coupling** — the transcript refiner shares the answer-model instance. With 2.6B (reasoning, ~1.5–3.5s) that makes *per-turn* refinement slow. Decouple the refiner to a fast small model, or gate/disable it, once D-02 (user-gated) lands. | open | med | no | E-01 |
 | **D-04** | **Refiner scope = readability only** — never a meaning/error-correction stage (an LLM error-corrector hallucinates into a trusted record). | leaning yes | low | no | §2 |
 | **D-05** | **StreamDeduplicator after AEC** — keep as thin safety net vs delete once channels are clean. | open | med | no | §1 |
@@ -28,7 +28,8 @@ Reasoning source: [transcription-attribution-interaction-investigation.md](trans
 
 | ID | Experiment | Status | Feeds | Ref |
 |----|------------|--------|-------|-----|
-| **E-01** | **Select-driven model + retrieval comparison harness** — `scripts/exp_model_retrieval_compare.py`. v1 ran; findings below. | ran v1 | D-03, D-02 (select-to-answer) | §5b |
+| **E-01** | **Select-driven model + retrieval comparison harness** (CLI) — `scripts/exp_model_retrieval_compare.py`, `exp_pipeline_probe.py`. v1 ran; findings below. Superseded by E-02 (visual). | ran v1 | D-03, D-02 (select-to-answer) | §5b |
+| **E-02** | **Visual model & retrieval lab** — `scripts/lab/` (FastAPI + single page). Select a span → see each retrieval stage (BM25 / vector / fused / reranked) with scores **and** all three answer candidates side-by-side; operator marks the winning model. This is the tool for the D-03 call — surfaces options, does not decide. | built + verified live | D-03, D-02 (select-to-answer) | §5b, below |
 
 ## Related (tracked elsewhere)
 - **BUG-004** Chrome crash on per-app capture — `investigating`, evidence overturns the tap hypothesis (see BUGS.yaml).
@@ -158,3 +159,30 @@ coupling that rides on the same instance.
 
 Still open (tuning, non-blocking): BM25 weight and the heuristic re-ranker (both
 idle on the test query).
+
+### E-02 — visual lab (2026-07-21)
+
+Built `scripts/lab/` (FastAPI + one page) because the CLI harnesses (E-01) put the
+decision in *my* hands via a findings write-up — the operator asked for a **visual**
+harness to make the model call themselves. The lab lays out, for a selected span:
+classification (encoder router + heuristic), the four retrieval stages each on its
+own (BM25 / vector / fused / reranked, with scores + the sanitized FTS query), and
+the three answer candidates side-by-side (1.2B, 2.6B, 350M-Extract) with latency and
+a "Pick this" control that records the operator's choice. It surfaces; it does not
+decide.
+
+Run:
+```
+uvicorn scripts.lab.server:app --port 8555            # then open http://localhost:8555
+# 350M-Extract panel needs transformers>=5; point it at an overlay venv:
+LAB_EXTRACT_PYTHON=/path/to/venv/bin/python uvicorn scripts.lab.server:app --port 8555
+```
+
+**Correction the lab surfaced (sharpens the earlier "BM25 idle" claim):** the BM25
+arm is *not* dead — on the sample span it returns strong, on-topic lexical hits
+(bm25≈13.3 on the right synthetic-data / no-GPU docs). What zeroes it out is the
+**fusion math**: min-max normalisation across a handful of hits + a 0.05 weight
+collapse the lexical contribution to 0.000 in the fused score. So the tuning lever
+is fusion (weight / normalisation), not lexical recall. The reranker is genuinely
+inert here (fused order == reranked order). Both now visible at a glance in the lab
+rather than asserted — which is the point.

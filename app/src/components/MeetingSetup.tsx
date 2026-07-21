@@ -248,6 +248,11 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
             placeholder="Alice (PM), Bob (Eng)"
           />
         </label>
+        <p style={styles.enrollmentHint}>
+          Roster names bound speaker clustering. Enrolled colleague voice profiles
+          (config: diarization.enrollment_path) auto-name matching speakers instead
+          of "Speaker A".
+        </p>
 
         <div style={styles.deviceRow}>
           <label style={{ ...styles.label, flex: 1 }}>
@@ -385,6 +390,13 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     fontWeight: 600,
     color: "var(--text-secondary)",
+  },
+  enrollmentHint: {
+    margin: "-4px 0 0",
+    fontSize: 11,
+    lineHeight: 1.4,
+    color: "var(--text-secondary)",
+    opacity: 0.7,
   },
   input: {
     background: "var(--bg-primary)",

@@ -14,11 +14,14 @@ pipeline threads can call process_turn() concurrently.
 
 import logging
 import threading
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from lib.config import DiarizationConfig
+
+if TYPE_CHECKING:
+    from lib.speaker_enrollment import VoiceEnrollment
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,11 @@ class SpeakerDiarizer:
         # is known (from meeting context), it caps the number of clusters instead
         # of the looser max_speakers default.
         self._roster_size: Optional[int] = None
+
+        # Per-cluster names, parallel to _centroids: a real name when the cluster
+        # was identified by voice enrollment (F-605), else None → "Speaker X".
+        self._names: List[Optional[str]] = []
+        self._enrollment: Optional["VoiceEnrollment"] = None
 
         # Load speechbrain embedding model
         self._model: Optional[object] = None
@@ -98,6 +106,24 @@ class SpeakerDiarizer:
         if self._roster_size is not None:
             return self._roster_size
         return self._config.max_speakers
+
+    def set_enrollment(self, enrollment: Optional["VoiceEnrollment"]) -> None:
+        """Attach voice-enrollment profiles that name matching clusters (F-605)."""
+        self._enrollment = enrollment
+        logger.info(
+            "Diarization voice enrollment: %d profiles",
+            len(enrollment) if enrollment else 0,
+        )
+
+    def _default_label(self, idx: int) -> str:
+        """Anonymous label for cluster index (Speaker A, B, ...)."""
+        return _SPEAKER_LABELS[idx] if idx < len(_SPEAKER_LABELS) else f"{_SPEAKER_PREFIX} {idx}"
+
+    def _label_for(self, idx: int) -> str:
+        """Enrolled name for this cluster if known, else the anonymous label."""
+        if idx < len(self._names) and self._names[idx]:
+            return self._names[idx]  # type: ignore[return-value]
+        return self._default_label(idx)
 
     def process_turn(
         self,
@@ -250,7 +276,8 @@ class SpeakerDiarizer:
         """
         if len(self._centroids) == 0:
             self._centroids.append((embedding.copy(), 1))
-            label = _SPEAKER_LABELS[0]
+            self._names.append(self._identify_name(embedding))
+            label = self._label_for(0)
             logger.info("New speaker: %s (first speaker)", label)
             return label
 
@@ -272,11 +299,10 @@ class SpeakerDiarizer:
             if norm > 0:
                 new_centroid = new_centroid / norm
             self._centroids[best_idx] = (new_centroid, count + 1)
-            label = (
-                _SPEAKER_LABELS[best_idx]
-                if best_idx < len(_SPEAKER_LABELS)
-                else f"{_SPEAKER_PREFIX} {best_idx}"
-            )
+            # Backfill an enrolled name if this cluster is still anonymous.
+            if best_idx < len(self._names) and self._names[best_idx] is None:
+                self._names[best_idx] = self._identify_name(embedding)
+            label = self._label_for(best_idx)
             logger.debug("Matched %s (sim=%.3f, count=%d)", label, best_sim, count + 1)
             return label
 
@@ -284,9 +310,8 @@ class SpeakerDiarizer:
             # New speaker
             self._centroids.append((embedding.copy(), 1))
             idx = len(self._centroids) - 1
-            label = (
-                _SPEAKER_LABELS[idx] if idx < len(_SPEAKER_LABELS) else f"{_SPEAKER_PREFIX} {idx}"
-            )
+            self._names.append(self._identify_name(embedding))
+            label = self._label_for(idx)
             logger.info("New speaker: %s (sim=%.3f to nearest)", label, best_sim)
             return label
 
@@ -297,17 +322,19 @@ class SpeakerDiarizer:
         if norm > 0:
             new_centroid = new_centroid / norm
         self._centroids[best_idx] = (new_centroid, count + 1)
-        label = (
-            _SPEAKER_LABELS[best_idx]
-            if best_idx < len(_SPEAKER_LABELS)
-            else f"{_SPEAKER_PREFIX} {best_idx}"
-        )
+        label = self._label_for(best_idx)
         logger.debug(
             "Max speakers reached — assigned to %s (sim=%.3f)",
             label,
             best_sim,
         )
         return label
+
+    def _identify_name(self, embedding: np.ndarray) -> Optional[str]:
+        """Name this voice via enrollment profiles, or None if unknown (F-605)."""
+        if self._enrollment is None:
+            return None
+        return self._enrollment.identify(embedding)
 
     @staticmethod
     def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -322,12 +349,12 @@ class SpeakerDiarizer:
         """Clear all speaker clusters for a new meeting."""
         with self._lock:
             self._centroids.clear()
+            self._names.clear()
             logger.info("Speaker diarization state reset")
 
     def get_speaker_summary(self) -> Dict[str, int]:
         """Get summary of identified speakers and their turn counts."""
         summary: Dict[str, int] = {}
         for i, (_centroid, count) in enumerate(self._centroids):
-            label = _SPEAKER_LABELS[i] if i < len(_SPEAKER_LABELS) else f"{_SPEAKER_PREFIX} {i}"
-            summary[label] = count
+            summary[self._label_for(i)] = count
         return summary

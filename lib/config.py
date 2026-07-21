@@ -124,6 +124,9 @@ class DiarizationConfig:
     window_seconds: float = 1.5  # embedding window length for intra-turn segmentation
     window_hop_seconds: float = 0.75  # hop between windows (overlap = window - hop)
     change_threshold: float = 0.55  # cosine sim below this between windows = speaker change
+    # F-605 voice enrollment: local JSON of name→profile; names matching clusters.
+    enrollment_path: str = ""  # empty = disabled
+    enrollment_threshold: float = 0.70  # cosine sim to match an enrolled profile
 
 
 @dataclass

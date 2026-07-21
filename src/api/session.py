@@ -688,6 +688,17 @@ class Session:
                     # F-604: bound clustering to the known roster when available.
                     if self.meeting_context and self.meeting_context.participants:
                         self._diarizer.set_roster_size(len(self.meeting_context.participants))
+                    # F-605: attach voice-enrollment profiles if configured.
+                    enroll_path = self.config.diarization.enrollment_path
+                    if enroll_path:
+                        from lib.speaker_enrollment import VoiceEnrollment
+
+                        self._diarizer.set_enrollment(
+                            VoiceEnrollment.load(
+                                Path(enroll_path),
+                                match_threshold=self.config.diarization.enrollment_threshold,
+                            )
+                        )
                     if self._diarizer.available:
                         logger.info("Tier 2 speaker diarization enabled")
                     else:

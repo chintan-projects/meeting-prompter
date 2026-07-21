@@ -86,6 +86,8 @@ diarization:
   window_seconds: 1.5         # F-604: embedding window for intra-turn speaker-change segmentation
   window_hop_seconds: 0.75    # hop between windows
   change_threshold: 0.55      # cosine sim below this between adjacent windows = speaker change
+  enrollment_path: ""         # F-605: local JSON of name->voice profile (empty = disabled)
+  enrollment_threshold: 0.70  # cosine sim to match an enrolled colleague's voice
 
 notion:
   enabled: false                   # set true + NOTION_API_TOKEN env var to activate

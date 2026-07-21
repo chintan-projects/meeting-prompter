@@ -125,11 +125,16 @@ class MeetingOrchestrator:
         self.rag = RAGEngine(docs_dir, db_path=db_path, config=rag_config)
         self._status("RAG engine ready")
 
-        # Trigger engine
+        # Trigger engine. Wire a lazy encoder backbone so the F-510 linear-probe
+        # head is available (wired-but-off); EncoderBackbone loads no weights
+        # until something calls embed(), so this adds zero startup cost.
         trigger_config = config.triggers
         if self.meeting_context:
             trigger_config.watch_words = self.meeting_context.watch_words
-        self.trigger_engine = TriggerEngine(trigger_config, self.rag)
+        from lib.intelligence.encoder import EncoderBackbone
+
+        self.encoder = EncoderBackbone()
+        self.trigger_engine = TriggerEngine(trigger_config, self.rag, encoder=self.encoder)
 
         # Conversation buffer (rolling transcript + trigger routing)
         self.buffer = ConversationBuffer(

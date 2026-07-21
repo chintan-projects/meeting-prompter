@@ -17,6 +17,7 @@ from lib.config import TriggerConfig
 from lib.intelligence.encoder import EncoderBackbone
 from lib.intelligence.encoder_layer import EncoderIntelligenceLayer
 from lib.intelligence.heads.heuristic_heads import HeuristicHead
+from lib.intelligence.heads.linear_probe import LinearProbeHead
 from lib.intelligence.turn_state import TurnState
 
 from .alert_trigger import AlertTrigger
@@ -59,11 +60,22 @@ class TriggerEngine:
 
         # Turn-evaluated triggers become heads behind the intelligence layer.
         # Order preserved: ALERT (1) > QUESTION (2) > TOPIC_MATCH (3).
-        heads = [
+        heads: List[object] = [
             HeuristicHead("alert", TriggerType.ALERT, self.alert),
             HeuristicHead("question", TriggerType.QUESTION, self.question),
             HeuristicHead("topic", TriggerType.TOPIC_MATCH, self.topic),
         ]
+
+        # F-510: frozen-encoder linear-probe router, wired-but-OFF. It stays
+        # disabled (returns None, never loads the encoder) because on the current
+        # synthetic set it regresses the question class the heuristic owns — see
+        # evaluate_probe_gate. Enabling it is a future step (real labeled data)
+        # that also removes the heuristic heads (delete-as-you-replace).
+        self.probe_head: Optional[LinearProbeHead] = None
+        if encoder is not None:
+            self.probe_head = LinearProbeHead(encoder, enabled=False)
+            heads.append(self.probe_head)
+
         self.layer = EncoderIntelligenceLayer(heads, encoder=encoder)
 
     def set_watch_words(self, words: List[str]) -> None:

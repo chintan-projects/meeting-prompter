@@ -1,10 +1,10 @@
-# Overnight autonomous brief — Liquid re-architecture (full ADR + forge training)
+# Overnight autonomous brief — Liquid re-architecture (code waves; head training deferred)
 
-Mission: execute the entire Liquid re-architecture ADR unattended, and train the
-encoder heads end-to-end via the **forge** pipeline in **full-auto (incl. remote
-GPU)**. Do as much of every stage as its inputs allow; bank what passes its gate;
-park only what is genuinely blocked. Never halt the whole run because one item is
-blocked. Leave a branch + a morning report for review.
+Mission (TONIGHT): execute the **code waves** of the Liquid re-architecture ADR
+unattended — the full refactor (Wave A). **No head training tonight** — that is a
+separate future forge session, gated on a prerequisite (see Wave B). Do as much of
+Wave A as passes its gate; park what is blocked; never halt the whole run because
+one item is blocked. Leave a branch + a morning report for review.
 
 SPEC (source of truth):
 - `docs/architecture/liquid-rearchitecture.md` + `FEATURES.yaml`
@@ -19,33 +19,19 @@ SPEC (source of truth):
 - After EVERY code change: `pytest -q` must stay green. Can't fix in 2 tries → revert THAT change, log it, continue. Never leave the tree red.
 - Commit after each feature/head passes its gate. Small commits, clear messages.
 - delete-as-you-replace: a head that beats its heuristic REPLACES it (delete heuristic + dead tests, add new tests). Never two parallel impls.
-- Local only for code. The ONLY external calls allowed: forge's teacher (OpenRouter), the Notion API (read-only), model downloads already on disk, and the forge GPU host. No other egress.
+- **Local only tonight — NO external egress.** No OpenRouter, no Notion, no GPU host: tonight is code, and all models are already on disk. (Those are used only by the future forge session below.)
 - Per-item stop-and-park: blocked on a missing input → log in `STATUS-overnight.md`, move on. NEVER fake inputs.
-- Secrets (`OPENROUTER_API_KEY`, GPU SSH key, `NOTION_API_TOKEN`) are read from their configured paths — NEVER print them.
 
-## Prereqs — verify FIRST; gate dependent work if missing
+## Prereqs — tonight (verify FIRST; record in STATUS)
 
-Run these checks at start and record results in STATUS. Do not fake around a miss.
+Tonight is code only — no training — so it needs NO OpenRouter / Notion / GPU access.
 
-1. `forge targets` + `corpuscope --help` → toolchain ready (was ready at authoring time).
-2. `OPENROUTER_API_KEY` present → forge Loop A teacher. **If missing: park ALL training (Wave B), do Wave A only, report loudly.**
-3. Notion access (below). If unreachable: Wave B proceeds with teacher-only generation but **flag that real-data grounding was skipped**.
-4. GPU reachability (forge train dry-run emits `train_plan.sh`). **If GPU unreachable: stop each head at `corpuscope approve` + `train_plan.sh`, park the trained artifact for morning, do NOT loop retrying.**
+1. Project venv `./venv` present; `pytest -q` green on a clean checkout before starting.
+2. Local models on disk: `LFM2.5-Encoder-350M`, `LFM2.5-Embedding-350M` (both used by
+   Wave A code paths, loaded via `trust_remote_code`).
 
-## Data acquisition — Notion meeting notes (grounds the training distribution)
-
-The notes are real meeting *content*, used to make forge's authored data look like
-real Liquid meetings — NOT as ready-made labels.
-
-- Source DB: `673508f9ad4645389052980ec0770501` (workspace liquidai).
-- Fetch read-only via the project's own client (`lib/notion/`): set `notion.enabled: true`,
-  add the DB id to `rag_source_database_ids`, use `NOTION_API_TOKEN`. Convert pages →
-  markdown (`lib/notion/parser.py`).
-- Store gitignored under `data/fixtures/notion/` — real participant data, NEVER committed.
-- Mine realistic utterances/turns from the notes → use as forge `families` / `scenarios`
-  (conditioning by default; `in_band` only if the served input carries it) so the teacher
-  generates on-distribution examples. Optionally weak-label a subset as a bring-your-own
-  corpus (`corpuscope audit … --spec …`).
+(OpenRouter teacher key, Notion access, and GPU reachability are prereqs for the
+FUTURE forge training session below — NOT for tonight.)
 
 ## WAVE A — code (full ADR, no external inputs). In order, each test-gated.
 
@@ -70,40 +56,40 @@ separate, tested task that must land + verify FIRST. Until then, training any he
 would mean using the causal tower, which the ADR forbids. So: park F-503/F-504/F-505
 entirely tonight. Do the code waves (Wave A) only.
 
---- (retained for when the forge bidirectional-encoder change has landed) ---
-HARD RULE: **encoder backbone only — NEVER the causal head.** Follow the ADR, not
-forge's default S2 (which maps sequence/multi-label to the causal tower). If a head
-would resolve to `backbone="causal"`, DO NOT train it — park it. Do not "fall back"
-to causal to make the run complete.
+Do not run any of the forge steps below tonight. They are recorded here only as the
+spec for the FUTURE dedicated session, and are gated on a prerequisite.
 
-Data is **synthetic-first**: forge's Loop A teacher generation is the primary corpus.
-Notion notes are OPTIONAL conditioning only (if reachable, mine utterances into
-`families`; if not, pure synthetic — never a blocker).
+────────────────────────────────────────────────────────────────────────────
+FUTURE SESSION ONLY — encoder-head training via forge. NOT part of tonight's run.
+────────────────────────────────────────────────────────────────────────────
 
-Heads:
-- **F-504 evidence span** — one label per token (BIO). forge's existing `token_classifier`
-  is already **encoder** (its own LoRA, never co-trained). Train this tonight.
-- **F-503 trigger router** (one label ∈ {question, alert, topic, followup, none}) and
-  **F-505 quality gate** (K flags) — these need an **encoder-backed** sequence/multi-label
-  head. forge does NOT ship that yet (its `sequence_classifier`/`multi_label` are causal).
-  GATE: train these ONLY if the forge encoder-classifier change (targets.py base+backbone,
-  loopb dispatch, bidirectional loading in train_sequence_classifier_meanpool.py, compat
-  stamp, updated tests) has been LANDED and VERIFIED (forge test suite green + `--mock`
-  dataloop + dry-run plan builds with the encoder base). If NOT verified, PARK both heads
-  — do not train them on causal.
+PREREQUISITE (must land + verify FIRST, in the finetune-quality monorepo):
+the forge bidirectional-encoder-classifier change — additive encoder head variants
+in `targets.py` (base=LFM2.5-Encoder-350M, backbone=encoder, mean-pool), the
+bidirectional loading path in the `loopb.py` sequence/token trainer templates
+(`AutoModelForMaskedLM`→`.lfm2`, no causal mask), the compat stamp (already returns
+bidirectional for encoder+base), and updated `test_backbones.py`. Verify with the
+forge test suite + `--mock` dataloop + a dry-run plan + a real MPS smoke-train —
+all BEFORE any GPU.
 
-Per-head procedure (forge):
-1. **S1 contract** — numbered selection rules, exclusion zones, tie-breaks, explicit abstain/`null`.
-2. **S2 head/backbone/size** — derive from output shape via forge's table. NOTE: forge puts one-label/K-flag heads on the **causal 350M** and token-labels on the **encoder** — this DIVERGES from the ADR's "one shared encoder" assumption. Follow forge, and RECORD the divergence + per-head eval in STATUS so we can compare encoder-vs-causal for the sequence heads in the morning.
-3. **S4 recipe** — SFT/LoRA golden recipe (r=16/α=32, mean-pool, real LFM2 `target_modules` `[q_proj,k_proj,v_proj,out_proj,in_proj,w1,w2,w3]`). forge encodes this.
-4. **Author `genspec.yaml`** — labels (with definitions/boundaries on subtle classes), families grounded in the Notion notes, two-sided cues for the confusable discriminators.
-5. **Loop A**: `forge dataloop --spec genspec.yaml --out run/` (autonomous, no GPU). Open `run/scorecard.html`.
-   - **GREEN** → proceed. **RED** → inspect offenders, fix the *distribution*, re-run (bounded: ≤3 genspec revisions). **HALT** → the loop printed a *witness*; **change the genspec it names — re-running is futile**. If not GREEN after the revision budget, **park this head** with its scorecard + offenders and move to the next. NEVER proceed past RED/HALT.
-6. **Approve (GREEN only)**: `corpuscope approve run/train.jsonl` — the mechanical GREEN-before-GPU gate.
-7. **Loop B (GPU, full-auto)**: `forge train --spec genspec.yaml --run run/ --out artifact/ --head <h> --size <s>` to emit the plan; heed any `⚠ plan lint`; `cat artifact/train_plan.sh` (paths absolute, no `~`/`$HOME`); then `forge train … --execute`. Tail the remote log. On eval-gate failure: **fix the data, re-run Loop A** — do not tune weights.
-8. **Wire-in GATE**: replace the heuristic with the trained head ONLY if it beats the heuristic on the held-out eval (macro-F1 / per-class). Else keep the heuristic + keep the artifact + numbers. Either way commit the pipeline + eval. Follow delete-as-you-replace when it wins.
+HARD RULE: **encoder backbone only — NEVER causal.** All three heads train on the
+bidirectional LFM2.5-Encoder-350M via the new encoder variants:
+- F-503 trigger router — one label ∈ {question, alert, topic, followup, none}.
+- F-505 quality gate — K independent flags.
+- F-504 evidence span — one label per token (BIO), its own LoRA, never co-trained.
+If any head would resolve to `backbone="causal"`, DO NOT train it.
 
-Guardrails (forge, encode as steps — never skip): GREEN before GPU, no exceptions. Never override a gate. Mean-pool on LFM2.5; refuse last-token. Real LFM2 `target_modules` only. Carve a frozen holdout (`holdout_frac`). Report per-class numbers honestly — "done" = gated-and-verified, not "it ran".
+DATA: synthetic-first (forge Loop A teacher generation is the primary corpus).
+Notion notes are OPTIONAL conditioning only — never a blocker.
+
+Per-head (forge SKILL.md): S1 contract → S2 (select the ENCODER variant, never the
+causal default) → S4 golden LoRA recipe (r=16/α=32, mean-pool, real LFM2
+`target_modules`) → author `genspec.yaml` → Loop A to GREEN (never past RED/HALT;
+≤3 genspec revisions else park) → `corpuscope approve` (GREEN only) → Loop B
+`forge train --execute` (full-auto GPU) → wire in ONLY if it beats the heuristic on
+a frozen held-out eval (else keep the heuristic + the artifact). Guardrails: GREEN
+before GPU (no exceptions), never override a gate, mean-pool, real LFM2
+`target_modules`, frozen holdout, honest per-class reporting.
 
 ## PARK — genuinely blocked (log reason, do NOT attempt)
 
@@ -114,10 +100,10 @@ Guardrails (forge, encode as steps — never skip): GREEN before GPU, no excepti
 
 ## MORNING REPORT — `STATUS-overnight.md` at repo root
 
-Per-feature outcome (done / partial / parked + why); final `pytest -q` status;
-retrieval eval deltas (MiniLM vs LFM, before/after hardening); for EACH head:
-Loop A terminal state (GREEN/RED/HALT), scorecard path, whether trained, eval vs
-heuristic, wired-in?; the encoder-vs-causal backbone note for the sequence heads;
-the commit list on the branch; and a prioritized **NEEDS-HUMAN** list (real
-screenshots, live call, Zoom creds, any RED/HALT corpora to inspect). Update
-`PROGRESS.yaml`. Leave the branch unpushed for review.
+Tonight is CODE WAVES ONLY (no head training — that is the future forge session).
+Report: per-feature outcome for Wave A (done / partial / parked + why); final
+`pytest -q` status; retrieval eval deltas (MiniLM vs LFM, before/after hardening);
+the commit list on the `liquid-rearch` branch; and a prioritized **NEEDS-HUMAN**
+list (the forge bidirectional-encoder change before any head training; real
+screenshots for VLM; live call; Zoom creds). Update `PROGRESS.yaml`. Leave the
+branch unpushed for review.

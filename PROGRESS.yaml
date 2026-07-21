@@ -23,15 +23,10 @@ recent_sessions:
     date: "2026-07-20"
     focus: "Liquid re-architecture Wave A (code waves only, unattended) — branch liquid-rearch"
     completed:
-      - "F-502 retrieval swap → LFM2.5-Embedding-350M (config-driven embedder, stale-dim purge; gate held Hit@1 94.4%/MRR 0.972)"
-      - "F-509 hardened chunk-level retrieval eval (confusable corpus, query/passage prompts; MiniLM vs LFM within 1 query — no clear winner)"
-      - "F-501 EncoderIntelligenceLayer + typed TurnState + Head interface (heuristics as first heads; zero behavior change)"
-      - "F-510 frozen-encoder linear-probe head, wired-but-off (probe 0.886 macro-F1 but regresses question class → heuristic stays default; caught+fixed a data leak)"
-      - "F-601 AttributionResolver (L1/L3/L4 + regime + honest degradation); F-606 conference-room 'Others (room)' + low_confidence flag end-to-end"
-      - "F-604 diarization: speaker-change segmentation + roster-bounded clustering; F-605 voice enrollment (store+match+persistence, unit-validated)"
-      - "F-506 route-first hot/cold execution; F-507 structured notes via Extract path (plumbed, instruct default); F-508 warm-model runtime; F-607 lexical speaker-consistency corrections"
-      - "704 Python tests (+119) + 10 slow gates + 16 frontend, tsc clean"
-    next_recommended: "Review + merge liquid-rearch; run a live call; land the forge bidirectional-encoder change to unblock Wave B head training"
+      - "12 Wave A features landed test-gated: F-502/509 retrieval; F-501/510/506 encoder intelligence; F-601/606/604/605/607 attribution; F-507/508 runtime (see STATUS-overnight.md)"
+      - "F-510 probe wired-but-off by decision (regresses question class on synthetic data); F-507/508 path-built, live promotion pending"
+      - "704 Python tests (+119) + 10 slow gates + 16 frontend; ruff + mypy --strict + tsc clean"
+    next_recommended: "Review + merge liquid-rearch; run a live call; land forge bidirectional-encoder change to unblock Wave B head training"
   - id: "session-016"
     date: "2026-03-09"
     focus: "WS-14 dual-stream pipeline hardening — thread safety, cleanup, robustness"
@@ -51,15 +46,6 @@ recent_sessions:
       - "F-201: 3 suppression layers (tag questions, self-answering, rhetorical forms), 46 tests"
       - "399 Python tests + 5 eval tests passing"
     next_recommended: "Live dual-stream test, then F-111 section-aware chunking or F-112 result dedup"
-  - id: "session-014"
-    date: "2026-03-07"
-    focus: "ColBERT → hybrid FTS5 + vector RAG migration"
-    completed:
-      - "Replaced ColBERT with hybrid FTS5+vector pipeline (all-MiniLM-L6-v2, 80MB)"
-      - "New lib/rag/ library: storage, parser, chunker, index, retrieval, rank, embedder"
-      - "348 Python tests passing"
-    next_recommended: "F-110 RAG quality audit + tuning"
-
 completed_summary:
-  total_items: 56
-  total_sessions: 16
+  total_items: 68
+  total_sessions: 17

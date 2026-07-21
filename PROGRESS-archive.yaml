@@ -415,3 +415,10 @@ sessions:
       - "Bounded _trigger_history with deque(maxlen=1000), _thread_safe_put logs drops"
       - "5 thread safety tests, CLAUDE.md dual-stream architecture"
       - "464 Python tests passing"
+  - id: "session-014"
+    date: "2026-03-07"
+    focus: "ColBERT → hybrid FTS5 + vector RAG migration"
+    completed:
+      - "Replaced ColBERT with hybrid FTS5+vector pipeline (all-MiniLM-L6-v2, 80MB)"
+      - "New lib/rag/ library: storage, parser, chunker, index, retrieval, rank, embedder"
+      - "348 Python tests passing"

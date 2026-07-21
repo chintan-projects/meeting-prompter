@@ -32,14 +32,25 @@ class EncoderIntelligenceLayer:
         heads: Sequence[Head],
         encoder: Optional[EncoderBackbone] = None,
         compute_embedding: bool = False,
+        cold_path_min_words: int = 3,
     ) -> None:
         self._heads: List[Head] = list(heads)
         self._encoder = encoder
         self._compute_embedding = compute_embedding
+        # Route-first (F-506): the cold (RAG-backed) path is skipped for turns
+        # below this word count — filler like "yeah totally" never hits RAG.
+        self._cold_path_min_words = cold_path_min_words
 
     @property
     def heads(self) -> List[Head]:
         return self._heads
+
+    def _is_cold(self, head: Head) -> bool:
+        return bool(getattr(head, "cold", False))
+
+    def _should_run_cold(self, state: TurnState) -> bool:
+        """Cheap gate: only substantive turns warrant the RAG-backed cold path."""
+        return len(state.text.split()) >= self._cold_path_min_words
 
     def ensure_embedding(self, state: TurnState) -> None:
         """Populate ``state.embedding`` from the shared encoder (best-effort).
@@ -55,12 +66,19 @@ class EncoderIntelligenceLayer:
             logger.debug("Encoder embedding unavailable, degrading: %s", exc)
 
     def process(self, state: TurnState) -> List[Trigger]:
-        """Run all heads over the turn; return priority-sorted triggers."""
+        """Route-first execution: hot heads always run; the cold (RAG-backed)
+        path runs only for substantive turns. Returns priority-sorted triggers.
+        """
         if self._compute_embedding:
             self.ensure_embedding(state)
 
+        run_cold = self._should_run_cold(state)
+        state.ran_cold = run_cold
+
         triggers: List[Trigger] = []
         for head in self._heads:
+            if self._is_cold(head) and not run_cold:
+                continue  # skip RAG-backed heads on filler turns
             try:
                 result = head.evaluate(state)
                 if result is not None:

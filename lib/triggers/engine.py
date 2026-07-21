@@ -60,10 +60,12 @@ class TriggerEngine:
 
         # Turn-evaluated triggers become heads behind the intelligence layer.
         # Order preserved: ALERT (1) > QUESTION (2) > TOPIC_MATCH (3).
+        # alert + question are HOT (cheap regex); topic is COLD (RAG-backed) and
+        # only runs on the cold path for substantive turns (F-506).
         heads: List[object] = [
             HeuristicHead("alert", TriggerType.ALERT, self.alert),
             HeuristicHead("question", TriggerType.QUESTION, self.question),
-            HeuristicHead("topic", TriggerType.TOPIC_MATCH, self.topic),
+            HeuristicHead("topic", TriggerType.TOPIC_MATCH, self.topic, cold=True),
         ]
 
         # F-510: frozen-encoder linear-probe router, wired-but-OFF. It stays
@@ -76,7 +78,11 @@ class TriggerEngine:
             self.probe_head = LinearProbeHead(encoder, enabled=False)
             heads.append(self.probe_head)
 
-        self.layer = EncoderIntelligenceLayer(heads, encoder=encoder)
+        self.layer = EncoderIntelligenceLayer(
+            heads,
+            encoder=encoder,
+            cold_path_min_words=getattr(config, "cold_path_min_words", 3),
+        )
 
     def set_watch_words(self, words: List[str]) -> None:
         """Update alert trigger watch words (e.g. from meeting context)."""

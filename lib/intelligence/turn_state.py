@@ -33,3 +33,5 @@ class TurnState:
     timestamp: float = 0.0
     embedding: Optional[List[float]] = None
     triggers: List[Trigger] = field(default_factory=list)
+    # Route-first (F-506): whether the expensive RAG-backed cold path ran.
+    ran_cold: bool = False

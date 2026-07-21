@@ -125,6 +125,50 @@ class TestEncoderIntelligenceLayer:
         out = EncoderIntelligenceLayer(heads).process(TurnState(text="hi"))
         assert [t.type for t in out] == [TriggerType.QUESTION]
 
+    def test_cold_head_skipped_on_filler_turn(self) -> None:
+        rec: List[tuple] = []
+        hot = HeuristicHead("question", TriggerType.QUESTION, _FakeEvaluator(None, rec))
+        cold_rec: List[tuple] = []
+        cold = HeuristicHead(
+            "topic",
+            TriggerType.TOPIC_MATCH,
+            _FakeEvaluator(_trigger(TriggerType.TOPIC_MATCH), cold_rec),
+            cold=True,
+        )
+        layer = EncoderIntelligenceLayer([hot, cold], cold_path_min_words=3)
+        state = TurnState(text="yeah totally")  # 2 words → below threshold
+        out = layer.process(state)
+        assert out == []
+        assert cold_rec == []  # RAG-backed head never called
+        assert rec == [("yeah totally", "")]  # hot head still ran
+        assert state.ran_cold is False
+
+    def test_cold_head_runs_on_substantive_turn(self) -> None:
+        cold_rec: List[tuple] = []
+        cold = HeuristicHead(
+            "topic",
+            TriggerType.TOPIC_MATCH,
+            _FakeEvaluator(_trigger(TriggerType.TOPIC_MATCH), cold_rec),
+            cold=True,
+        )
+        layer = EncoderIntelligenceLayer([cold], cold_path_min_words=3)
+        state = TurnState(text="what is the deployment timeline exactly")
+        out = layer.process(state)
+        assert [t.type for t in out] == [TriggerType.TOPIC_MATCH]
+        assert len(cold_rec) == 1
+        assert state.ran_cold is True
+
+    def test_hot_head_always_runs(self) -> None:
+        rec: List[tuple] = []
+        hot = HeuristicHead(
+            "question",
+            TriggerType.QUESTION,
+            _FakeEvaluator(_trigger(TriggerType.QUESTION), rec),
+        )
+        layer = EncoderIntelligenceLayer([hot], cold_path_min_words=5)
+        out = layer.process(TurnState(text="hi"))  # 1 word
+        assert [t.type for t in out] == [TriggerType.QUESTION]
+
     def test_embedding_off_by_default(self) -> None:
         class _Enc:
             def embed(self, text: str) -> List[float]:

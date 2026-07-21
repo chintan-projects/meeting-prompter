@@ -24,10 +24,18 @@ class _TextEvaluator(Protocol):
 class HeuristicHead:
     """Wraps a legacy ``(text, context) -> Optional[Trigger]`` evaluator as a Head."""
 
-    def __init__(self, name: str, trigger_type: TriggerType, evaluator: _TextEvaluator) -> None:
+    def __init__(
+        self,
+        name: str,
+        trigger_type: TriggerType,
+        evaluator: _TextEvaluator,
+        cold: bool = False,
+    ) -> None:
         self.name = name
         self.trigger_type = trigger_type
         self._evaluator = evaluator
+        # cold=True marks a RAG-backed head that only runs on the cold path (F-506).
+        self.cold = cold
 
     def evaluate(self, state: TurnState) -> Optional[Trigger]:
         return self._evaluator.evaluate(state.text, state.conversation_context)

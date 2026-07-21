@@ -96,6 +96,7 @@ class TriggerConfig:
     dismiss_persistent_ms: int = 0  # 0 = no auto-dismiss (Answer, Heads Up)
     dismiss_standard_ms: int = 90_000  # Suggest cards auto-dismiss (ms)
     dismiss_ephemeral_ms: int = 45_000  # FYI cards auto-dismiss (ms)
+    cold_path_min_words: int = 3  # F-506: min words before RAG-backed heads run
 
 
 @dataclass

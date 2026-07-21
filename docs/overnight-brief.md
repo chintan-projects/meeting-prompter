@@ -63,12 +63,26 @@ real Liquid meetings — NOT as ready-made labels.
 
 ## WAVE B — train the encoder heads via FORGE (full-auto incl. GPU)
 
-For EACH head below, run the forge pipeline (SKILL.md steps). Do them sequentially.
+HARD RULE: **encoder backbone only — NEVER the causal head.** Follow the ADR, not
+forge's default S2 (which maps sequence/multi-label to the causal tower). If a head
+would resolve to `backbone="causal"`, DO NOT train it — park it. Do not "fall back"
+to causal to make the run complete.
 
-Heads (output shape → let forge S2 derive head/backbone/size; do NOT hardcode):
-- **F-503 trigger router** — output: one label ∈ {question, alert, topic, followup, none}.
-- **F-505 quality gate** — output: K independent flags (rhetorical / low-quality / noise).
-- **F-504 evidence span** — output: one label per token (BIO). (forge S2 → token classifier on the **encoder**, its own LoRA — never co-trained with the sequence heads.)
+Data is **synthetic-first**: forge's Loop A teacher generation is the primary corpus.
+Notion notes are OPTIONAL conditioning only (if reachable, mine utterances into
+`families`; if not, pure synthetic — never a blocker).
+
+Heads:
+- **F-504 evidence span** — one label per token (BIO). forge's existing `token_classifier`
+  is already **encoder** (its own LoRA, never co-trained). Train this tonight.
+- **F-503 trigger router** (one label ∈ {question, alert, topic, followup, none}) and
+  **F-505 quality gate** (K flags) — these need an **encoder-backed** sequence/multi-label
+  head. forge does NOT ship that yet (its `sequence_classifier`/`multi_label` are causal).
+  GATE: train these ONLY if the forge encoder-classifier change (targets.py base+backbone,
+  loopb dispatch, bidirectional loading in train_sequence_classifier_meanpool.py, compat
+  stamp, updated tests) has been LANDED and VERIFIED (forge test suite green + `--mock`
+  dataloop + dry-run plan builds with the encoder base). If NOT verified, PARK both heads
+  — do not train them on causal.
 
 Per-head procedure (forge):
 1. **S1 contract** — numbered selection rules, exclusion zones, tie-breaks, explicit abstain/`null`.

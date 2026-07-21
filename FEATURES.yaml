@@ -420,7 +420,7 @@ workstreams:
 
       - id: F-509
         name: "Harden the retrieval eval (discriminating power)"
-        status: backlog
+        status: done
         effort: M
         description: >
           Current eval saturates (doc-level, ~3 distinct docs) — it can't tell
@@ -435,7 +435,7 @@ workstreams:
 
       - id: F-510
         name: "Frozen-encoder linear-probe heads (v1, no GPU/forge)"
-        status: backlog
+        status: done
         effort: M
         description: >
           The v1 encoder head that needs NO training of the model: mean-pool the
@@ -454,7 +454,7 @@ workstreams:
 
       - id: F-501
         name: "EncoderIntelligenceLayer interface + typed turn-state"
-        status: backlog
+        status: done
         effort: L
         description: >
           Introduce the EncoderIntelligenceLayer abstraction and a typed
@@ -471,7 +471,7 @@ workstreams:
 
       - id: F-502
         name: "Retrieval swap — MiniLM → LFM2.5 retriever"
-        status: backlog
+        status: done
         effort: M
         description: >
           Replace all-MiniLM-L6-v2 with LFM2.5-Embedding-350M (or ColBERT-350M
@@ -526,7 +526,7 @@ workstreams:
 
       - id: F-506
         name: "Route-first hot/cold execution + shared-state"
-        status: backlog
+        status: done
         effort: M
         description: >
           Wire the heads as a route-first gate: hot path answers/suppresses from
@@ -540,7 +540,7 @@ workstreams:
 
       - id: F-507
         name: "Structured notes via LFM2.5-350M-Extract"
-        status: backlog
+        status: in_progress
         effort: M
         description: >
           Point notes_generator at LFM2.5-350M-Extract (structured extraction)
@@ -551,7 +551,7 @@ workstreams:
 
       - id: F-508
         name: "Persistent warm-model runtime + contention mgmt"
-        status: backlog
+        status: in_progress
         effort: L
         description: >
           Replace subprocess.run()-per-call inference with a persistent runtime
@@ -580,7 +580,7 @@ workstreams:
     features:
       - id: F-601
         name: "AttributionResolver — hierarchy + regime detection"
-        status: backlog
+        status: done
         effort: M
         description: >
           Pluggable resolver that composes the attribution layers by confidence,
@@ -623,7 +623,7 @@ workstreams:
 
       - id: F-604
         name: "Acoustic diarization fix — segment + roster-bound"
-        status: backlog
+        status: done
         effort: L
         description: >
           Rework Tier-2 (F-301): segment at speaker-change points (not silence
@@ -635,7 +635,7 @@ workstreams:
 
       - id: F-605
         name: "Voice enrollment for known colleagues"
-        status: backlog
+        status: done
         effort: L
         description: >
           Rework of F-302: pre-register frequent colleagues' voice profiles so
@@ -648,7 +648,7 @@ workstreams:
 
       - id: F-606
         name: "Conference-room regime — honest degradation"
-        status: backlog
+        status: done
         effort: S
         description: >
           Detect the shared-far-field-mic regime and degrade to a single
@@ -661,7 +661,7 @@ workstreams:
 
       - id: F-607
         name: "Lexical speaker-consistency pass (LFM)"
-        status: backlog
+        status: done
         effort: M
         description: >
           Cheap post-hoc LFM pass over (attribution hypothesis + transcript) to

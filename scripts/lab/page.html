@@ -306,13 +306,15 @@
         s2.appendChild(g);
         out.appendChild(s2);
 
-        // answers
-        const s3 = el("section");
-        s3.appendChild(el("h2", null, "3 · Answer — same context, 3 models <span class='muted' style='text-transform:none;letter-spacing:0'>— your call</span>"));
-        const g3 = el("div", "row3");
-        (d.answers || []).forEach((a) => g3.appendChild(answerCard(a, d.span)));
-        s3.appendChild(g3);
-        out.appendChild(s3);
+        // answers (only when generation is enabled server-side via LAB_GENERATE=1)
+        if ((d.answers || []).length) {
+          const s3 = el("section");
+          s3.appendChild(el("h2", null, "3 · Answer — same context, 3 models <span class='muted' style='text-transform:none;letter-spacing:0'>— your call</span>"));
+          const g3 = el("div", "row3");
+          d.answers.forEach((a) => g3.appendChild(answerCard(a, d.span)));
+          s3.appendChild(g3);
+          out.appendChild(s3);
+        }
       }
 
       function answerCard(a, span) {

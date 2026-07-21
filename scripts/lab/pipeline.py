@@ -54,6 +54,11 @@ ARM_DISPLAY_K = 8
 TOP_K = 5
 DEFAULT_MAX_TOKENS = 160
 
+# Generation (the 3-model answer panel) is OFF by default — the lab is a corpus /
+# retrieval instrument now (D-08), and loading 1.2B/2.6B/Extract per analyze is slow.
+# Re-enable for a model comparison with:  LAB_GENERATE=1 uvicorn scripts.lab.server:app
+GENERATE_ANSWERS = os.environ.get("LAB_GENERATE", "") == "1"
+
 # Sample questions matched to the on-device-capability-playbook corpus (D-08 loop).
 # Replace with the actual questions from a real meeting to get a true coverage baseline.
 SAMPLE_SPANS = [
@@ -405,7 +410,7 @@ class LabEngine:
         classification = self.classify(span)
         retrieval = self.retrieve_stages(span)
         borrowable = self.build_borrowable(span, retrieval)
-        answers = self.answers(span, retrieval["context"], mt)
+        answers = self.answers(span, retrieval["context"], mt) if GENERATE_ANSWERS else []
         return {
             "span": span,
             "docs_dir": self.cfg.paths.docs_dir,

@@ -91,6 +91,20 @@
       .ans .pickbtn { align-self: flex-start; background: transparent; border: 1px solid var(--line); color: var(--mut); }
       .ans.picked .pickbtn { color: var(--pick); border-color: var(--pick); }
 
+      .live { border: 1px solid color-mix(in srgb, var(--good) 45%, var(--line));
+        background: color-mix(in srgb, var(--good) 7%, var(--panel)); border-radius: 10px; padding: 14px 16px; }
+      .live .lat { font-family: var(--mono); font-size: 12px; margin-bottom: 6px; }
+      .live .lat b { color: var(--good); }
+      .lcard { padding: 11px 0; border-top: 1px dashed var(--line); }
+      .lcard:first-of-type { border-top: 0; }
+      .lcard .sent { font-size: 15.5px; line-height: 1.5; }
+      .lcard .src { font-size: 12px; color: var(--mut); margin-top: 5px; }
+      .lcard .src b { color: var(--ink); font-weight: 600; }
+      .lcard .exp { color: var(--acc); cursor: pointer; font-size: 12px; margin-top: 5px; display: inline-block; }
+      .lcard .chunk { display: none; font-size: 12.5px; color: var(--mut); margin-top: 7px;
+        padding: 9px 11px; background: var(--panel2); border-radius: 6px; line-height: 1.55; }
+      .lcard.open .chunk { display: block; }
+
       #picks { margin-top: 30px; }
       #picks table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
       #picks td, #picks th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -170,9 +184,37 @@
         return c;
       }
 
+      function liveSection(live) {
+        const l = live || {};
+        const s = el("section");
+        s.appendChild(el("h2", null, "★ Live view — retrieval-first <span class='muted' style='text-transform:none;letter-spacing:0'>— glanceable · grounded · no LLM</span>"));
+        const box = el("div", "live");
+        box.appendChild(el("div", "lat muted",
+          `latency: retrieval <b>${l.retrieval_ms}ms</b> + extract <b>${l.extract_ms}ms</b> = <b>${l.total_ms}ms</b>`));
+        (l.cards || []).forEach((c) => {
+          const card = el("div", "lcard");
+          card.appendChild(el("div", "sent", esc(c.sentence)));
+          card.appendChild(el("div", "src",
+            `<b>${esc(c.doc)}</b>${c.heading ? " › " + esc(c.heading) : ""} · conf ${c.confidence}${c.cosine != null ? " · cos " + c.cosine : ""}`));
+          const exp = el("span", "exp", "▸ expand source chunk");
+          exp.onclick = () => {
+            card.classList.toggle("open");
+            exp.textContent = card.classList.contains("open") ? "▾ hide source chunk" : "▸ expand source chunk";
+          };
+          card.appendChild(exp);
+          card.appendChild(el("div", "chunk", esc(c.full_chunk)));
+          box.appendChild(card);
+        });
+        s.appendChild(box);
+        return s;
+      }
+
       function render(d) {
         const out = $("#out");
         out.innerHTML = "";
+
+        // live view (retrieval-first) — the recommended live experience
+        out.appendChild(liveSection(d.live));
 
         // classification
         const cl = d.classification || {};

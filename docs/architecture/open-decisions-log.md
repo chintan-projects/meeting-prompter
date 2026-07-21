@@ -178,6 +178,22 @@ uvicorn scripts.lab.server:app --port 8555            # then open http://localho
 LAB_EXTRACT_PYTHON=/path/to/venv/bin/python uvicorn scripts.lab.server:app --port 8555
 ```
 
+**Live-view panel (retrieval-first) added.** For a span, the lab now leads with the
+*live* experience: retrieve-big → extract the single best sentence per top chunk
+(heuristic, `answer_extractor`, **no LLM**) → show it with source + heading + an
+expand-to-chunk. Two empirical findings from it:
+
+- **Latency thesis holds.** Warm live path = **~120–190ms** (retrieval ~120-190ms,
+  extraction ~0-1ms) vs generation's 1–8s. The cold first call is ~1.6s — that's the
+  LFM2.5-Embedding-350M *load*, one-off; steady-state embedding is fast. → the
+  embedder must be warm before a meeting starts (pre-warm on session start).
+- **Display-quality is the real work now (as predicted).** Retrieval picks the right
+  chunks, but the extracted sentence often carries raw markdown (`#` headers, ` ``` `
+  fences, `>` quotes, `|` table pipes) or is a bare heading. The *content* is right;
+  the *presentation* is dirty. This is "chunk quality is now visible" made concrete →
+  next lever is a display-clean pass (strip markdown artifacts, skip pure-heading
+  lines, prefer prose), not re-chunking or a bigger model.
+
 **Correction the lab surfaced (sharpens the earlier "BM25 idle" claim):** the BM25
 arm is *not* dead — on the sample span it returns strong, on-topic lexical hits
 (bm25≈13.3 on the right synthetic-data / no-GPU docs). What zeroes it out is the

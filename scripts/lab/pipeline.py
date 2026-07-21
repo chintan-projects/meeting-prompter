@@ -146,6 +146,7 @@ class LabEngine:
         emb = self.engine._embedder
 
         sanitized = _sanitize_fts_query(span)
+        t0 = time.time()
         lexical = fts_search(conn, span, cfg.lexical_top_k, cfg)
         embed_query = getattr(emb, "embed_query", None)
         query_emb = embed_query(span) if callable(embed_query) else emb.embed(span)
@@ -158,6 +159,7 @@ class LabEngine:
             top_k=TOP_K,
         )
         reranked = HeuristicRanker(conn).rank(span, fused, cfg)
+        retrieval_ms = round((time.time() - t0) * 1000)
 
         bm25_panel = [
             self._row(h.chunk_id, score=round(h.score, 4)) for h in lexical[:ARM_DISPLAY_K]
@@ -192,6 +194,7 @@ class LabEngine:
         return {
             "sanitized_fts_query": sanitized or "(empty after stop-word removal)",
             "weights": {"lexical": cfg.lexical_weight, "semantic": cfg.semantic_weight},
+            "retrieval_ms": retrieval_ms,
             "bm25": bm25_panel,
             "vector": vec_panel,
             "fused": fused_panel,
@@ -204,6 +207,42 @@ class LabEngine:
     def _chunk_text(self, chunk_id: int) -> str:
         row = self._conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
         return row[0] if row else ""
+
+    # --- live view: retrieve-big, display-small (NO LLM) --------------------
+    def build_live_view(
+        self, span: str, retrieval: dict[str, Any], top_chunks: int = 3
+    ) -> dict[str, Any]:
+        """The retrieval-first live experience: for each top chunk, pull the single
+        most relevant sentence (heuristic, no LLM) and show it with its source.
+
+        This is what a live meeting would surface — glanceable, grounded, verbatim,
+        sub-second. Latency = retrieval (embed+search) + extraction only.
+        """
+        from lib.answer_extractor import extract_answer
+
+        t0 = time.time()
+        cards: list[dict[str, Any]] = []
+        for row in retrieval["reranked"][:top_chunks]:
+            full = self._chunk_text(row["chunk_id"])
+            sentence, conf = extract_answer(full, span, max_sentences=1)
+            cards.append(
+                {
+                    "doc": row["doc"],
+                    "heading": row["heading"],
+                    "sentence": sentence or "(no clean sentence — showing chunk)",
+                    "confidence": round(float(conf), 3),
+                    "cosine": row.get("cosine"),
+                    "full_chunk": " ".join(full.split()),
+                }
+            )
+        extract_ms = round((time.time() - t0) * 1000)
+        retrieval_ms = int(retrieval.get("retrieval_ms") or 0)
+        return {
+            "retrieval_ms": retrieval_ms,
+            "extract_ms": extract_ms,
+            "total_ms": retrieval_ms + extract_ms,
+            "cards": cards,
+        }
 
     # --- stage 4: answers ---------------------------------------------------
     def answer_llama(self, key: str, span: str, context: str, max_tokens: int) -> dict[str, Any]:
@@ -273,12 +312,14 @@ class LabEngine:
         mt = max_tokens or DEFAULT_MAX_TOKENS
         classification = self.classify(span)
         retrieval = self.retrieve_stages(span)
+        live = self.build_live_view(span, retrieval)
         answers = self.answers(span, retrieval["context"], mt)
         return {
             "span": span,
             "docs_dir": self.cfg.paths.docs_dir,
             "answer_model_in_config": self.cfg.models.generation.model_file,
             "classification": classification,
+            "live": live,
             "retrieval": retrieval,
             "answers": answers,
         }

@@ -485,18 +485,25 @@ workstreams:
 
       - id: F-503
         name: "Trigger router head (forge-LoRA, v2 over F-510 probe)"
-        status: backlog
+        status: done
         effort: L
         description: >
-          The v2 upgrade over the F-510 frozen probe: an ENCODER-backed sequence
-          classifier (mean-pool) LoRA-trained via forge (synthetic-first data).
-          Encoder only — NEVER causal. GATED on the forge bidirectional-encoder
-          change landing + verifying first (forge maps sequence_classifier to causal
-          by default). Ship only when it beats the F-510 probe / heuristic on a
-          frozen held-out eval.
+          DONE (session-018). Encoder-backed sequence classifier (mean-pool, CE)
+          LoRA-trained via forge on a SHAPE-FIRST corpus (~30 unrelated domains so
+          only pragmatic shape predicts the label). Bidirectional encoder variant
+          (sequence_classifier_encoder) — never causal; forge encoder-classifier
+          change landed 2026-07-20. Gated on REAL meeting-transcript turns, not just
+          synthetic: hybrid (F-503 + heuristic question-rescue) macro-F1 0.846 vs
+          probe 0.55 vs heuristic 0.26. Wired config-gated (f503_router_enabled),
+          default OFF; promotion to live default gated on the WS-14 live call.
+          Artifact: LFM2.5-TriggerRouter-350M in the model registry. See
+          forge/f503-trigger-router/RESULTS.md.
         depends_on: [F-501, F-510]
         files:
           - new: lib/intelligence/heads/trigger_router.py
+          - lib/triggers/engine.py
+          - new: tests/test_trigger_router.py
+          - new: tests/eval/f503_gate.py
 
       - id: F-504
         name: "Evidence span head (token-classifier)"

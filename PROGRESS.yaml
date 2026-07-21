@@ -2,21 +2,19 @@
 # Stays LEAN. Only active/in-progress state here.
 
 current_phase: "liquid-rearchitecture (Wave A landed)"
-current_focus: "Wave A code refactor complete on branch liquid-rearch (unpushed). Encoder intelligence layer, attribution hierarchy, retrieval swap all landed test-gated. Needs review + a live call; head training (Wave B) blocked on the forge bidirectional-encoder change."
+current_focus: "Wave A landed test-gated (unpushed, liquid-rearch). Wave B F-503 trigger-router head DONE: forge-LoRA bidirectional encoder classifier, shape-first corpus, gated on REAL transcript turns (hybrid macro-F1 0.846 > probe 0.55 > heuristic 0.26), wired config-gated (default OFF). Remaining: WS-14 live call to promote F-503 + F-507/F-508; F-504/F-505 (other Wave B heads) still backlog."
 
 active_work:
   - id: "WS-14"
     name: "Live dual-stream test (mic + per-app capture)"
     status: pending
-    notes: "Still needs a live Zoom/Teams call — now also validates F-604 segmentation, F-601/F-606 attribution, F-607 corrections, and promotes F-507 (Extract) + F-508 (persistent ASR)."
+    notes: "Live Zoom/Teams call — validates F-604 segmentation, F-601/F-606 attribution, F-607 corrections; promotes F-507 (Extract) + F-508 (persistent ASR); and flips f503_router_enabled=true if F-503 holds live."
 
-blockers:
-  - id: "forge-bidirectional-encoder"
-    blocks: "F-503/F-504/F-505 (encoder-head training)"
-    notes: "forge trainer templates load the base causally; ADR requires bidirectional encoder. Land + verify the forge encoder-classifier change first."
+blockers: []
 
 pending_decisions:
-  - "Review liquid-rearch branch (12 commits, unpushed) before merge to main."
+  - "Review liquid-rearch branch before merge to main (Wave A + F-503)."
+  - "Flip triggers.f503_router_enabled=true after F-503 validates on a live call (WS-14)."
 
 recent_sessions:
   - id: "session-017"

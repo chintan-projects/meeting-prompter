@@ -97,6 +97,12 @@ class TriggerConfig:
     dismiss_standard_ms: int = 90_000  # Suggest cards auto-dismiss (ms)
     dismiss_ephemeral_ms: int = 45_000  # FYI cards auto-dismiss (ms)
     cold_path_min_words: int = 3  # F-506: min words before RAG-backed heads run
+    # F-503 forge-LoRA encoder router: proven offline (real-transcript hybrid
+    # macro-F1 0.846), default OFF pending live validation (WS-14). When enabled
+    # and the adapter is present, it supersedes the heuristic question head (its
+    # question-rescue subsumes it); the deterministic watch-word alert head stays.
+    f503_router_enabled: bool = False
+    f503_router_min_confidence: float = 0.0
 
 
 @dataclass

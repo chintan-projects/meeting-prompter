@@ -144,12 +144,38 @@ add domain-term biasing. Do **not** escalate the LLM refiner into an error-fixer
 
 This is the larger architectural fork.
 
+### Observed failure (session-018, live)
+The push model produced a **continuous stream of mostly-irrelevant prompts** — a
+distraction with little value. Two compounding causes: (a) bad ASR/attribution
+fed wrong prompts, and (b) **structurally, "prompt on every turn" is low-precision
+even with perfect audio** — most turns don't warrant a prompt, so always-on push
+is noisy by construction, not just because of input errors.
+
 ### Current model = PUSH
 Every turn is auto-scored by triggers → RAG → generated prompt.
 - **Pros:** zero effort, real-time, surfaces things you'd miss.
 - **Cons:** interrupts with prompts you didn't ask for; every turn spends
   RAG+LLM compute; and — critically — **ASR/attribution errors propagate into
   wrong prompts.** One confidently-wrong prompt erodes trust in all of them.
+
+### Reframe: who controls the attention budget?
+The deepest framing isn't push-vs-pull — it's **who decides to spend the user's
+attention.** Today the *system* spends it on every turn. The fix is to hand the
+throttle to the *user*, who can open the tap in two dimensions:
+
+- **Select-to-answer (spatial throttle):** user highlights a transcript span →
+  RAG/generate runs on *that* selection only. Precise, zero unsolicited output.
+  For "I want the answer to *this specific thing*."
+- **Armed listen-window (temporal throttle):** a toggle — "from now on, answer
+  what you hear" — the user flips ON when they can *predict* a Q&A stretch (about
+  to present / be questioned) and OFF when it passes. Key insight: **the user
+  often knows in advance when they need help**, so let them declare it rather than
+  the system guessing on every turn forever.
+
+Default is **quiet**. The user opens the tap on a phrase (select) or for a stretch
+(arm). The one justified always-on exception is hard **ALERTs** (watch words) —
+rare, high-value, and the case the user *cannot* anticipate; everything generative
+(answers/suggestions/topics) becomes user-gated.
 
 ### Proposed model = PULL / hybrid
 - **(2a) Select-then-ask:** user highlights a transcript segment and explicitly
@@ -176,15 +202,19 @@ garbage before it is amplified into a prompt.** The pull model is not just calme
 UX — it is structurally more tolerant of upstream errors. And it cuts compute:
 RAG/generate runs on the handful of segments the user chose, not every turn.
 
-### Recommendation: hybrid, urgency-gated
-- **Push** only high-urgency + high-confidence (ALERTs; strong-confidence answers).
-  Raise the bar for what interrupts.
-- **Everything else** → passive markers on the transcript the user can **select**
-  ("ask about this") or **pin** to a backlog to act on during a lull / post-call.
-- On selection, run the existing RAG → generate path — same engine, user-triggered.
+### Recommendation: user-gated, three primitives
+Default **quiet**. Same RAG → generate engine underneath; only the *trigger* changes.
+1. **ALERTs stay always-on** — watch words only; rare, high-value, unanticipatable.
+2. **Select-to-answer** — highlight a transcript span → answer that selection.
+3. **Armed listen-window** — a toggle that runs the proactive pipeline only while
+   ON, for a user-declared Q&A stretch; auto-off after N minutes of quiet is an option.
+- (Optional) **Pin** — mark a span to revisit in a lull / post-call, no live prompt.
 
-This keeps the magic-moment of proactive alerts while removing the noise and the
-error-amplification, and it degrades gracefully as ASR/attribution improve.
+This keeps the one magic-moment (alerts) while removing the always-on noise and the
+error-amplification, hands the attention budget to the user, and degrades gracefully
+as ASR/attribution improve. The armed-window is the smallest first step: it is the
+current push pipeline behind an on/off gate — little new machinery, immediate relief
+from the distraction.
 
 ---
 
@@ -211,8 +241,9 @@ two even need to do.
   mic mode, or a separate small helper? (Leaning: extend — one capture toolchain.)
 - Do we keep `StreamDeduplicator` as a safety net post-AEC, or delete it once
   channels are clean? (Leaning: keep briefly, then delete to avoid two impls.)
-- Interaction: is select/pin a replacement for push on low-urgency types, or an
-  *addition* while push stays on for everything? (Leaning: gate push by
-  urgency+confidence; add select/pin for the rest.)
+- Interaction: default-quiet with user-gated tap is agreed. Which primitive ships
+  first? (Leaning: **armed listen-window** — it is the existing push pipeline behind
+  an on/off gate, so smallest build for immediate relief — then add select-to-answer.)
+  Do ALERTs remain the only always-on channel, or also gated? (Leaning: always-on.)
 - Does named diarization (meeting-SDK per-participant) stay parked, or does the
   AEC clean-channel foundation make basic acoustic diarization good enough?

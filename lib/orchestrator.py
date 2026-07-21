@@ -125,15 +125,19 @@ class MeetingOrchestrator:
         self.rag = RAGEngine(docs_dir, db_path=db_path, config=rag_config)
         self._status("RAG engine ready")
 
-        # Trigger engine. Wire a lazy encoder backbone so the F-510 linear-probe
-        # head is available (wired-but-off); EncoderBackbone loads no weights
-        # until something calls embed(), so this adds zero startup cost.
+        # Persistent warm-model runtime (F-508): single owner of the load-once
+        # models. The encoder it hands out stays lazy (no weights until embed()),
+        # so the probe head is wired-but-off at zero startup cost.
+        from lib.warm_runtime import WarmModelRuntime
+
+        self.runtime = WarmModelRuntime()
+        self.runtime.register("embedder", getattr(self.rag, "_embedder", None))
+
         trigger_config = config.triggers
         if self.meeting_context:
             trigger_config.watch_words = self.meeting_context.watch_words
-        from lib.intelligence.encoder import EncoderBackbone
 
-        self.encoder = EncoderBackbone()
+        self.encoder = self.runtime.encoder()
         self.trigger_engine = TriggerEngine(trigger_config, self.rag, encoder=self.encoder)
 
         # Conversation buffer (rolling transcript + trigger routing)
@@ -151,6 +155,7 @@ class MeetingOrchestrator:
             min_extraction_confidence=config.detection.extraction_confidence_minimum,
             min_answer_length=config.triggers.min_answer_length,
         )
+        self.runtime.register("instruct", self.generator)
         self._status("Generation ready")
 
         # Audio capture: use provided capture (e.g. SystemAudioCapture) or default

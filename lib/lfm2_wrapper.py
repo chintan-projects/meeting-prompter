@@ -1,4 +1,12 @@
-"""LFM2/LFM2.5 Audio Wrapper - Subprocess interface to llama.cpp for ASR."""
+"""LFM2/LFM2.5 Audio Wrapper - Subprocess interface to llama.cpp for ASR.
+
+Note (F-508): ASR still spawns one llama.cpp subprocess per chunk. The warm,
+resident models (encoder, embedder, instruct) are owned by
+``lib.warm_runtime.WarmModelRuntime``. Replacing this per-call spawn with a
+persistent llama.cpp audio server is the remaining warm-runtime step and needs a
+live verification run (the audio CLI is one-shot today) — see STATUS-overnight.md.
+"""
+
 import logging
 import subprocess
 from pathlib import Path
@@ -63,12 +71,18 @@ class LFM2Wrapper:
         """Transcribe audio file to text using ASR."""
         cmd = [
             str(self.runner),
-            "-m", str(self.model),
-            self.mmproj_flag, str(self.mmproj),
-            "-mv", str(self.vocoder),
-            "--audio", str(audio_path),
-            "-sys", "Perform ASR.",
-            "--temp", "0",
+            "-m",
+            str(self.model),
+            self.mmproj_flag,
+            str(self.mmproj),
+            "-mv",
+            str(self.vocoder),
+            "--audio",
+            str(audio_path),
+            "-sys",
+            "Perform ASR.",
+            "--temp",
+            "0",
         ]
         # LFM2.5 requires the tokenizer file for the detokenizer
         if self.tokenizer:
@@ -91,7 +105,7 @@ class LFM2Wrapper:
 
     def _parse_output(self, raw: bytes) -> str:
         """Filter llama.cpp logging, extract clean transcription."""
-        text = raw.decode('utf-8', errors='replace')
+        text = raw.decode("utf-8", errors="replace")
 
         # LFM2.5 outputs transcription followed by metadata markers.
         # Strip everything from "=== GENERATED TEXT ===" onwards.
@@ -106,17 +120,44 @@ class LFM2Wrapper:
         if idx != -1:
             text = text[:idx]
 
-        lines = text.split('\n')
+        lines = text.split("\n")
 
         # Skip llama.cpp verbose logging
         skip_keywords = [
-            'loading', 'loaded', 'gguf', 'tensors', 'model', 'backend',
-            'metal', 'gpu', 'cpu', 'simd', 'memory', 'init', 'build',
-            'llama_', 'ggml_', 'load_', 'mtmd', 'sampler', 'token',
-            'system_info', 'n_ctx', 'n_batch', 'flash_attn',
-            'encoding audio', 'audio slice', 'audio decoded', 'decoding audio',
-            'clip_', 'alloc_', 'print_info', 'common_init', 'main:',
-            'audio samples per second', 'generated text',
+            "loading",
+            "loaded",
+            "gguf",
+            "tensors",
+            "model",
+            "backend",
+            "metal",
+            "gpu",
+            "cpu",
+            "simd",
+            "memory",
+            "init",
+            "build",
+            "llama_",
+            "ggml_",
+            "load_",
+            "mtmd",
+            "sampler",
+            "token",
+            "system_info",
+            "n_ctx",
+            "n_batch",
+            "flash_attn",
+            "encoding audio",
+            "audio slice",
+            "audio decoded",
+            "decoding audio",
+            "clip_",
+            "alloc_",
+            "print_info",
+            "common_init",
+            "main:",
+            "audio samples per second",
+            "generated text",
         ]
 
         clean_lines = []
@@ -127,14 +168,14 @@ class LFM2Wrapper:
             if any(kw in line_lower for kw in skip_keywords):
                 continue
             # Skip lines that look like logging (contain timestamps, brackets, etc.)
-            if line.startswith('[') or line.startswith('llama') or line.startswith('---'):
+            if line.startswith("[") or line.startswith("llama") or line.startswith("---"):
                 continue
             # Skip timing info like "47 ms"
-            if line_lower.endswith(' ms') or line_lower.endswith(' ms)'):
+            if line_lower.endswith(" ms") or line_lower.endswith(" ms)"):
                 continue
             # Skip lines that are just "nan" or whitespace-padded numbers
-            if line_lower.strip() in ('nan', 'inf', '-inf'):
+            if line_lower.strip() in ("nan", "inf", "-inf"):
                 continue
             clean_lines.append(line.strip())
 
-        return ' '.join(clean_lines).strip()
+        return " ".join(clean_lines).strip()

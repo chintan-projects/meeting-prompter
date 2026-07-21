@@ -5,6 +5,7 @@ LFM2.5-1.2B-Instruct has 32K context and strong instruction following (IFEval 86
 """
 
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import List, Optional
@@ -13,16 +14,37 @@ from llama_cpp import Llama
 
 logger = logging.getLogger(__name__)
 
-# ChatML prompt with system message — LFM2.5-Instruct handles system messages well
+# ChatML prompt. Tuned for the reasoning 2.6B answer model (D-03):
+#   - strict grounding ("ONLY the CONTEXT ... do not use outside knowledge") stops
+#     the model answering ungrounded from world knowledge (e.g. "capital of France").
+#   - the empty <think></think> prefill suppresses the model's chain-of-thought so
+#     it answers directly and fast (without it, 2.6B over-reasons and stalls).
+# Any residual <think> block is stripped from the output (see _strip_think).
+# Note: this is optimised for the 2.6B default; the 1.2B fallback is less reliable
+# with it (it is brittle to grounding/refusal prompts) — see D-03/D-07.
 RAG_PROMPT_TEMPLATE = """<|im_start|>system
-You are a meeting intelligence assistant. Answer questions using ONLY the provided context. Be concise and direct (2-3 sentences max). If the context does not contain the answer, say "I don't have that information in my documents."<|im_end|>
+You are a meeting intelligence assistant. Answer the QUESTION using ONLY the CONTEXT below. Do not use outside knowledge, even for facts you know. If the CONTEXT does not contain the answer, reply with exactly: I don't have that in the docs. Otherwise reply in 2-3 sentences with just the answer.<|im_end|>
 <|im_start|>user
 CONTEXT:
 {context}
 
 QUESTION: {question}<|im_end|>
 <|im_start|>assistant
+<think></think>
 """
+
+
+def _strip_think(text: str) -> str:
+    """Remove reasoning-model <think> blocks from generated output.
+
+    Strips complete <think>...</think> spans; if an unclosed <think> remains
+    (generation truncated mid-reasoning), drop from it onward.
+    """
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    idx = text.find("<think>")
+    if idx != -1:
+        text = text[:idx]
+    return text.strip()
 
 
 class RAGAnswerGenerator:
@@ -124,7 +146,7 @@ class RAGAnswerGenerator:
                     temperature=temperature,
                     top_p=top_p,
                 )
-                return response["choices"][0]["text"].strip()
+                return _strip_think(response["choices"][0]["text"])
             except Exception as e:
                 logger.error("LLM generation failed: %s", e)
                 return ""

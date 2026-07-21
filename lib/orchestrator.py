@@ -48,13 +48,25 @@ TriggerResultCallback = Callable[[Trigger, GenerationResult], None]
 
 
 def _resolve_rag_model(config: AppConfig) -> Path:
-    """Resolve RAG model path with LFM2.5 → LFM2 fallback."""
-    model = MODELS_DIR / "LFM2.5-1.2B-Instruct-Q4_K_M.gguf"
-    if not model.exists():
-        legacy = MODELS_DIR / "LFM2-1.2B-RAG-Q4_K_M.gguf"
-        if legacy.exists():
-            model = legacy
-    return model
+    """Resolve the answer model path from config, with fallbacks.
+
+    Primary comes from ``models.generation.model_file`` (D-03: default 2.6B).
+    If it is missing on disk, fall back to the 1.2B instruct model, then the
+    legacy LFM2 RAG model, so a fresh checkout still runs.
+    """
+    primary = MODELS_DIR / config.models.generation.model_file
+    if primary.exists():
+        return primary
+    for fallback in ("LFM2.5-1.2B-Instruct-Q4_K_M.gguf", "LFM2-1.2B-RAG-Q4_K_M.gguf"):
+        candidate = MODELS_DIR / fallback
+        if candidate.exists():
+            logger.warning(
+                "Answer model %s not found — falling back to %s",
+                config.models.generation.model_file,
+                fallback,
+            )
+            return candidate
+    return primary
 
 
 class MeetingOrchestrator:

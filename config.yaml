@@ -17,6 +17,10 @@ models:
     system_prompt: "Perform ASR."
     timeout: 30
   generation:
+    # Answer model (D-03): 2.6B degrades gracefully where the 1.2B flat-refuses.
+    # Falls back to LFM2.5-1.2B-Instruct-Q4_K_M.gguf if this file is absent.
+    # Note: the transcript refiner currently shares this instance — see D-07.
+    model_file: "LFM2.5-2.6B-Q4_K_M.gguf"
     n_ctx: 4096              # context window (LFM2.5 supports 32K, 4K is conservative)
     max_tokens: 200
     temperature: 0.0

@@ -18,7 +18,8 @@ Reasoning source: [transcription-attribution-interaction-investigation.md](trans
 |----|----------|--------|-----|-----------|-----|
 | **D-01** | **AEC mic capture** (macOS Voice-Processing I/O) — cancel speaker→mic echo at capture so channel attribution is correct by construction, invariant to headphones/speakers/BlackHole. Foundational: fixes attribution **and** ASR quality **and** prompt trust. | open | high | yes | §1 |
 | **D-02** | **User-gated interaction** — default **quiet**; user opens the tap via **armed listen-window** (temporal) or **select-to-answer** (spatial). ALERTs stay the only always-on channel. Replaces always-on push that produced a stream of irrelevant prompts. | open | high | yes | §3 |
-| **D-03** | **Answer model selection** — live RAG answer stays 1.2B **generation** vs becomes 350M-Extract **extraction** (or 2.6B). Decide empirically via **E-01**. | open (blocked on E-01) | high | yes | §5b |
+| **D-03** | **Answer model selection** — DECIDED: **2.6B** for the live answer (config-driven, `models.generation.model_file`, 1.2B fallback). 350M-Extract returns structured JSON fields (extraction), not answers → stays in the notes/F-507 lane. Prompt tuned: strict grounding + empty-`<think>` prefill + think-strip. | decided | high | yes | §5b, E-01 |
+| **D-07** | **Refiner/answer model coupling** — the transcript refiner shares the answer-model instance. With 2.6B (reasoning, ~1.5–3.5s) that makes *per-turn* refinement slow. Decouple the refiner to a fast small model, or gate/disable it, once D-02 (user-gated) lands. | open | med | no | E-01 |
 | **D-04** | **Refiner scope = readability only** — never a meaning/error-correction stage (an LLM error-corrector hallucinates into a trusted record). | leaning yes | low | no | §2 |
 | **D-05** | **StreamDeduplicator after AEC** — keep as thin safety net vs delete once channels are clean. | open | med | no | §1 |
 | **D-06** | **Named diarization** via meeting-SDK per-participant streams (Zoom SDK) — the "who by name" ceiling above AEC. | parked (needs SDK creds) | low | maybe | §1 |
@@ -126,3 +127,34 @@ Detached, one span through **classify → retrieve → rerank → answer**:
 final call pending (a) an Extract run on an upgraded runtime and (b) a
 `tune-prompts` pass (the 1.2B refusal is prompt-brittleness). BM25 weight and the
 heuristic re-ranker are open **tuning** items (both idle on the test query).
+
+### E-01 resolution (2026-07-21) — Extract on upgraded runtime + D-03 decided
+
+**Extract, run properly.** In an isolated overlay venv (`--system-site-packages`
++ `transformers==5.14.1`), the safetensors loaded and generated. Result: it emits
+**structured JSON fields** (`{context, strengths[], risks[], teacher_model{…}}`),
+grounded and accurate — i.e. it is a **field extractor, not an answerer**. By the
+ADR's output-shape-first rule it belongs to the notes/structured path (F-507),
+**not** the live answer role. (Confirms the pinned-runtime diagnosis too: it works
+on newer transformers, fails on the project's 4.56.2 / llama.cpp 0.3.16.)
+
+**D-03 DECIDED → 2.6B** for the live answer. Same-context 3-way:
+- 1.2B: flat-refuses / leaks the refusal into good answers; brittle to prompts.
+- 2.6B: grounded, graceful, refuses correctly. **Chosen.**
+- Extract: structured JSON → notes lane, not answers.
+
+Wired: `models.generation.model_file: LFM2.5-2.6B-Q4_K_M.gguf` (config-driven,
+1.2B fallback in `_resolve_rag_model`).
+
+**tune-prompts (done).** The old prompt had two opposite failures — 1.2B *leaked*
+the refusal after answering; 2.6B *ignored grounding* (answered "capital of
+France" from world knowledge). Fixed with: strict grounding ("ONLY the CONTEXT …
+no outside knowledge") + an empty `<think></think>` prefill (the 2.6B is a
+reasoning model; without it it over-reasons and stalls) + `_strip_think` on
+output. Validated: answers cleanly + refuses ungrounded questions, ~1.5–2.5s.
+Caveat: the prompt is tuned for the 2.6B default; the 1.2B fallback is degraded
+by it (already brittle) → acceptable for a fallback. See **D-07** for the refiner
+coupling that rides on the same instance.
+
+Still open (tuning, non-blocking): BM25 weight and the heuristic re-ranker (both
+idle on the test query).

@@ -29,6 +29,9 @@ class AudioModelConfig:
 
 @dataclass
 class GenerationModelConfig:
+    # Answer model (GGUF under MODELS_DIR). Default 2.6B per D-03 (degrades
+    # gracefully where the 1.2B flat-refuses); resolver falls back to 1.2B if absent.
+    model_file: str = "LFM2.5-2.6B-Q4_K_M.gguf"
     n_ctx: int = 4096
     max_tokens: int = 200
     temperature: float = 0.0

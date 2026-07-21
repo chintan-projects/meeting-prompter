@@ -16,6 +16,7 @@ Call `install()` once before constructing any `Llama`.
 """
 
 import logging
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +36,10 @@ def install() -> None:
         return
 
     formatter = llama_chat_format.Jinja2ChatFormatter
-    original_init = formatter.__init__
+    # Third-party, dynamically wrapped — Any is intentional for the monkeypatch.
+    original_init: Callable[..., None] = formatter.__init__
 
-    def safe_init(self: object, *args: object, **kwargs: object) -> None:
+    def safe_init(self: Any, *args: Any, **kwargs: Any) -> None:
         try:
             original_init(self, *args, **kwargs)
         except jinja2.exceptions.TemplateError:

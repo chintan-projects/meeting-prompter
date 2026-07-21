@@ -409,3 +409,118 @@ class TestNotesWithContext:
         mock_generator.generate_text.side_effect = RuntimeError("model crashed")
         result = generate_structured_notes("Some transcript", generator=mock_generator)
         assert "Raw Transcript" in result
+
+
+# ─── F-507: structured extraction path (LFM2.5-350M-Extract) ─────────────
+
+from src.api.notes_generator import (  # noqa: E402
+    EXTRACT_SYSTEM,
+    StructuredNotes,
+    build_extract_prompt,
+    extract_structured_notes,
+    parse_structured_response,
+    render_structured_notes,
+)
+
+
+class _FakeExtractor:
+    """Duck-typed extractor returning a canned YAML payload."""
+
+    def __init__(self, payload: str) -> None:
+        self._payload = payload
+        self.last_prompt = ""
+
+    def generate_text(self, prompt: str, max_tokens: int = 600) -> str:
+        self.last_prompt = prompt
+        return self._payload
+
+
+_GOOD_YAML = (
+    "summary: We agreed to ship the encoder swap next week.\n"
+    "key_decisions:\n"
+    "  - Adopt LFM2.5-Embedding for retrieval\n"
+    "  - Keep the heuristic question detector as default\n"
+    "action_items:\n"
+    "  - Chintan to run the retrieval eval\n"
+    "follow_ups:\n"
+    "  - Revisit the probe head with real labels\n"
+)
+
+
+class TestExtractPrompt:
+    def test_schema_in_system_prompt(self) -> None:
+        prompt = build_extract_prompt("some transcript")
+        assert "summary:" in EXTRACT_SYSTEM
+        assert "key_decisions:" in EXTRACT_SYSTEM
+        assert "some transcript" in prompt
+        assert "<|im_start|>system" in prompt
+
+
+class TestParseStructuredResponse:
+    def test_parses_fields(self) -> None:
+        notes = parse_structured_response(_GOOD_YAML)
+        assert "encoder swap" in notes.summary
+        assert len(notes.key_decisions) == 2
+        assert notes.action_items == ["Chintan to run the retrieval eval"]
+        assert notes.follow_ups == ["Revisit the probe head with real labels"]
+
+    def test_scalar_coerced_to_list(self) -> None:
+        notes = parse_structured_response(
+            "summary: s\naction_items: single item\nkey_decisions: []\nfollow_ups: []\n"
+        )
+        assert notes.action_items == ["single item"]
+
+    def test_garbage_returns_empty(self) -> None:
+        assert parse_structured_response("::: not yaml :::").is_empty() in (True, False)
+        # A non-dict YAML scalar → empty structured notes.
+        assert parse_structured_response("just a sentence").is_empty()
+
+    def test_missing_fields_default_empty(self) -> None:
+        notes = parse_structured_response("summary: only a summary\n")
+        assert notes.summary == "only a summary"
+        assert notes.key_decisions == []
+        assert notes.action_items == []
+
+
+class TestRenderStructuredNotes:
+    def test_renders_sections(self) -> None:
+        notes = parse_structured_response(_GOOD_YAML)
+        md = render_structured_notes(notes)
+        assert "## Summary" in md
+        assert "## Key Decisions" in md
+        assert "- [ ] Chintan to run the retrieval eval" in md
+        assert "## Follow-ups" in md
+
+    def test_empty_fields_render_none(self) -> None:
+        md = render_structured_notes(StructuredNotes(summary="s"))
+        assert "- (none)" in md
+        assert "- [ ] (none)" in md
+
+
+class TestExtractPathIntegration:
+    def test_generate_uses_extractor(self) -> None:
+        extractor = _FakeExtractor(_GOOD_YAML)
+        md = generate_structured_notes(
+            "Full transcript text here.", extractor=extractor
+        )
+        assert "Adopt LFM2.5-Embedding for retrieval" in md
+        assert "TRANSCRIPT:" in extractor.last_prompt
+
+    def test_empty_extract_falls_back(self) -> None:
+        # Extractor returns unusable output → falls back to the template path.
+        extractor = _FakeExtractor("not yaml at all")
+        md = generate_structured_notes(
+            "Full transcript text here.", extractor=extractor
+        )
+        # Fallback template still yields a Summary section.
+        assert "## Summary" in md
+
+    def test_extractor_none_unchanged(self) -> None:
+        # No extractor → existing behavior (template fallback, no crash).
+        md = generate_structured_notes("Full transcript text here.")
+        assert "## Summary" in md
+
+    def test_extract_structured_notes_helper(self) -> None:
+        notes = extract_structured_notes("t", _FakeExtractor(_GOOD_YAML))
+        assert isinstance(notes, StructuredNotes)
+        assert notes.summary

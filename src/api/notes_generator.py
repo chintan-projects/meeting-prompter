@@ -8,14 +8,148 @@ perspective-grouped sections and attributed action items.
 Accepts optional meeting context (agenda, participants) and trigger
 history (questions asked, alerts fired) to enrich the output.
 """
+
 import logging
 import time
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import List, Optional, Protocol, Tuple
 
 from lib.conversation.meeting_context import MeetingContext
 from lib.rag_generator import RAGAnswerGenerator
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Structured extraction path (F-507: LFM2.5-350M-Extract) ─────────────
+#
+# The Extract model produces TYPED FIELDS, not free-form prose. Per the Liquid
+# architecture rules, an extraction model needs a YAML field schema in the SYSTEM
+# prompt and returns the same field structure back. We extract the fields, then
+# render markdown from them — separating STRUCTURE (the model's job) from
+# RENDERING (deterministic code). Falls back to the instruct-prompt path when no
+# extractor is wired, so this is additive.
+
+
+class NotesExtractor(Protocol):
+    """Duck-typed extraction model surface (e.g. an Extract-pointed generator)."""
+
+    def generate_text(self, prompt: str, max_tokens: int = ...) -> str: ...
+
+
+@dataclass
+class StructuredNotes:
+    """Typed meeting-notes fields the Extract model fills in."""
+
+    summary: str = ""
+    key_decisions: List[str] = field(default_factory=list)
+    action_items: List[str] = field(default_factory=list)
+    follow_ups: List[str] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not (
+            self.summary.strip() or self.key_decisions or self.action_items or self.follow_ups
+        )
+
+
+# YAML field schema lives in the SYSTEM prompt (Extract is prompt-sensitive).
+EXTRACT_SYSTEM = (
+    "You extract structured meeting notes. Read the transcript and return ONLY a "
+    "YAML document with EXACTLY these fields, using only information present in the "
+    "transcript:\n"
+    "summary: <2-3 sentence overview>\n"
+    "key_decisions: [<decision>, ...]\n"
+    "action_items: [<task with owner if stated>, ...]\n"
+    "follow_ups: [<topic needing follow-up>, ...]\n"
+    "Use empty lists when a field has no content. Do not add commentary."
+)
+
+EXTRACT_PROMPT = """<|im_start|>system
+{system}<|im_end|>
+<|im_start|>user
+{context_section}{key_moments_section}TRANSCRIPT:
+{transcript}<|im_end|>
+<|im_start|>assistant
+"""
+
+
+def build_extract_prompt(
+    transcript: str, context_section: str = "", key_moments_section: str = ""
+) -> str:
+    """Build the Extract-model prompt (YAML field schema in the system turn)."""
+    return EXTRACT_PROMPT.format(
+        system=EXTRACT_SYSTEM,
+        transcript=transcript[:_MAX_TRANSCRIPT_CHARS],
+        context_section=context_section,
+        key_moments_section=key_moments_section,
+    )
+
+
+def parse_structured_response(text: str) -> StructuredNotes:
+    """Parse the Extract model's YAML response into typed fields.
+
+    Robust to minor deviations: unknown keys ignored, missing fields default
+    empty, scalar-vs-list coerced. Returns empty StructuredNotes on total
+    parse failure (caller then falls back to the instruct path).
+    """
+    import yaml
+
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        logger.warning("Extract response was not valid YAML: %s", exc)
+        return StructuredNotes()
+    if not isinstance(data, dict):
+        return StructuredNotes()
+
+    def _as_list(value: object) -> List[str]:
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    summary = data.get("summary", "")
+    return StructuredNotes(
+        summary=str(summary).strip() if summary else "",
+        key_decisions=_as_list(data.get("key_decisions")),
+        action_items=_as_list(data.get("action_items")),
+        follow_ups=_as_list(data.get("follow_ups")),
+    )
+
+
+def render_structured_notes(
+    notes: StructuredNotes,
+    meeting_context: Optional[MeetingContext] = None,
+    trigger_history: Optional[List[dict]] = None,
+) -> str:
+    """Render typed fields into the standard notes markdown."""
+    header = _fallback_context_header(meeting_context, trigger_history)
+    lines: List[str] = [header] if header else []
+    lines.append("## Summary")
+    lines.append(notes.summary or "(no summary)")
+    lines.append("")
+    lines.append("## Key Decisions")
+    lines.extend([f"- {d}" for d in notes.key_decisions] or ["- (none)"])
+    lines.append("")
+    lines.append("## Action Items")
+    lines.extend([f"- [ ] {a}" for a in notes.action_items] or ["- [ ] (none)"])
+    lines.append("")
+    lines.append("## Follow-ups")
+    lines.extend([f"- {f}" for f in notes.follow_ups] or ["- (none)"])
+    return "\n".join(lines).lstrip("\n")
+
+
+def extract_structured_notes(
+    transcript: str,
+    extractor: NotesExtractor,
+    context_section: str = "",
+    key_moments_section: str = "",
+) -> StructuredNotes:
+    """Run the Extract model and parse its structured response."""
+    prompt = build_extract_prompt(transcript, context_section, key_moments_section)
+    raw = extractor.generate_text(prompt, max_tokens=600)
+    return parse_structured_response(raw or "")
+
 
 # --- Generic (no speaker data) prompts ---
 
@@ -116,7 +250,7 @@ def _build_key_moments_section(trigger_history: Optional[List[dict]]) -> str:
                 line += f" -> {answer[:120]}"
             lines.append(line)
         elif ttype == "alert" and ttext:
-            lines.append(f"- ALERT: \"{ttext[:80]}\" detected")
+            lines.append(f'- ALERT: "{ttext[:80]}" detected')
         elif ttype == "topic_match" and answer:
             lines.append(f"- Topic: {answer[:120]}")
     if not lines:
@@ -131,6 +265,7 @@ def generate_structured_notes(
     segments: Optional[List[dict]] = None,
     meeting_context: Optional[MeetingContext] = None,
     trigger_history: Optional[List[dict]] = None,
+    extractor: Optional[NotesExtractor] = None,
 ) -> str:
     """Generate structured meeting notes from transcript.
 
@@ -151,29 +286,53 @@ def generate_structured_notes(
     context_section = _build_context_section(meeting_context)
     key_moments_section = _build_key_moments_section(trigger_history)
 
+    # F-507: structured extraction path — LFM2.5-350M-Extract produces typed
+    # fields, which we render deterministically. Preferred when an extractor is
+    # wired; falls back to the instruct-prompt paths below on empty/failed output.
+    if extractor is not None:
+        try:
+            notes = extract_structured_notes(
+                transcript_markdown, extractor, context_section, key_moments_section
+            )
+            if not notes.is_empty():
+                return render_structured_notes(notes, meeting_context, trigger_history)
+            logger.info("Extract returned empty notes — falling back to instruct path")
+        except Exception as e:
+            logger.error("Extract notes generation failed: %s", e)
+
     # Speaker-aware path: use structured segments when speaker data exists
     if segments and _has_speaker_data(segments):
         your_text, others_text = _build_speaker_grouped_transcript(segments)
         if generator is not None:
             try:
                 return _generate_speaker_aware(
-                    your_text, others_text, generator,
-                    context_section, key_moments_section,
-                    meeting_context, trigger_history,
+                    your_text,
+                    others_text,
+                    generator,
+                    context_section,
+                    key_moments_section,
+                    meeting_context,
+                    trigger_history,
                 )
             except Exception as e:
                 logger.error("Speaker-aware LLM generation failed: %s", e)
         return _speaker_fallback_template(
-            your_text, others_text, meeting_context, trigger_history,
+            your_text,
+            others_text,
+            meeting_context,
+            trigger_history,
         )
 
     # Generic path: no speaker data
     if generator is not None:
         try:
             return _generate_with_llm(
-                transcript_markdown, generator,
-                context_section, key_moments_section,
-                meeting_context, trigger_history,
+                transcript_markdown,
+                generator,
+                context_section,
+                key_moments_section,
+                meeting_context,
+                trigger_history,
             )
         except Exception as e:
             logger.error("LLM notes generation failed: %s", e)
@@ -242,7 +401,10 @@ def _generate_speaker_aware(
     result = generator.generate_text(prompt, max_tokens=800)
     if not result:
         return _speaker_fallback_template(
-            your_statements, others_statements, meeting_context, trigger_history,
+            your_statements,
+            others_statements,
+            meeting_context,
+            trigger_history,
         )
     return result
 
@@ -292,12 +454,8 @@ def _fallback_context_header(
             for item in meeting_context.agenda_items:
                 parts.append(f"- {item}")
     if trigger_history:
-        questions = [
-            e for e in trigger_history if e.get("trigger_type") == "question"
-        ]
-        alerts = [
-            e for e in trigger_history if e.get("trigger_type") == "alert"
-        ]
+        questions = [e for e in trigger_history if e.get("trigger_type") == "question"]
+        alerts = [e for e in trigger_history if e.get("trigger_type") == "alert"]
         if questions or alerts:
             parts.append("")
             parts.append("**Key Moments:**")

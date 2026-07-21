@@ -122,6 +122,12 @@ async def generate_notes() -> StructuredNotesResponse:
     session = get_session()
     transcript_md = session.transcript.export_markdown()
     segments = session.transcript.export_json()
+    # F-607: lexical speaker-consistency correction (named hand-off/gratitude cues),
+    # non-destructive — applied to the notes' view of the segments only.
+    if session.meeting_context and session.meeting_context.participants:
+        from lib.attribution import correct_segments
+
+        segments = correct_segments(segments, session.meeting_context.participants)
 
     # Try to use the session's generator if available (may be None after crash)
     generator = _get_generator(session)
@@ -213,6 +219,12 @@ async def download_notes() -> PlainTextResponse:
     session = get_session()
     transcript_md = session.transcript.export_markdown()
     segments = session.transcript.export_json()
+    # F-607: lexical speaker-consistency correction (named hand-off/gratitude cues),
+    # non-destructive — applied to the notes' view of the segments only.
+    if session.meeting_context and session.meeting_context.participants:
+        from lib.attribution import correct_segments
+
+        segments = correct_segments(segments, session.meeting_context.participants)
     meeting_title = session.meeting_context.title if session.meeting_context else "Meeting"
 
     # Try to generate structured notes if possible (may be None after crash)

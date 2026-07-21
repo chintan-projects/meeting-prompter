@@ -9,6 +9,11 @@ Public surface:
 
 from __future__ import annotations
 
+from lib.attribution.lexical_consistency import (
+    LexicalConsistencyPass,
+    SpeakerCorrection,
+    correct_segments,
+)
 from lib.attribution.resolver import AttributionResolver
 from lib.attribution.types import (
     AttributionLayer,
@@ -21,4 +26,6 @@ __all__ = [
     "AttributionResult",
     "AttributionLayer",
     "Regime",
+    "LexicalConsistencyPass",
+    "SpeakerCorrection",
 ]

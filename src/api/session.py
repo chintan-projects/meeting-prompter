@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     import numpy as np
 
 from lib.config import AppConfig, load_config
+from lib.attribution import AttributionResolver
 from lib.conversation.meeting_context import MeetingContext, load_meeting_context
 from lib.diarization import SpeakerDiarizer
 from lib.generation.types import GenerationResult
@@ -102,6 +103,10 @@ class Session:
         # Speaker name mapping: diarizer label → custom name (e.g. "Speaker A" → "Alice")
         self._speaker_names: dict[str, str] = {}
 
+        # Attribution hierarchy (F-601): single place that decides a turn's
+        # speaker label — L1 channel, L3 acoustic, L4 roster, regime-aware.
+        self._resolver = AttributionResolver()
+
         # Cross-stream echo suppression: detects when mic and system audio
         # both capture the same speech (acoustic coupling without headphones)
         self._deduplicator = StreamDeduplicator(self.config.dual_stream)
@@ -138,6 +143,9 @@ class Session:
     def load_context(self, path: Path) -> Optional[MeetingContext]:
         """Load meeting context from YAML."""
         self.meeting_context = load_meeting_context(path)
+        # L4 roster: seed the attribution resolver with expected participants.
+        if self.meeting_context and self.meeting_context.participants:
+            self._resolver.set_roster(self.meeting_context.participants)
         return self.meeting_context
 
     def start(
@@ -439,11 +447,11 @@ class Session:
         mic → "You", system → "Others". If Tier 2 diarization is enabled,
         system turns are then relabeled with neural speaker embeddings.
         """
-        # Source-based speaker attribution — deterministic, no ML (Tier 1)
-        if turn.source == "mic":
-            turn.speaker = "You"
-        elif turn.source == "system":
-            turn.speaker = "Others"
+        # L1 channel attribution (deterministic) via the resolver. Unknown
+        # sources yield an empty label → keep the turn's existing speaker.
+        channel = self._resolver.resolve_channel(turn.source)
+        if channel.speaker:
+            turn.speaker = channel.speaker
 
         # Emit raw finalization immediately
         self.transcript.upsert(
@@ -510,12 +518,13 @@ class Session:
             if audio_segment is None:
                 return
 
-            speaker = self._diarizer.process_turn(
+            diar_label = self._diarizer.process_turn(
                 audio_segment,
                 self.config.audio.sample_rate,
             )
-            if speaker:
-                speaker = self._speaker_names.get(speaker, speaker)
+            # L3/L4 + regime via the resolver (roster names, honest degradation).
+            attribution = self._resolver.resolve_acoustic(diar_label, names=self._speaker_names)
+            speaker = attribution.speaker
             if speaker and speaker != turn.speaker:
                 turn.speaker = speaker
                 self.transcript.upsert(

@@ -57,6 +57,12 @@ class RAGAnswerGenerator:
         Uses Metal GPU acceleration on Mac for faster inference.
         """
         if self.llm is None:
+            # Make embedded chat-template compilation non-fatal so newer LFM2.5
+            # GGUFs (e.g. 2.6B) whose templates use HF jinja extensions still load
+            # via raw completion. See lib/llama_compat.
+            from lib.llama_compat import install as _install_llama_compat
+
+            _install_llama_compat()
             self.llm = Llama(
                 model_path=str(self.model_path),
                 n_ctx=self.n_ctx,

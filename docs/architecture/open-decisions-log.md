@@ -60,29 +60,44 @@ promote the winning model + the select flow into the Tauri select-to-answer UI.
 **Decision output:** which model for D-03 (per trigger type if it differs), and
 whether extraction beats generation on faithfulness/latency for live answers.
 
-### E-01 v1 findings (2026-07-21)
+### E-01 findings (2026-07-21)
 Ran on the curated Finetuning-Strategy corpus, span = *"How should we generate
 synthetic data to fine-tune a small model without a GPU?"*
 
 1. **Retrieval works, but it's effectively pure-vector.** Top-5 chunks are the
-   right docs (fine-tuning-lessons, Synthetic-Data-Guide, SLM-pipeline), but
-   `bm25=0.000` on *every* hit — the lexical arm (weight 0.05) contributes
-   nothing for this query. Retrieval quality is fine; the BM25 half is idle.
+   right docs, but `bm25=0.000` on *every* hit — the lexical arm (weight 0.05)
+   contributes nothing for this query. Quality is fine; the BM25 half is idle.
    → tuning question: is 0.05 too low, or is FTS not matching (stopwords/OR)?
-2. **The 3-way model comparison is blocked by the inference runtime, not the
-   harness.** With the bundled `llama-cpp-python`:
-   - **350M-Extract** (`extract-023-v1.gguf`) → "Failed to load model from file"
-     (arch/format not supported by this llama.cpp build).
-   - **2.6B** (`Q4_K_M.gguf`) → chat-template parse error at load
-     (`unknown tag 'generation'` — newer Jinja tag the bundled minja can't parse).
-   - Only **1.2B-Instruct** loads. So comparing Extract/2.6B needs the runtime
-     updated (or the models reconverted) **first** — a real D-03 prerequisite.
-3. **Live-quality flag:** the 1.2B (current live model) answered *"I don't have
-   that information in my documents"* on well-retrieved on-topic context. The
-   harness fed raw joined chunks (the app does extraction-grounding first), so
-   verify whether it's the prompt, context formatting, or an over-conservative
-   model. If it reproduces in-app, it's a live under-answering bug.
 
-**Next for E-01:** (a) update/align the llama.cpp runtime to load Extract + 2.6B,
-(b) give Extract its field-schema prompt for a fair test, (c) chase the 1.2B
-refusal. Then re-run and record the model choice against D-03.
+2. **Model loading — root-caused, mostly fixed (not a model problem).**
+   - **2.6B** → the failure was **not** the model: `llama-cpp-python` 0.3.16
+     eagerly compiles every embedded chat template with Python `jinja2`, which
+     lacks the HF `{% generation %}` tag (the C++ `minja` runtime handles it,
+     which is why the CLI loads it fine). Fixed with `lib/llama_compat.py`
+     (makes template compile non-fatal; we use raw completion anyway). **2.6B
+     now loads + generates**, in-app and in the harness.
+   - **350M-Extract** → genuine GGUF↔llama.cpp mismatch:
+     `wrong number of tensors; expected 149, got 148` (tied-embedding export
+     diff). The bundled llama.cpp can't load *this* GGUF. Fix: run from
+     `model.safetensors` via transformers (its native format), or reconvert.
+     **Next step, not yet done.**
+
+3. **1.2B refusal — root cause is the PROMPT, not infra.** On context that
+   directly answers a question, the 1.2B answers correctly **but appends**
+   *"I don't have that information in my documents"* anyway — the refusal
+   boilerplate leaks into good answers. A quick prompt rewrite made it *worse*
+   (refused everything, duplicated) → the 1.2B is **brittle** to prompt phrasing.
+   Proper fix = a `tune-prompts` iteration, not a one-liner.
+
+4. **D-03 signal — 2.6B >> 1.2B on the same context.** Same span, same context:
+   - **1.2B** (725 ms): flat *"I don't have that information."*
+   - **2.6B** (3401 ms): graceful, honest partial answer — acknowledges what the
+     context covers, notes the GPU aspect isn't addressed, still extracts useful
+     points. Far more useful for a coach. ~5× latency, acceptable once generation
+     is user-gated (D-02). → **leaning: 2.6B for the answer model**, pending the
+     Extract comparison + a prompt pass.
+
+**Next for E-01:** (a) add the Extract (transformers/safetensors) runner for a
+fair 3-way, (b) add **classifier** (encoder trigger router) + **re-ranker
+before/after** panels, (c) `tune-prompts` pass on the answer prompt, then record
+the D-03 decision.

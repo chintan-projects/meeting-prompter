@@ -9,7 +9,7 @@ import ScreenCaptureKit
 /// sample buffers, resamples to the target rate, and writes raw float32 PCM
 /// to stdout in fixed-size chunks.
 @available(macOS 13.0, *)
-final class AudioTapManager: NSObject, SCStreamOutput {
+final class AudioTapManager: NSObject, SCStreamOutput, SCStreamDelegate {
     private let pid: pid_t
     private let targetSampleRate: Float64
     private let chunkDuration: Double
@@ -66,9 +66,12 @@ final class AudioTapManager: NSObject, SCStreamOutput {
         config.sampleRate = Int(targetSampleRate <= 48000 ? 48000 : targetSampleRate)
         config.channelCount = 1
         config.excludesCurrentProcessAudio = true
-        // Minimize video: tiny resolution, low frame rate
-        config.width = 2
-        config.height = 2
+        // We only need audio, but macOS 13 SCStream requires a video config.
+        // Keep it minimal (small frame, 1 fps) — but stay clear of sub-minimum
+        // dimensions that some macOS versions reject (which, with a nil delegate,
+        // used to fail silently). 16x16 is negligible overhead and safely valid.
+        config.width = 16
+        config.height = 16
         config.minimumFrameInterval = CMTime(value: 1, timescale: 1) // 1 fps
 
         // Set up resampler if capture rate differs from target
@@ -96,7 +99,10 @@ final class AudioTapManager: NSObject, SCStreamOutput {
 
         // Create and start the stream
         let audioQueue = DispatchQueue(label: "audio-tap.audio", qos: .userInteractive)
-        stream = SCStream(filter: filter, configuration: config, delegate: nil)
+        // Pass a delegate so stream-level failures (target app quit/crashed,
+        // permission revoked mid-session, OS teardown) are observed instead of
+        // leaving the process running blind. Previously delegate was nil.
+        stream = SCStream(filter: filter, configuration: config, delegate: self)
 
         try stream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
         try await stream?.startCapture()
@@ -121,6 +127,19 @@ final class AudioTapManager: NSObject, SCStreamOutput {
         }
 
         log("Capture stopped")
+    }
+
+    // MARK: - SCStreamDelegate
+
+    /// Called when the OS tears down the stream (target app quit/crashed,
+    /// permission revoked, or an internal capture error). Without this, the
+    /// process kept running blind. Log and exit non-zero so the Python parent
+    /// detects the failed subprocess and surfaces it as capture_error rather
+    /// than silently producing no "Others" audio.
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        log("Stream stopped with error: \(error.localizedDescription)")
+        running = false
+        exit(3)
     }
 
     // MARK: - SCStreamOutput delegate

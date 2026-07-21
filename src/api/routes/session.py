@@ -83,6 +83,33 @@ async def start_session(req: StartRequest) -> dict:
     if session.is_running:
         raise HTTPException(status_code=409, detail="Session already running")
 
+    # BUG-005: per-app capture (pid > 0) is a dual-stream guarantee the user opts
+    # into by selecting a meeting app. It silently degrades to mic-only when
+    # Screen Recording permission is missing. Gate here — the backend is the
+    # single source of truth (the frontend's permission snapshot is stale and
+    # permission can be revoked at any time). Refuse to start under a false
+    # dual-stream expectation. Explicit mic-only (pid == 0) bypasses this.
+    if req.system_audio_pid > 0:
+        from lib.system_audio_capture import SystemAudioCapture
+
+        if not SystemAudioCapture.check_permission():
+            raise HTTPException(
+                status_code=412,
+                detail={
+                    "error": "screen_recording_permission_denied",
+                    "message": (
+                        "Per-app audio capture needs Screen Recording permission "
+                        "for the audio-tap helper. Without it, only your microphone "
+                        "is captured and remote speakers won't be transcribed."
+                    ),
+                    "remedy": (
+                        "Grant it in System Settings → Privacy & Security → "
+                        "Screen & System Audio Recording, then start again — or "
+                        "start mic-only."
+                    ),
+                },
+            )
+
     # Create a fresh session for a new recording
     _session = Session()
 

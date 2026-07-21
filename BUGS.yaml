@@ -36,27 +36,55 @@ bugs:
 
   - id: "BUG-004"
     severity: high
-    component: "lib/system_audio_capture.py, tools/audio-tap/Sources/AudioTap.swift"
-    status: open
+    component: "lib/system_audio_capture.py, tools/audio-tap/Sources/AudioTapManager.swift"
+    status: investigating
     reported_in: "2026-07-21"
     title: "Google Chrome crashes when selected as the per-app audio capture target"
     repro: "MeetingSetup → Meeting App = Google Chrome (PID) → Start Meeting; Chrome crashed during the session (session-017 live smoke)"
+    root_cause: >
+      CORRECTED 2026-07-21 — the original 'audio-tap attached to Chrome's PID'
+      hypothesis is CONTRADICTED by the evidence. The reported session ran with
+      Screen Recording permission denied (that is BUG-005). In that path,
+      system_audio_capture.start_stream (lines 204-219) sets _capture_error and
+      blocks in a sleep loop WITHOUT ever launching the `--pid` capture
+      subprocess. So the SCStream never attached to Chrome at all — the tap
+      could not have crashed it in that session. Only the brief `--list-apps` /
+      `--check-permission` subprocesses ran (content enumeration, not capture).
+      Combined with the earlier evidence (no jetsam kill, no Chrome Crashpad
+      report, memory not exhausted), there is no evidence audio-tap caused the
+      crash; it is most likely coincidental.
     notes: >
-      Cause UNCONFIRMED — do not assume OOM. Evidence checked: no macOS
-      jetsam/memorystatus kill in the 11:15–11:45 window, no Chrome Crashpad
-      report for that day (newest was June 14), and memory was not exhausted.
-      Session ran mic-only (see BUG-005, permission denied) for ~23 min.
-      Prime suspect: the ScreenCaptureKit audio-tap attaching to Chrome's own
-      PID destabilizing that app — NOT general memory pressure. Not yet
-      reproduced in a controlled test.
-    next: "Controlled repro — grant audio-tap Screen Recording perm, then capture a NON-Chrome target (or BlackHole) while watching memory + Console for Chrome's termination. If stable off-target, isolates 'capturing Chrome' as the trigger; then inspect the audio-tap Swift SCStream setup."
+      Genuine robustness gap found and fixed while investigating: the SCStream
+      was created with delegate=nil, so stream-level failures (target app
+      quit/crashed, permission revoked mid-session, OS teardown) were invisible
+      and the helper ran blind. AudioTapManager now conforms to SCStreamDelegate
+      and implements stream(_:didStopWithError:) → log + exit(3), so failures
+      surface through the existing capture_error path instead of hanging. Also
+      bumped the minimal video config off sub-minimum 2x2 dims (→ 16x16) which
+      some macOS versions reject. Binary rebuilt. These are hardening, NOT a
+      claimed fix for the crash — the crash remains unreproduced.
+    next: "Now that BUG-005 forces a clear permission grant before per-app capture, the tap will actually attach on the next live run. Capture Chrome with permission granted while watching memory + Console; the new SCStreamDelegate will log any stream teardown. If Chrome is stable, close as not-our-bug (coincidental). If it reproduces, the delegate error is the first real signal to act on."
 
   - id: "BUG-005"
     severity: high
-    component: "lib/system_audio_capture.py, src/api/session.py, app/src/components/MeetingSetup.tsx"
-    status: open
+    component: "src/api/routes/session.py, app/src/App.tsx, app/src/components/MeetingSetup.tsx"
+    status: resolved
     reported_in: "2026-07-21"
+    resolved_in: "2026-07-21"
     title: "Per-app capture with denied Screen Recording silently runs mic-only (transcript shows one speaker)"
     repro: "Skip/deny Screen Recording permission for the audio-tap binary, select per-app capture, Start Meeting. Session runs ~23 min mic-only; transcript shows only 'You' (one speaker); no error surfaced to the user."
     root_cause: "system_audio_capture logs 'Screen Recording permission denied for audio-tap' but the session proceeds with mic-only. The MeetingSetup amber warning is passive/non-blocking, so the user believes dual-stream is active while the 'Others' side never captures."
-    fix: "Hard-block (or explicit, dismissible-with-consequences error) when per-app capture is selected but Screen Recording permission is unavailable — surface a clear, actionable message + deep-link to the permission pane, and do not start a session under a false dual-stream expectation. Optionally offer a 'continue mic-only' explicit choice."
+    fix: >
+      Authoritative gate on the backend (single source of truth — the frontend's
+      permission snapshot is stale and permission can be revoked mid-flight):
+      /session/start now pre-checks SystemAudioCapture.check_permission() when
+      system_audio_pid > 0 and returns HTTP 412 with a structured
+      {error, message, remedy} instead of starting under a false dual-stream
+      expectation. Explicit mic-only (pid == 0) bypasses the gate. Frontend makes
+      the illegal state unrepresentable: MeetingSetup disables Start/Quick Start
+      when a per-app target is selected but permission is denied, replaces the
+      passive warning with a blocking callout + remedy + an explicit 'Start
+      mic-only instead' button (pid=0). App.tsx surfaces the 412 (previously a
+      silent no-op that left a blank non-running screen) and keeps the setup
+      dialog open with the error. Tests: tests/test_session_start_route.py (412
+      on denied per-app, start on granted, mic-only bypass)."

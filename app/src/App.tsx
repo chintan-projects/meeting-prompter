@@ -45,6 +45,7 @@ interface MeetingConfig {
 
 function App() {
   const [showSetup, setShowSetup] = useState(true);
+  const [startError, setStartError] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -186,7 +187,8 @@ function App() {
 
   // --- Session control functions ---
 
-  const startSession = async (config: MeetingConfig) => {
+  const startSession = async (config: MeetingConfig): Promise<boolean> => {
+    setStartError("");
     try {
       const res = await fetch(`${API_BASE}/session/start`, {
         method: "POST",
@@ -209,9 +211,28 @@ function App() {
         setMeetingTitle(config.title);
         transcriptWs.connect();
         promptsWs.connect();
+        return true;
       }
+      // Non-OK (e.g. 412 permission gate): surface it instead of silently
+      // leaving the user on a blank, non-running screen (BUG-005).
+      let message = `Couldn't start the session (HTTP ${res.status}).`;
+      try {
+        const data = await res.json();
+        const detail = data?.detail;
+        if (detail && typeof detail === "object" && detail.message) {
+          message = detail.remedy ? `${detail.message}\n${detail.remedy}` : detail.message;
+        } else if (typeof detail === "string") {
+          message = detail;
+        }
+      } catch {
+        // response had no JSON body — keep the generic message
+      }
+      setStartError(message);
+      return false;
     } catch (err) {
       console.error("Failed to start session:", err);
+      setStartError("Couldn't reach the backend. Make sure it's running, then try again.");
+      return false;
     }
   };
 
@@ -262,13 +283,14 @@ function App() {
   };
 
   const handleSetupStart = async (config: MeetingConfig) => {
-    setShowSetup(false);
-    await startSession(config);
+    // Keep the setup dialog open until the session actually starts, so a
+    // failure (e.g. the permission gate) is shown in-context (BUG-005).
+    const ok = await startSession(config);
+    if (ok) setShowSetup(false);
   };
 
-  const handleQuickStart = (device: string, micDevice?: string) => {
-    setShowSetup(false);
-    startSession({
+  const handleQuickStart = async (device: string, micDevice?: string) => {
+    const ok = await startSession({
       title: "",
       agenda_items: [],
       watch_words: [],
@@ -278,6 +300,7 @@ function App() {
       system_audio_pid: 0,
       system_audio_app: "",
     });
+    if (ok) setShowSetup(false);
   };
 
   const handleEditSegment = (id: string, text: string) => {
@@ -372,7 +395,11 @@ function App() {
         <MeetingSetup
           onStart={handleSetupStart}
           onQuickStart={handleQuickStart}
-          onCancel={() => setShowSetup(false)}
+          onCancel={() => {
+            setStartError("");
+            setShowSetup(false);
+          }}
+          startError={startError}
         />
       )}
 

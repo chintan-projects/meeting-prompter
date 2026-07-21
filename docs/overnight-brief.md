@@ -61,8 +61,16 @@ real Liquid meetings — NOT as ready-made labels.
 - **F-508** persistent warm-model runtime (load encoder + embedder + instruct once).
 - **F-607** lexical speaker-consistency pass.
 
-## WAVE B — train the encoder heads via FORGE (full-auto incl. GPU)
+## WAVE B — head training: PARKED tonight (prerequisite pending)
 
+DO NOT train any head tonight. Reason: the ADR requires encoder-backed heads, and
+forge's trainer templates currently load the base causally (a true bidirectional
+read is forge's own pending P1.1 work — `compat.py`). That forge change is a
+separate, tested task that must land + verify FIRST. Until then, training any head
+would mean using the causal tower, which the ADR forbids. So: park F-503/F-504/F-505
+entirely tonight. Do the code waves (Wave A) only.
+
+--- (retained for when the forge bidirectional-encoder change has landed) ---
 HARD RULE: **encoder backbone only — NEVER the causal head.** Follow the ADR, not
 forge's default S2 (which maps sequence/multi-label to the causal tower). If a head
 would resolve to `backbone="causal"`, DO NOT train it — park it. Do not "fall back"

@@ -906,6 +906,64 @@ class TestDiarizationIntegration:
         assert session._transcript_queue.empty()
 
     @pytest.mark.asyncio
+    async def test_conference_room_regime_degrades_to_flagged_bucket(self) -> None:
+        """F-606: in the conference-room regime, diarized system turns collapse
+        to a flagged 'Others (room)' bucket rather than confident Speaker N."""
+        from lib.attribution import Regime
+        from src.api.transcript_buffer import Turn
+
+        session = Session()
+        session._loop = asyncio.get_running_loop()
+        session._resolver.set_regime(Regime.CONFERENCE_ROOM)
+
+        mock_diarizer = MagicMock()
+        mock_diarizer.process_turn.return_value = "Speaker B"
+        session._diarizer = mock_diarizer
+
+        mock_orch = MagicMock()
+        mock_orch.audio.get_audio_segment.return_value = np.zeros(32000, dtype=np.float32)
+        session._orchestrator = mock_orch
+
+        turn = Turn(
+            id="turn-1",
+            text="hello from the room",
+            start_timestamp=100.0,
+            end_timestamp=104.0,
+            is_final=True,
+            source="system",
+            speaker="Others",
+        )
+        session._relabel_speaker(turn)
+
+        await asyncio.sleep(0.02)
+        msg = session._transcript_queue.get_nowait()
+        assert msg["type"] == "transcript_relabeled"
+        assert msg["speaker"] == "Others (room)"
+        assert msg["low_confidence"] is True
+        assert turn.low_confidence is True
+        merged = session.transcript.get_merged()
+        assert merged[0]["low_confidence"] is True
+
+    @pytest.mark.asyncio
+    async def test_conference_room_regime_from_context(self) -> None:
+        """load_context with conference_room: true activates the room regime."""
+        import tempfile
+        from pathlib import Path
+
+        from lib.attribution import Regime
+
+        session = Session()
+        yaml_text = (
+            "title: Room Sync\n" "participants: [Ana, Ben, Cy, Dee, Ed]\n" "conference_room: true\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_text)
+            path = Path(f.name)
+        session.load_context(path)
+        assert session._resolver.regime is Regime.CONFERENCE_ROOM
+        assert session._resolver.roster == ["Ana", "Ben", "Cy", "Dee", "Ed"]
+
+    @pytest.mark.asyncio
     async def test_on_turn_final_with_refiner_and_diarizer(self) -> None:
         """Full pipeline: finalize → polish → diarize, all three messages emitted."""
         from src.api.transcript_buffer import Turn

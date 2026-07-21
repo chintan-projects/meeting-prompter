@@ -8,6 +8,7 @@ export interface TranscriptSegment {
   speaker: string;
   source: string; // "mic" or "system" — audio stream origin
   is_final: boolean;
+  low_confidence?: boolean; // flagged best-effort speaker label (F-606)
   edited?: boolean;
 }
 

@@ -8,6 +8,7 @@ Supports two modes:
 - append(): legacy per-chunk storage (seg-N IDs)
 - upsert(): turn-based storage (turn-N IDs) — creates or updates segments
 """
+
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -24,6 +25,7 @@ class TranscriptSegment:
     source: str = ""
     end_timestamp: float = 0.0
     is_final: bool = False
+    low_confidence: bool = False  # flagged best-effort speaker label (F-606)
 
     def to_dict(self) -> dict:
         """Serialize for API responses."""
@@ -35,6 +37,7 @@ class TranscriptSegment:
             "source": self.source,
             "end_timestamp": self.end_timestamp or self.timestamp,
             "is_final": self.is_final,
+            "low_confidence": self.low_confidence,
         }
 
 
@@ -75,6 +78,7 @@ class TranscriptStore:
         is_final: bool = False,
         speaker: str = "",
         source: str = "",
+        low_confidence: bool = False,
     ) -> str:
         """Create or update a transcript segment (turn-based).
 
@@ -92,6 +96,7 @@ class TranscriptStore:
                 seg.speaker = speaker
             if source:
                 seg.source = source
+            seg.low_confidence = low_confidence
         else:
             segment = TranscriptSegment(
                 id=seg_id,
@@ -101,6 +106,7 @@ class TranscriptStore:
                 is_final=is_final,
                 speaker=speaker,
                 source=source,
+                low_confidence=low_confidence,
             )
             self._index[seg_id] = len(self._segments)
             self._segments.append(segment)

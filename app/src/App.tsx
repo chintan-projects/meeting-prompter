@@ -91,6 +91,7 @@ function App() {
           is_final: boolean;
           speaker: string;
           source: string;
+          low_confidence?: boolean;
         };
         if (
           msg.type === "transcript_update" ||
@@ -106,6 +107,7 @@ function App() {
             speaker: msg.speaker ?? "",
             source: msg.source ?? "",
             is_final: msg.is_final ?? msg.type !== "transcript_update",
+            low_confidence: msg.low_confidence ?? false,
           });
         }
       },

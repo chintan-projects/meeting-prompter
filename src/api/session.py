@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     import numpy as np
 
 from lib.config import AppConfig, load_config
-from lib.attribution import AttributionResolver
+from lib.attribution import AttributionResolver, Regime
 from lib.conversation.meeting_context import MeetingContext, load_meeting_context
 from lib.diarization import SpeakerDiarizer
 from lib.generation.types import GenerationResult
@@ -146,6 +146,9 @@ class Session:
         # L4 roster: seed the attribution resolver with expected participants.
         if self.meeting_context and self.meeting_context.participants:
             self._resolver.set_roster(self.meeting_context.participants)
+        # F-606: conference-room regime → honest degradation to a flagged bucket.
+        if self.meeting_context and self.meeting_context.conference_room:
+            self._resolver.set_regime(Regime.CONFERENCE_ROOM)
         return self.meeting_context
 
     def start(
@@ -527,6 +530,7 @@ class Session:
             speaker = attribution.speaker
             if speaker and speaker != turn.speaker:
                 turn.speaker = speaker
+                turn.low_confidence = attribution.low_confidence
                 self.transcript.upsert(
                     seg_id=turn.id,
                     text=turn.text,
@@ -535,6 +539,7 @@ class Session:
                     is_final=True,
                     speaker=speaker,
                     source=turn.source,
+                    low_confidence=attribution.low_confidence,
                 )
                 self._thread_safe_put(
                     self._transcript_queue,
@@ -547,9 +552,15 @@ class Session:
                         "is_final": True,
                         "speaker": speaker,
                         "source": turn.source,
+                        "low_confidence": attribution.low_confidence,
                     },
                 )
-                logger.info("Turn %s relabeled: Others → %s", turn.id, speaker)
+                logger.info(
+                    "Turn %s relabeled: Others → %s%s",
+                    turn.id,
+                    speaker,
+                    " (low confidence)" if attribution.low_confidence else "",
+                )
         except Exception as e:
             logger.warning("Speaker relabeling failed for %s: %s", turn.id, e)
 

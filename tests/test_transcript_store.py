@@ -1,4 +1,5 @@
 """Tests for src.api.transcript_store — append-only transcript with edit overlay."""
+
 from src.api.transcript_store import TranscriptStore, TranscriptSegment
 
 
@@ -30,10 +31,19 @@ class TestTranscriptSegment:
         seg = TranscriptSegment(id="seg-1", text="hello", timestamp=0.0)
         assert seg.source == ""
 
+    def test_default_low_confidence_false(self) -> None:
+        seg = TranscriptSegment(id="seg-1", text="hello", timestamp=0.0)
+        assert seg.low_confidence is False
+
     def test_to_dict_includes_all_fields(self) -> None:
         seg = TranscriptSegment(
-            id="turn-1", text="hello", timestamp=100.0,
-            end_timestamp=105.0, is_final=True, speaker="Bob", source="mic",
+            id="turn-1",
+            text="hello",
+            timestamp=100.0,
+            end_timestamp=105.0,
+            is_final=True,
+            speaker="Bob",
+            source="mic",
         )
         d = seg.to_dict()
         assert d == {
@@ -44,6 +54,7 @@ class TestTranscriptSegment:
             "is_final": True,
             "speaker": "Bob",
             "source": "mic",
+            "low_confidence": False,
         }
 
 
@@ -252,6 +263,7 @@ class TestUpsert:
         assert result[0]["source"] == "mic"
         assert result[0]["edited"] is False
 
+
 class TestRenameSpeaker:
     """Tests for bulk speaker rename."""
 
@@ -297,7 +309,6 @@ class TestRenameSpeaker:
         md = store.export_markdown()
         assert "**Alice**" in md
         assert "Speaker A" not in md
-
 
     def test_export_markdown_with_turns(self) -> None:
         store = TranscriptStore()

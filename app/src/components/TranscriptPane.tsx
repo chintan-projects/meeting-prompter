@@ -222,6 +222,14 @@ export function TranscriptPane({
                       {seg.speaker || (mic ? "You" : "Others")}
                     </span>
                   )}
+                  {seg.low_confidence && (
+                    <span
+                      style={styles.lowConfidenceBadge}
+                      title="Best-effort speaker label — conference-room / low-confidence attribution"
+                    >
+                      ~ best guess
+                    </span>
+                  )}
                   {!seg.is_final && <span style={styles.liveIndicator} />}
                 </div>
 
@@ -346,6 +354,16 @@ const styles: Record<string, React.CSSProperties> = {
   speakerClickable: {
     cursor: "pointer",
     borderBottom: "1px dashed currentColor",
+  },
+  lowConfidenceBadge: {
+    fontSize: 9,
+    fontWeight: 600,
+    color: "var(--text-secondary)",
+    opacity: 0.7,
+    fontStyle: "italic",
+    padding: "0 4px",
+    border: "1px dashed var(--text-secondary)",
+    borderRadius: 3,
   },
   renameInput: {
     fontSize: 11,

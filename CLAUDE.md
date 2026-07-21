@@ -255,9 +255,11 @@ env var. Rate limits (429) handled via `max_retries` / `initial_backoff_s`. Use 
 ### WebSocket Protocol
 
 **`/ws/transcript`** — Turn-based transcript streaming:
-- Server → Client: `{"type": "transcript_update", "id": "turn-1", "text": "...", "timestamp": ..., "end_timestamp": ..., "is_final": false}`
-- Server → Client: `{"type": "transcript_final", "id": "turn-1", "text": "...", "timestamp": ..., "end_timestamp": ..., "is_final": true}`
+- Server → Client: `{"type": "transcript_update", "id": "turn-1", "text": "...", "timestamp": ..., "end_timestamp": ..., "is_final": false, "speaker": "...", "source": "mic|system", "low_confidence": false}`
+- Server → Client: `{"type": "transcript_final", "id": "turn-1", "text": "...", "timestamp": ..., "end_timestamp": ..., "is_final": true, "speaker": "...", "source": "...", "low_confidence": false}`
+- Server → Client: `{"type": "transcript_relabeled", "id": "turn-1", ..., "speaker": "Others (room)", "low_confidence": true}` — attribution updated (diarization / conference-room degradation, F-606)
 - Client → Server: `{"type": "edit", "id": "turn-1", "text": "corrected text"}`
+- `low_confidence: true` marks a flagged best-effort speaker label (conference-room regime) — the UI shows a "~ best guess" badge.
 
 **`/ws/prompts`** — Intelligence results with display metadata:
 - Server → Client: `{"type": "prompt", "trigger_type": "question", "trigger_text": "...", "answer": "...", "confidence": 0.75, "method": "hybrid", "latency_ms": 480, "source": "deployment.md", "persistence": "persistent", "dismiss_ms": 0, "display_label": "ANSWER", "display_emoji": "💡"}`

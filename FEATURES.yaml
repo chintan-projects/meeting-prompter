@@ -381,3 +381,286 @@ workstreams:
           submission. Sandboxing compliance. BlackHole dependency
           documented in listing.
         depends_on: [F-401, F-402, F-403]
+
+  # ─── WORKSTREAM 5: Encoder Intelligence Re-Architecture ──────────
+  # Priority: V2 — the Liquid re-alignment. Replace heuristic/decoder
+  # intelligence with a shared LFM2.5-Encoder backbone + tiny heads.
+  # Strangler-fig behind existing interfaces. Full plan:
+  # docs/architecture/liquid-rearchitecture.md
+
+  encoder_intelligence:
+    name: "Encoder Intelligence Re-Architecture"
+    phase: V2
+    description: >
+      Re-align intelligence to output shape. Most triggers/extraction are
+      classification tasks currently done by regex + a generic decoder; move
+      them onto one shared LFM2.5-Encoder-350M backbone with distilled heads.
+      Route-first hot/cold execution. Retrieval swaps to a Liquid retriever.
+      Reversible, eval-gated. See docs/architecture/liquid-rearchitecture.md.
+
+    features:
+      - id: F-500
+        name: "Decision spikes — a11y, encoder smoke, retrieval eval, VLM"
+        status: done
+        effort: M
+        description: >
+          Stage-0 spikes (results in docs/architecture/liquid-rearchitecture.md).
+          Encoder: GREEN — clean load via AutoModelForMaskedLM/.lfm2, ~14ms/turn
+          mean-pooled on MPS, 1024-dim. Retrieval: LFM2.5-Embedding-350M ties
+          MiniLM exactly (safe swap; eval too coarse to prove better → F-509).
+          a11y: near-dead-end for active-speaker (names/mute only) → demoted to
+          L4 roster; Zoom Meeting SDK is the real L2 (local). VLM: INCONCLUSIVE,
+          requires real images + real test (slide 4/5 on synthetic; active-speaker
+          negative). Refactor-over-rewrite decision recorded in the ADR.
+        depends_on: []
+        files:
+          - scripts/spike_encoder_smoke.py
+          - scripts/spike_retrieval_eval.py
+          - scripts/spike_vlm_active_speaker.py
+
+      - id: F-509
+        name: "Harden the retrieval eval (discriminating power)"
+        status: backlog
+        effort: M
+        description: >
+          Current eval saturates (doc-level, ~3 distinct docs) — it can't tell
+          two retrievers apart (MiniLM and LFM2.5-Embedding tied to 3 decimals).
+          Add chunk-level relevance labels, more/confusable docs, and query vs
+          passage instruction prompts so the eval can prove an improvement, not
+          just non-regression.
+        depends_on: [F-502]
+        files:
+          - tests/eval/rag_eval_dataset.yaml
+          - tests/eval/test_rag_eval.py
+
+      - id: F-501
+        name: "EncoderIntelligenceLayer interface + typed turn-state"
+        status: backlog
+        effort: L
+        description: >
+          Introduce the EncoderIntelligenceLayer abstraction and a typed
+          shared turn-state object (replaces loose routing in ConversationBuffer).
+          Wire the encoder backbone (one mean-pooled forward per turn). Keep the
+          existing heuristics as the FIRST head implementations behind the
+          interface — zero behavior change, full test parity. Pure refactor.
+        depends_on: [F-500]
+        files:
+          - new: lib/intelligence/encoder_layer.py
+          - new: lib/intelligence/turn_state.py
+          - lib/triggers/engine.py
+          - lib/conversation/buffer.py
+
+      - id: F-502
+        name: "Retrieval swap — MiniLM → LFM2.5 retriever"
+        status: backlog
+        effort: M
+        description: >
+          Replace all-MiniLM-L6-v2 with LFM2.5-Embedding-350M (or ColBERT-350M
+          for compositional queries) behind lib/rag/embedder.py. Must hold
+          Hit@1 >= 94.4% / MRR >= 0.972 on tests/eval or it does not land.
+          Requires downloading the retriever (not yet on disk).
+        depends_on: [F-500]
+        files:
+          - lib/rag/embedder.py
+          - tests/eval/
+
+      - id: F-503
+        name: "Trigger router head (distilled seq-classifier)"
+        status: backlog
+        effort: L
+        description: >
+          Distill trigger-type routing + question detection into an encoder
+          sequence-classifier (mean-pool). Seed labels from current heuristics +
+          1.2B teacher over real meeting transcripts (Granola). LoRA with LFM2.5
+          module names. Ship only when it beats the heuristic on held-out eval.
+        depends_on: [F-501]
+        files:
+          - new: lib/intelligence/heads/trigger_router.py
+
+      - id: F-504
+        name: "Evidence span head (token-classifier)"
+        status: backlog
+        effort: L
+        description: >
+          Replace answer_extractor sentence heuristic with an encoder
+          token-classifier (BIO) over per-token vectors. Its OWN LoRA — never
+          co-trained with the sequence heads (co-training collapse risk).
+        depends_on: [F-501]
+        files:
+          - new: lib/intelligence/heads/evidence_span.py
+          - lib/answer_extractor.py
+
+      - id: F-505
+        name: "Quality / rhetorical gate head"
+        status: backlog
+        effort: M
+        description: >
+          Fold F-201 rhetorical suppression + fuzzy noise filtering into an
+          encoder multi-label gate. Keep O(1)-checkable filters (repeated chars,
+          literal watch-words) deterministic in code.
+        depends_on: [F-501]
+        files:
+          - new: lib/intelligence/heads/quality_gate.py
+          - lib/filters.py
+
+      - id: F-506
+        name: "Route-first hot/cold execution + shared-state"
+        status: backlog
+        effort: M
+        description: >
+          Wire the heads as a route-first gate: hot path answers/suppresses from
+          heads (~50 ms); cold path runs retrieval + generation only when a head
+          fires. Stop running every trigger every turn. Operate on shared
+          turn-state, not a daisy-chain.
+        depends_on: [F-503, F-505]
+        files:
+          - lib/triggers/engine.py
+          - lib/intelligence/encoder_layer.py
+
+      - id: F-507
+        name: "Structured notes via LFM2.5-350M-Extract"
+        status: backlog
+        effort: M
+        description: >
+          Point notes_generator at LFM2.5-350M-Extract (structured extraction)
+          instead of hand-prompting the instruct model for typed fields.
+        depends_on: []
+        files:
+          - src/api/notes_generator.py
+
+      - id: F-508
+        name: "Persistent warm-model runtime + contention mgmt"
+        status: backlog
+        effort: L
+        description: >
+          Replace subprocess.run()-per-call inference with a persistent runtime
+          (llama.cpp server / LEAP) keeping models warm — real-time target needs
+          no cold spawn, and a KV/state story. Manage which of ASR / encoder /
+          VL / instruct are resident when (VL-450M light path vs 1.6B slides).
+        depends_on: [F-501]
+        files:
+          - lib/lfm2_wrapper.py
+
+  # ─── WORKSTREAM 6: Visual & Attribution Awareness ────────────────
+  # Priority: V2 — supersedes the acoustic-first parts of WORKSTREAM 3.
+  # Attribution hierarchy: channel > platform metadata > vision > acoustic.
+  # Full plan: docs/architecture/liquid-rearchitecture.md
+
+  awareness:
+    name: "Visual & Attribution Awareness"
+    phase: V2
+    description: >
+      Re-order speaker attribution to a hierarchy of truth: channel source
+      (ground truth) > platform active-speaker (a11y / VLM, with real names) >
+      acoustic diarization (fallback) > roster/enrollment. Add a visual context
+      sensor (LFM2.5-VL) that reads the shared screen into RAG. Detect the
+      meeting regime and degrade honestly in conference rooms.
+
+    features:
+      - id: F-601
+        name: "AttributionResolver — hierarchy + regime detection"
+        status: backlog
+        effort: M
+        description: >
+          Pluggable resolver that composes the attribution layers by confidence,
+          with L1 channel routing as the deterministic base. Regime detection
+          (solo-endpoint vs conference-room) drives honest degradation instead
+          of confidently-wrong labels. Refactors the current Tier-1/Tier-2 split.
+        depends_on: []
+        files:
+          - new: lib/attribution/resolver.py
+          - src/api/session.py
+
+      - id: F-602
+        name: "a11y roster-name reader (L4 enrichment)"
+        status: backlog
+        effort: S
+        description: >
+          RESCOPED per F-500: a11y exposes participant NAMES and own-mute state,
+          NOT a queryable active-speaker. Read the roster from the meeting
+          window's accessibility tree to name L3 acoustic clusters (L4). Active-
+          speaker is NOT an a11y capability — do not attempt it here.
+        depends_on: [F-500, F-601]
+        files:
+          - new: lib/attribution/accessibility.py
+
+      - id: F-603
+        name: "VisualContextCapture — LFM2.5-VL-Extract (slides→RAG + roster)"
+        status: backlog
+        effort: L
+        description: >
+          GATED on a real-image test first (real speaker-view + real shared-slide
+          screenshots) — Stage-0 VLM finding is INCONCLUSIVE on synthetic images.
+          Scope: debounced screen capture; shared-screen / slide-deck read into
+          the RAG context (the killer feature for customer calls) + roster
+          extraction. Uses VL-Extract with a YAML field schema (prompt-sensitive).
+          NOT an active-speaker locator — Stage-0 signal there is negative.
+        depends_on: [F-500, F-601]
+        files:
+          - new: lib/attribution/visual_context.py
+          - lib/rag_engine.py
+
+      - id: F-604
+        name: "Acoustic diarization fix — segment + roster-bound"
+        status: backlog
+        effort: L
+        description: >
+          Rework Tier-2 (F-301): segment at speaker-change points (not silence
+          turns), embed homogeneous slices, cluster with re-assignment bounded to
+          the known roster size. Fallback only — used when L2/L2' unavailable.
+        depends_on: [F-601]
+        files:
+          - lib/diarization.py
+
+      - id: F-605
+        name: "Voice enrollment for known colleagues"
+        status: backlog
+        effort: L
+        description: >
+          Rework of F-302: pre-register frequent colleagues' voice profiles so
+          acoustic clusters map to real names. Highest-leverage add for the
+          conference-room regime.
+        depends_on: [F-604]
+        files:
+          - new: lib/speaker_enrollment.py
+          - app/src/components/MeetingSetup.tsx
+
+      - id: F-606
+        name: "Conference-room regime — honest degradation"
+        status: backlog
+        effort: S
+        description: >
+          Detect the shared-far-field-mic regime and degrade to a single
+          "Others (room)" bucket or clearly-flagged low-confidence Speaker N,
+          rather than emitting confidently-wrong names. Surface confidence in UI.
+        depends_on: [F-601]
+        files:
+          - lib/attribution/resolver.py
+          - app/src/components/TranscriptPane.tsx
+
+      - id: F-607
+        name: "Lexical speaker-consistency pass (LFM)"
+        status: backlog
+        effort: M
+        description: >
+          Cheap post-hoc LFM pass over (attribution hypothesis + transcript) to
+          catch turn-taking contradictions and named cues ("thanks, Priya").
+          Correction layer on top of attribution, not the mechanism.
+        depends_on: [F-601]
+        files:
+          - new: lib/attribution/lexical_consistency.py
+
+      - id: F-608
+        name: "Zoom high-fidelity mode — Meeting SDK (L2)"
+        status: backlog
+        effort: XL
+        description: >
+          Follow-on high-fidelity path (per Stage-0 research): Zoom Meeting SDK on
+          the host's machine — onUserActiveAudioChange for ground-truth active
+          speaker + onOneWayAudioRawDataReceived for per-participant PCM (makes
+          diarization trivial). Local, host/co-host perm, no cloud. Zoom-only;
+          Teams/Meet fall back to the acoustic + a11y path. Optional mode, not a
+          baseline dependency.
+        depends_on: [F-601]
+        files:
+          - new: lib/attribution/zoom_sdk.py

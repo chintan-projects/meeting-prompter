@@ -273,7 +273,7 @@ class TestRosterBoundedClustering:
 
     def test_roster_reassigns_to_nearest(self, diarizer: SpeakerDiarizer) -> None:
         diarizer.set_roster_size(2)
-        a = diarizer._assign_speaker(_make_embedding(1))
+        diarizer._assign_speaker(_make_embedding(1))
         diarizer._assign_speaker(_make_embedding(500))
         # A third distinct speaker must re-assign to one of the two clusters.
         third = diarizer._assign_speaker(_make_embedding(999))

@@ -13,7 +13,7 @@ default. ``evaluate_probe_gate`` computes that comparison honestly (per-class).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from lib.intelligence.heads.probe_data import (
     PROBE_LABELS,
@@ -37,11 +37,11 @@ _LABEL_TO_TYPE: Dict[str, Optional[TriggerType]] = {
 }
 
 
-class _EmbedderLike:
+class _EmbedderLike(Protocol):
     """Minimal structural type: something with embed / embed_batch."""
 
-    def embed(self, text: str) -> List[float]: ...  # pragma: no cover
-    def embed_batch(self, texts: List[str]) -> List[List[float]]: ...  # pragma: no cover
+    def embed(self, text: str) -> List[float]: ...
+    def embed_batch(self, texts: List[str]) -> List[List[float]]: ...
 
 
 class LinearProbeHead:

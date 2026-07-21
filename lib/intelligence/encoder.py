@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 if TYPE_CHECKING:  # heavy deps stay out of import time
     import numpy as np
@@ -40,8 +40,9 @@ class EncoderBackbone:
         self._model_dirname = model_dirname
         self._device = device
         self._max_tokens = max_tokens
-        self._tok: Optional[object] = None
-        self._backbone: Optional[object] = None
+        # Dynamically-typed HF objects (untyped third-party); Any is intentional.
+        self._tok: Any = None
+        self._backbone: Any = None
         self._lock = threading.Lock()
 
     def resolve_path(self) -> Path:
@@ -74,7 +75,9 @@ class EncoderBackbone:
 
             device = self._device or ("mps" if torch.backends.mps.is_available() else "cpu")
             logger.info("Loading encoder backbone: %s (device=%s)", path.name, device)
-            tok = AutoTokenizer.from_pretrained(str(path), trust_remote_code=True)
+            tok = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
+                str(path), trust_remote_code=True
+            )
             backbone = AutoModelForMaskedLM.from_pretrained(str(path), trust_remote_code=True).lfm2
             backbone.eval().to(device)
             self._tok = tok
@@ -97,7 +100,7 @@ class EncoderBackbone:
         out: List[List[float]] = []
         with torch.no_grad():
             for t in texts:
-                enc = self._tok(  # type: ignore[operator]
+                enc = self._tok(
                     t, return_tensors="pt", truncation=True, max_length=self._max_tokens
                 ).to(self._device)
                 hs = self._backbone(**enc).last_hidden_state  # [1, T, H]

@@ -67,7 +67,7 @@ class WarmModelRuntime:
         """
         if encoder:
             try:
-                self.encoder()._load()  # type: ignore[attr-defined]
+                self.encoder()._load()
             except Exception as exc:
                 logger.warning("Encoder warm-up failed (will lazy-load): %s", exc)
 

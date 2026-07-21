@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Sequence
 
 
 class TurnLike(Protocol):
@@ -88,7 +88,7 @@ class LexicalConsistencyPass:
                     return display
         return None
 
-    def analyze(self, turns: List[TurnLike]) -> List[SpeakerCorrection]:
+    def analyze(self, turns: Sequence[TurnLike]) -> List[SpeakerCorrection]:
         """Return proposed relabels for generically-labeled remote turns."""
         corrections: List[SpeakerCorrection] = []
         if not self._names:

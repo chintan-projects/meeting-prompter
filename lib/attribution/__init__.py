@@ -28,4 +28,5 @@ __all__ = [
     "Regime",
     "LexicalConsistencyPass",
     "SpeakerCorrection",
+    "correct_segments",
 ]

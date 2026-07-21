@@ -64,3 +64,5 @@ app/node_modules/
 app/dist/
 app/src-tauri/target/
 output/
+# Local eval/training fixtures (may contain real meeting data)
+data/fixtures/

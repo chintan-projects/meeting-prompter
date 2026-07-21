@@ -433,6 +433,25 @@ workstreams:
           - tests/eval/rag_eval_dataset.yaml
           - tests/eval/test_rag_eval.py
 
+      - id: F-510
+        name: "Frozen-encoder linear-probe heads (v1, no GPU/forge)"
+        status: backlog
+        effort: M
+        description: >
+          The v1 encoder head that needs NO training of the model: mean-pool the
+          FROZEN LFM2.5-Encoder-350M → 1024-d, fit a logistic-regression probe on a
+          labeled set (sklearn, seconds on CPU). Encoder-only (no causal), no forge,
+          no GPU. Spike measured macro-F1 0.886 off-the-shelf on the 5-way trigger
+          task (scripts/spike_encoder_linear_probe.py). Ships as the first
+          non-heuristic Head behind the Head interface, wired as default ONLY if it
+          beats the heuristic on a frozen held-out split (else stays off, numbers
+          recorded). Decouples encoder intelligence from the forge bidirectional
+          change; F-503/504/505 (forge-LoRA) become the measured upgrade over this.
+        depends_on: [F-501]
+        files:
+          - new: lib/intelligence/heads/linear_probe.py
+          - new: data/fixtures/trigger_probe_dataset.jsonl
+
       - id: F-501
         name: "EncoderIntelligenceLayer interface + typed turn-state"
         status: backlog
@@ -465,15 +484,17 @@ workstreams:
           - tests/eval/
 
       - id: F-503
-        name: "Trigger router head (distilled seq-classifier)"
+        name: "Trigger router head (forge-LoRA, v2 over F-510 probe)"
         status: backlog
         effort: L
         description: >
-          Distill trigger-type routing + question detection into an encoder
-          sequence-classifier (mean-pool). Seed labels from current heuristics +
-          1.2B teacher over real meeting transcripts (Granola). LoRA with LFM2.5
-          module names. Ship only when it beats the heuristic on held-out eval.
-        depends_on: [F-501]
+          The v2 upgrade over the F-510 frozen probe: an ENCODER-backed sequence
+          classifier (mean-pool) LoRA-trained via forge (synthetic-first data).
+          Encoder only — NEVER causal. GATED on the forge bidirectional-encoder
+          change landing + verifying first (forge maps sequence_classifier to causal
+          by default). Ship only when it beats the F-510 probe / heuristic on a
+          frozen held-out eval.
+        depends_on: [F-501, F-510]
         files:
           - new: lib/intelligence/heads/trigger_router.py
 

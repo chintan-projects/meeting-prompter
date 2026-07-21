@@ -48,6 +48,7 @@ fundamentally (e.g. collapsing to a single omni-model). Neither holds.
 | Spike | Result | Consequence |
 |---|---|---|
 | **Encoder smoke** | ✅ GREEN — clean weight load (via `AutoModelForMaskedLM` → `.lfm2` backbone), **~14 ms / turn** mean-pooled on MPS, 1024-dim | Encoder intelligence layer is feasible with large latency headroom. Build it. |
+| **Frozen-encoder probe** | ✅ off-the-shelf macro-F1 **0.886** on the 5-way trigger task (frozen encoder + logistic regression; 0.85 zero-fit centroid; 0.21 floor; 70-utt synthetic) | The encoder already separates the classes linearly. A **no-GPU / no-forge linear-probe head is a viable v1** (F-510); forge-LoRA becomes a measured upgrade over it, not a from-scratch bet. |
 | **Retrieval swap** | ⚠️ SAFE but unproven-better — `LFM2.5-Embedding-350M` **ties** MiniLM exactly (Hit@1 94.4 / Hit@3 100 / MRR 0.972). Eval saturates (doc-level, ~3 distinct docs) so it **can't discriminate** retrievers | Swap passes "do not regress." Must **harden the eval** (chunk-level, more/confusable docs, query/passage prompts) to claim improvement. |
 | **Encoder vs Embedding geometry** | ✅ cos 0.855 (encoder) vs 0.095 (embedding) on unrelated text | Confirms the thesis empirically: Encoder→heads, Embedding→retrieval. Never swap. |
 | **a11y active-speaker** | ❌ near-dead-end — no documented "speaking" AX attribute on Zoom/Teams/Meet; no known project reads it; a11y gives **names + own mute state only** | a11y demoted to **roster-name enrichment (L4)**. Not a primary signal. |
@@ -102,6 +103,12 @@ generation stays generative. Each model does the job its objective was built for
   (~14 ms measured); per-token vectors for span heads.
 - **Heads (distilled, tiny):** trigger router (seq-cls) · quality/rhetorical gate
   (multi-label) · evidence spans (token-cls). Optional semantic-alert head.
+- **Two-tier head path:** **v1 = frozen-encoder linear probe** (F-510) — a logistic
+  head on frozen mean-pooled embeddings; no GPU, no forge, encoder-only; measured at
+  0.886 macro-F1 off-the-shelf. Ships as the first non-heuristic `Head`, gated to beat
+  the heuristic on a held-out split. **v2 = forge-LoRA** (F-503/504/505) — the measured
+  upgrade once the forge bidirectional-encoder change lands. v1 decouples encoder
+  intelligence from that forge work.
 - **Route-first, hot/cold:** router/gate decide per turn. Hot path answers or
   suppresses from heads. Cold path runs retrieval + generation **only when a head
   fires** — no more running every trigger every turn.
@@ -160,7 +167,7 @@ Each stage: reversible, gated on a number or a decision.
 | Stage | Scope | Gate / exit criteria | Features |
 |---|---|---|---|
 | **0 — Decision spikes** ✅ done | encoder smoke; retrieval eval; a11y + incumbent research; VLM probe | See findings above | F-500 |
-| **1 — Structural refactor (no training)** | `EncoderIntelligenceLayer` + typed turn-state; wire encoder backbone; keep heuristics as first head impls behind it; `AttributionResolver` hierarchy + regime scaffold; land retrieval swap; **delete-as-you-replace** | Full suite green; retrieval ≥ baseline; zero behavior regression | F-501, F-502, F-601 |
+| **1 — Structural refactor (no training)** | `EncoderIntelligenceLayer` + typed turn-state; wire encoder backbone; keep heuristics as first head impls behind it; **v1 frozen-encoder linear-probe head** (no GPU/forge); `AttributionResolver` hierarchy + regime scaffold; land retrieval swap; **delete-as-you-replace** | Full suite green; retrieval ≥ baseline; probe head beats heuristic on held-out else stays off; zero behavior regression | F-501, F-502, F-510, F-601 |
 | **1b — Harden retrieval eval** | chunk-level relevance, more/confusable docs, query/passage prompts — give the eval discriminating power | Eval separates two retrievers by a meaningful margin | F-509 (new) |
 | **2 — Awareness** | acoustic diarization fix (speaker-change seg, roster-bound); voice enrollment; conference-room degradation; a11y roster-name reader | Attribution eval on real calls; honest degradation verified | F-604, F-605, F-606, F-602 |
 | **2b — VLM visual context** *(gated on real-image test)* | Only after a real speaker-view + real shared-slide test: `VisualContextCapture` (VL-Extract slides→RAG + roster; screen-share detected). Debounced. **Not** active-speaker | Real-image test passes; slides retrievable in RAG | F-603 |

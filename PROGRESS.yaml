@@ -1,50 +1,52 @@
 # meeting-prompter — Active Progress
 # Stays LEAN. Only active/in-progress state here.
 
-current_phase: "liquid-rearchitecture (Wave A landed)"
-current_focus: "First live call ran and produced the decisive product finding: prompt spam. D-02 built in response (F-208) — quiet by default, Cmd+L listen window + select-to-answer, gate at _process_trigger. Next: a live call to validate D-02, which also re-runs the WS-14 checklist (F-503 promote/revert, F-507/F-508)."
+current_phase: "liquid-rearchitecture (Wave A landed) + D-02 user-gated interaction"
+current_focus: "Two live tests this session. First surfaced prompt spam -> D-02/F-208 (quiet by default, Cmd+L window + select-to-answer). Second surfaced silent dead ends, heading-only cards, ANSWER/FYI duplicates, and the refiner narrating into the transcript — all fixed. NOTHING SINCE a215d4b HAS RUN LIVE: three commits of behaviour changes are stacked up unvalidated."
 
 active_work:
   - id: "WS-14"
-    name: "Live dual-stream test (mic + per-app capture)"
+    name: "Live validation rehearsal (10 min, solo) — gates demo readiness"
     status: pending
-    notes: "SECOND RUN pending — first call ran 2026-07-22 and surfaced prompt spam -> D-02/F-208 built. Now also validates the quiet-by-default flow (Cmd+L window, select-to-answer, timer-less window). Original scope: validates F-604 segmentation, F-601/F-606 attribution, F-607 corrections; promotes F-507 (Extract) + F-508 (persistent ASR); confirms or reverts f503_router_enabled (currently ON, unproven live). PREFLIGHT DONE 2026-07-22 (docs/ws14-live-call-checklist.md): models/runners/audio devices/backend/WS/cargo all verified; live retrieval path exercised end-to-end at 16-174ms. ONLY BLOCKER: Screen Recording permission (user action, else per-app capture silently degrades to mic-only)."
+    notes: "Run from your OWN terminal (TCC follows the spawn chain); Zoom native app, not Chrome (BUG-004). Watch: (1) select text -> 'Looking in your corpus…' then a card; (2) select something off-topic -> 'Nothing in your corpus' note, NOT silence; (3) Cmd+L -> ask aloud -> card; (4) Cmd+L off -> silence; (5) is 'N heard · no match' climbing or stuck at 0 — those point at different fixes. Steps 1-2 are the unvalidated feedback fix. Still open from original scope: speaker attribution, turn segmentation, f503 promote/revert, F-507/F-508."
 
 blockers: []
 
 pending_decisions:
-  - "Review liquid-rearch branch before merge to main (Wave A + F-503)."
-  - "D-02 built quiet-by-default (F-208). Validate on the next live call: does Cmd+L + select-to-answer feel right, and is the timer-less window a problem in practice?"
-  - "Flip triggers.f503_router_enabled=true after F-503 validates on a live call (WS-14)."
+  - "Demo readiness gated on the rehearsal — quality bar IS met (21/21 readable cards on the held-out set); live behaviour is unproven."
+  - "Review liquid-rearch before merge to main (67 commits, unreviewed, unpushed)."
+  - "Set triggers.f503_router_enabled=false if triggers misfire live — isolates 'router is wrong' from 'product is wrong'."
+  - "D-07: re-enable the refiner only once it runs on its own fast small model (now off by default)."
 
 recent_sessions:
+  - id: "session-018"
+    date: "2026-07-22"
+    focus: "Docs rebuild + D-02 user-gated interaction + live-test bug fixes"
+    completed:
+      - "Docs: rebuilt README + ARCHITECTURE (output-shape audit, model map, future scope); new docs/DEVELOPER-GUIDE.md + docs/distillation.md; fixed stale model tables in CLAUDE.md"
+      - "D-02/F-208: ListenGate at _process_trigger (one choke point, short-circuits before retrieval); Cmd+L window + select-to-answer; explicit requests bypass the gate"
+      - "Fixed silent dead ends: user-initiated requests always render an outcome; trigger_miss surfaced as a count, not a card"
+      - "Fixed heading-only cards (is_heading_only — structure, not word count): 20/21 -> 21/21 readable"
+      - "Fixed ANSWER+FYI duplication (dedup on source unit; priority sort picks the winner)"
+      - "Fixed refiner narrating edits into the transcript (D-07); refiner off by default"
+      - "873 Python tests (+48), 20 frontend (+4), ruff + mypy + tsc clean"
+    next_recommended: "Run the 10-minute rehearsal before any demo — three commits of behaviour changes have never run in the app."
   - id: "session-017"
     date: "2026-07-20"
     focus: "Liquid re-architecture Wave A (code waves only, unattended) — branch liquid-rearch"
     completed:
-      - "12 Wave A features landed test-gated: F-502/509 retrieval; F-501/510/506 encoder intelligence; F-601/606/604/605/607 attribution; F-507/508 runtime (see STATUS-overnight.md)"
-      - "F-510 probe wired-but-off by decision (regresses question class on synthetic data); F-507/508 path-built, live promotion pending"
-      - "704 Python tests (+119) + 10 slow gates + 16 frontend; ruff + mypy --strict + tsc clean"
-    next_recommended: "Review + merge liquid-rearch; run a live call; land forge bidirectional-encoder change to unblock Wave B head training"
+      - "12 Wave A features landed test-gated: F-502/509 retrieval; F-501/510/506 encoder intelligence; F-601/606/604/605/607 attribution; F-507/508 runtime"
+      - "F-510 probe wired-but-off by decision; F-507/508 path-built, live promotion pending"
+      - "704 Python tests (+119) + 10 slow gates + 16 frontend; all gates clean"
+    next_recommended: "Review + merge liquid-rearch; run a live call"
   - id: "session-016"
     date: "2026-03-09"
     focus: "WS-14 dual-stream pipeline hardening — thread safety, cleanup, robustness"
     completed:
-      - "TranscriptBuffer thread safety: threading.Lock on all public methods (add_chunk, on_silence, flush, reset, all_turns, turn_count)"
-      - "Session pipeline cleanup: try/finally for mic capture, pipeline finally stops mic, _thread_safe_put logs drops"
-      - "SystemAudioCapture: _capture_error init in __init__, temp WAV cleanup in try/finally"
-      - "Bounded _trigger_history with deque(maxlen=1000)"
-      - "5 thread safety tests (concurrent add_chunk, silence, flush, reads, source attribution)"
-      - "CLAUDE.md: added dual-stream architecture, per-app capture paths, updated test count"
-    next_recommended: "Live dual-stream test with Zoom/Teams call, then F-111 section-aware chunking"
-  - id: "session-015"
-    date: "2026-03-07"
-    focus: "F-110 RAG quality audit + F-201 rhetorical question detection"
-    completed:
-      - "F-110: eval harness (21 queries, Hit@1=94.4%, MRR=0.972), fixed FTS5 schema/triggers/queries, confidence calibration, re-ranking wired, threshold tuned"
-      - "F-201: 3 suppression layers (tag questions, self-answering, rhetorical forms), 46 tests"
-      - "399 Python tests + 5 eval tests passing"
-    next_recommended: "Live dual-stream test, then F-111 section-aware chunking or F-112 result dedup"
+      - "TranscriptBuffer thread safety; session pipeline try/finally cleanup; bounded _trigger_history"
+      - "5 thread safety tests; CLAUDE.md dual-stream architecture"
+    next_recommended: "Live dual-stream test with Zoom/Teams call"
+
 completed_summary:
-  total_items: 68
-  total_sessions: 17
+  total_items: 75
+  total_sessions: 18

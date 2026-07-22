@@ -724,7 +724,7 @@ workstreams:
           - new: lib/corpus/distiller.py
       - id: F-702
         name: "Local distiller model (on-device, no cloud egress)"
-        status: in_progress  # 2026-07-22: v1 shipped — prompted LFM2.5-2.6B backend (backend="local", default in CLI/API), 88 units on playbook, 0 gaps, tables prose-ified; forge fine-tune (train specialist on cloud-distilled pairs) still open
+        status: blocked  # 2026-07-22: v1 shipped (prompted LFM2.5-2.6B, backend="local", default; 88 units, tables prose-ified). v2 forge fine-tune ON HOLD — judge calibration at n=21 shows distillation is worth only +5pp (76->81%) on this corpus; gate the forge on evidence from a messy corpus. See tests/eval/corpus_calibration_2026-07-22.md
         effort: XL
         description: >
           Forge a local small model for the section → grounded-answer-unit task
@@ -736,7 +736,7 @@ workstreams:
           - new: lib/corpus/distiller.py
       - id: F-703
         name: "Corpus readiness score (fit-for-purpose gate)"
-        status: done  # 2026-07-22: lib/corpus/readiness.py (local rater + multi-unit) + POST /corpus/readiness; judge calibration pending operator key
+        status: in_progress  # 2026-07-22: lib/corpus/readiness.py + POST /corpus/readiness shipped, BUT the local rater is miscalibrated (57% agreement with judge; harsh in 36% of cells, understates a good corpus by 38pp). Recalibrate on a SEPARATE dev question set (21-q set stays held out) before showing the score as a user-facing verdict.
         effort: M
         description: >
           Run likely questions through the corpus, score each retrieved answer
@@ -781,3 +781,35 @@ workstreams:
         depends_on: [F-701]
         files:
           - new: lib/corpus/distiller.py
+      - id: F-707
+        name: "Recalibrate the readiness rater against the judge"
+        status: backlog
+        effort: M
+        description: >
+          The shipped local rater agrees with the cloud judge on only 57% of cells
+          and is systematically harsh (36% harsher vs 7% softer), understating a
+          good corpus by 38 points — it would tell users a fit corpus is unfit.
+          Likely cause: the double gate (cosine >= 0.60 AND term overlap >= 0.50)
+          rejects correct answers that word things differently from the question.
+          Author a SEPARATE dev question set, judge it, tune thresholds (or replace
+          the overlap arm with a semantic measure) against that set only, then
+          verify on the held-out 21 — never tune against the acceptance set.
+        depends_on: [F-703]
+        files:
+          - lib/corpus/readiness.py
+          - new: tests/eval/corpus_questions_dev.yaml
+      - id: F-708
+        name: "Validate corpus-prep on a messy corpus"
+        status: backlog
+        effort: M
+        description: >
+          Judge-scored, distillation is worth +5pp on a written-through explainer
+          (76% -> 81%) because the raw corpus was already fit. The open question is
+          whether it earns its place on what users actually bring — Notion exports,
+          raw meeting notes, slide dumps, PDFs. Run the same before/after judge
+          comparison on such a corpus. This is the decisive test for D-09 (is
+          corpus prep a product step?) and the gate for the F-702 v2 forge.
+        depends_on: [F-701, F-703]
+        files:
+          - scripts/lab/compare_corpus.py
+          - new: tests/eval/

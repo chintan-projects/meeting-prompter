@@ -80,3 +80,28 @@ toggle** (same posture as Notion export), but **local is the default and the pro
    (LEAP/forge); target the section → grounded-answer-unit task, including table reading.
 3. **Ship local as default**; keep cloud as an optional consent-gated quality toggle.
 4. **Move readiness eval local** (local judge or heuristic) as a follow-on.
+
+## Validation update (2026-07-22) — the motivating evidence did not replicate
+
+Steps 3 and 4 shipped (F-702 v1 prompted on-device backend is the default; the readiness
+check runs on a local heuristic rater). **Step 2 is now on hold**, and the Context section
+above should be read with this correction:
+
+- The "**25% → 50%**" lift cited above came from a **4-question probe selected from the
+  corpus's observed failures**. On the held-out 21-question set, judge-scored, the raw
+  corpus already answers **76%** and distillation reaches **81%** — a **+5 pp** lift, one
+  question. Data: [tests/eval/corpus_calibration_2026-07-22.md](../../tests/eval/corpus_calibration_2026-07-22.md).
+- The **local (step 3) backend works as designed** — it reads tables and reshapes them into
+  speakable prose, which the heuristic provably cannot. That capability is real and
+  demonstrable; what is *not* established is that it converts into meeting-answer coverage
+  on a well-structured corpus.
+- The **readiness check (step 4) is not trustworthy yet**: 57% agreement with the judge,
+  systematically harsh (36% of cells vs 7% soft). It must be recalibrated against a separate
+  development question set before its score is presented to a user as a verdict.
+
+**This does not reverse the decision.** The privacy argument for local-only distillation is
+independent of the size of the quality lift: *if* we distill a user's corpus, it must happen
+on-device. What changed is the **cost/benefit of step 2** — forging a specialist model to
+chase a 5-point remainder on the one corpus we have measured is not justified yet. Gate the
+forge on evidence from a **messy** corpus (Notion export, raw meeting notes, slide dumps),
+where the 88%-already-good baseline of a written-through explainer should not hold.

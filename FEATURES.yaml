@@ -711,7 +711,7 @@ workstreams:
     features:
       - id: F-701
         name: "Corpus distiller (reshape docs → grounded answer-units)"
-        status: in_progress
+        status: done  # 2026-07-22: lib/corpus/{text,distiller,cloud}.py; local model backend tracked as F-702
         effort: L
         description: >
           Walk a source doc section-by-section and emit self-contained, grounded
@@ -736,7 +736,7 @@ workstreams:
           - new: lib/corpus/distiller.py
       - id: F-703
         name: "Corpus readiness score (fit-for-purpose gate)"
-        status: in_progress
+        status: done  # 2026-07-22: lib/corpus/readiness.py (local rater + multi-unit) + POST /corpus/readiness; judge calibration pending operator key
         effort: M
         description: >
           Run likely questions through the corpus, score each retrieved answer

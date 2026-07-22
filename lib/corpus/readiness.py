@@ -149,8 +149,42 @@ def heuristic_rater(question: str, card: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def merged_card(cards: Sequence[dict[str, Any]], max_units: int = 2) -> Union[dict[str, Any], None]:
+    """Merge the top answer-shaped cards into one multi-unit answer candidate.
+
+    Compound questions whose answer spans sections (the INT4 failure mode) can be
+    answered live by showing two short borrowable units together — a legit UX.
+    Provenance is kept per unit in ``parts``; the merged confidence is the MIN of
+    the parts (both must actually be relevant), so a strong card can't smuggle a
+    weak one into a `good`.
+    """
+    shaped = [c for c in cards if c.get("answer_shaped")][:max_units]
+    if len(shaped) < 2:
+        return None
+    return {
+        "chunk_id": shaped[0]["chunk_id"],
+        "merged": True,
+        "parts": [
+            {"doc": c.get("doc", ""), "heading": c.get("heading", ""), "chunk_id": c["chunk_id"]}
+            for c in shaped
+        ],
+        "doc": " + ".join(dict.fromkeys(str(c.get("doc", "")) for c in shaped)),
+        "heading": " + ".join(str(c.get("heading", "")) for c in shaped),
+        "cosine": min(float(c.get("cosine") or 0.0) for c in shaped),
+        "fused": min(float(c.get("fused") or 0.0) for c in shaped),
+        "text": "\n\n".join(str(c.get("text", "")) for c in shaped),
+        "words": sum(int(c.get("words") or 0) for c in shaped),
+        "answer_shaped": True,
+    }
+
+
 def score_question(question: str, cards: Sequence[dict[str, Any]], rater: Rater) -> dict[str, Any]:
-    """Rate every card for one question and return the best verdict row."""
+    """Rate every card for one question and return the best verdict row.
+
+    A single unit beats a merged answer at equal rank (strictly-greater
+    comparison, single cards first), so multi-unit only wins when it genuinely
+    upgrades the rating — one glanceable card is the better live UX.
+    """
     best_rank = -1
     best: dict[str, Any] = {
         "question": question,
@@ -158,6 +192,7 @@ def score_question(question: str, cards: Sequence[dict[str, Any]], rater: Rater)
         "reason": "nothing retrieved",
         "doc": "",
         "heading": "",
+        "merged": False,
     }
     for card in cards:
         verdict = rater(question, card)
@@ -170,8 +205,19 @@ def score_question(question: str, cards: Sequence[dict[str, Any]], rater: Rater)
                 "reason": verdict.get("reason", ""),
                 "doc": card.get("doc", ""),
                 "heading": card.get("heading", ""),
+                "merged": bool(card.get("merged", False)),
             }
+            if card.get("merged"):
+                best["parts"] = card.get("parts", [])
     return best
+
+
+def _candidates(cards: list[dict[str, Any]], multi_unit: bool) -> list[dict[str, Any]]:
+    """Single cards first (preferred at equal rank), then the merged candidate."""
+    if not multi_unit:
+        return cards
+    merged = merged_card(cards)
+    return cards + [merged] if merged else cards
 
 
 def readiness(
@@ -181,6 +227,7 @@ def readiness(
     rater: Rater = heuristic_rater,
     top_k: int = DEFAULT_TOP_K,
     db_path: Union[Path, None] = None,
+    multi_unit: bool = True,
 ) -> dict[str, Any]:
     """Score a corpus against a question set → readiness % + gap list.
 
@@ -194,6 +241,8 @@ def readiness(
         top_k: retrieval depth per question.
         db_path: index path when ``corpus`` is a directory (default: a fresh
             ``data/rag_readiness.db``, stale copies removed first).
+        multi_unit: also consider a merged top-2 answer per question (compound
+            questions whose answer spans sections; shown live as two snippets).
 
     Returns:
         ``{score_pct, questions, good, partial, gap, gaps: [...], rows: [...]}``
@@ -202,14 +251,22 @@ def readiness(
     """
     if callable(corpus):
         rows = [
-            score_question(q, [borrowable_card(r) for r in corpus(q, top_k)], rater)
+            score_question(
+                q, _candidates([borrowable_card(r) for r in corpus(q, top_k)], multi_unit), rater
+            )
             for q in questions
         ]
     else:
         engine = _build_engine(corpus, db_path)
         try:
             rows = [
-                score_question(q, [borrowable_card(r) for r in engine.retrieve(q, top_k)], rater)
+                score_question(
+                    q,
+                    _candidates(
+                        [borrowable_card(r) for r in engine.retrieve(q, top_k)], multi_unit
+                    ),
+                    rater,
+                )
                 for q in questions
             ]
         finally:

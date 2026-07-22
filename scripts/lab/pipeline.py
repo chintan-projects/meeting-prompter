@@ -30,6 +30,7 @@ from lib.corpus.readiness import (  # noqa: F401 — re-exported for lab compat
     BORROWABLE_MIN_WORDS,
     RATING_RANK,
     aggregate_coverage,
+    merged_card,
 )
 from lib.corpus.text import clean_markdown  # noqa: F401 — re-exported for lab compat
 from lib.paths import get_docs_dir, get_models_dir
@@ -303,6 +304,12 @@ class LabEngine:
                     ),
                 }
             )
+        # Multi-unit candidate (F-703/T3): compound questions whose answer spans
+        # sections can be answered by showing the top-2 units together.
+        merged = merged_card(cards)
+        if merged is not None:
+            merged["note"] = "merged top-2 (multi-unit answer)"
+            cards.append(merged)
         clean_ms = round((time.time() - t0) * 1000)
         return {
             "retrieval_ms": int(retrieval.get("retrieval_ms") or 0),

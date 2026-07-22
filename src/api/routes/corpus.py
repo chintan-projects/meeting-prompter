@@ -33,6 +33,7 @@ class GapRow(BaseModel):
     reason: str
     doc: str
     heading: str
+    merged: bool = False  # best answer is a multi-unit (top-2) merged card
 
 
 class ReadinessResponse(BaseModel):
@@ -63,6 +64,6 @@ def score_readiness(req: ReadinessRequest) -> ReadinessResponse:
         good=result["good"],
         partial=result["partial"],
         gap=result["gap"],
-        gaps=[GapRow(**row) for row in result["gaps"]],
-        rows=[GapRow(**row) for row in result["rows"]],
+        gaps=[GapRow.model_validate(row) for row in result["gaps"]],
+        rows=[GapRow.model_validate(row) for row in result["rows"]],
     )

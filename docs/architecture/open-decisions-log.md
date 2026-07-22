@@ -251,3 +251,49 @@ a self-contained, task-by-task execution prompt (T1–T8) to complete F-701..F-7
 questions. **Product implication:** distillation earns a place as a **one-time prep
 step** (D-09), on a **local model** (D-10 / ADR-001), gated by a **readiness score**
 (D-11). Pure-logic paths are unit-tested (`tests/test_lab.py`).
+
+### E-03 productization + 21-question measurement (2026-07-22, T1–T4)
+
+**Landed (branch liquid-rearch):**
+- **F-701** — distiller productized into `lib/corpus/` (`text.py`, `distiller.py`,
+  `cloud.py` as the single auditable egress point, offline/opt-in per ADR-001).
+  `scripts/lab/` are now thin wrappers; tests in `tests/test_corpus_distiller.py`.
+- **F-703** — readiness score as a library + API: `lib/corpus/readiness.py`
+  (`readiness(corpus, questions)` → `{score_pct, good, partial, gap, gaps[]}`),
+  `POST /corpus/readiness`. Ships a **local rater** (answer-shapedness +
+  retrieval confidence + question-term overlap); the cloud judge stays an
+  offline calibration instrument. Tests in `tests/test_corpus_readiness.py`.
+- **Multi-unit answers (T3 lever)** — `merged_card` (top-2 answer-shaped units,
+  min-confidence, per-unit provenance) is a scoring candidate in readiness and a
+  card in the lab's borrowable panel. Single units win ties (better live UX);
+  unit tests prove the partial→good upgrade on complementary halves.
+- **T4 metric** — held-out 21-question set for the playbook corpus:
+  `tests/eval/corpus_questions.yaml` (single/table/compound tagged; independence
+  from the distiller is a stated rule in the file).
+
+**Coverage, 21 questions, LOCAL rater** (`python -m scripts.lab.compare_corpus
+--questions-file tests/eval/corpus_questions.yaml --rater local`):
+
+| Corpus | good | partial | gap | coverage |
+|---|---|---|---|---|
+| Original | 8/21 | 12 | 1 | **38%** |
+| Distilled (heuristic backend only) | 15/21 | 6 | 0 | **71%** |
+
+Tracks the E-03 cloud finding (25%→75%, n=4, judge-scored) at 5× the n — and this
+delta is from the **free heuristic** distiller; the model-backed distiller (cloud
+offline / local F-702) is expected to add the table-reading wins on top.
+
+**INT4 (Q01) status — content closed, rating capped by the rater:** the Part-1
+topic unit contains BOTH halves ("~1–3% quality cost" + the MMLU-vs-MATH degrade
+shape), ranks #2, and the merged top-2 also assembles them. It rates `partial`
+(not `good`) under the local rater because the question's words ("hurt",
+"accuracy") never appear in Part 1 — a vocabulary-mismatch conservatism of the
+term-overlap heuristic, not a corpus gap. Per the no-overfitting rule the rater
+was NOT tuned to flip it. Judge-scored confirmation (expected `good` per E-03
+finding #4) needs an operator run with ANTHROPIC_API_KEY:
+`python -m scripts.lab.compare_corpus --questions-file tests/eval/corpus_questions.yaml --rater judge`
+— which also doubles as local-rater↔judge calibration on the full set.
+
+**Remaining caveat:** the local rater is uncalibrated against the judge at n=21;
+its `good` gate is conservative (double gate: cosine + term coverage), so 71% is
+more likely an under- than over-statement — but the judge run is the trust gate.

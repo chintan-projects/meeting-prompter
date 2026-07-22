@@ -146,6 +146,70 @@ def test_readiness_shape_and_score_with_stub_retrieval() -> None:
     assert {"question", "best", "reason", "doc", "heading"} <= set(out["rows"][0])
 
 
+def test_merged_card_combines_top_two_with_provenance() -> None:
+    from lib.corpus.readiness import merged_card
+
+    cards = [
+        borrowable_card(_result(PROSE, 0.8, doc="a.md", chunk_id=1)),
+        borrowable_card(
+            _result(
+                "Quantization degrades most on multi-step math and reasoning "
+                "tasks, and far less on plain factual recall benchmarks.",
+                0.6,
+                doc="b.md",
+                chunk_id=2,
+            )
+        ),
+        {"answer_shaped": False, "cosine": 0.9, "text": "", "chunk_id": 3},
+    ]
+    merged = merged_card(cards)
+    assert merged is not None and merged["merged"]
+    assert [p["chunk_id"] for p in merged["parts"]] == [1, 2]
+    assert merged["cosine"] == 0.6  # min of parts — conservative
+    assert "a.md" in merged["doc"] and "b.md" in merged["doc"]
+
+
+def test_merged_card_needs_two_shaped_cards() -> None:
+    from lib.corpus.readiness import merged_card
+
+    assert merged_card([borrowable_card(_result(PROSE, 0.8))]) is None
+
+
+def test_multi_unit_upgrades_compound_question() -> None:
+    # Each unit alone covers half the compound question (partial); together they
+    # cover it (good). The merged candidate must win — with merged provenance.
+    half_a = _result("INT4 quantization costs about one to three percent accuracy.", 0.7, "a.md", 1)
+    half_b = _result(
+        "Quantization degrades most on multi-step math and reasoning tasks; "
+        "factual recall barely moves.",
+        0.65,
+        "b.md",
+        2,
+    )
+    question = "How much does INT4 quantization hurt accuracy, and where does it degrade most?"
+
+    def retrieve(query: str, top_k: int) -> list[RetrievalResult]:
+        return [half_a, half_b]
+
+    single = readiness(retrieve, [question], multi_unit=False)
+    multi = readiness(retrieve, [question], multi_unit=True)
+    assert single["rows"][0]["best"] == "partial"
+    assert multi["rows"][0]["best"] == "good" and multi["rows"][0]["merged"]
+    assert len(multi["rows"][0]["parts"]) == 2
+
+
+def test_single_unit_preferred_over_merged_at_equal_rank() -> None:
+    # If a single card already rates `good`, the merged candidate must not
+    # replace it (strictly-greater comparison; singles come first).
+    question = "How much does INT4 quantization hurt accuracy, and where does it degrade most?"
+
+    def retrieve(query: str, top_k: int) -> list[RetrievalResult]:
+        return [_result(PROSE, 0.8, "a.md", 1), _result(PROSE, 0.7, "b.md", 2)]
+
+    out = readiness(retrieve, [question], multi_unit=True)
+    assert out["rows"][0]["best"] == "good" and not out["rows"][0]["merged"]
+
+
 def test_readiness_empty_questions_scores_zero() -> None:
     out = readiness(lambda q, k: [], [])
     assert out["score_pct"] == 0 and out["questions"] == 0

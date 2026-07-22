@@ -1,37 +1,41 @@
 """Before/after corpus comparison — does distilling move coverage?
 
-Retrieves the same questions from the ORIGINAL corpus and the DISTILLED corpus,
-judges the top borrowable card from each (cloud judge), and prints per-corpus
-coverage side by side. This is the acceptance test for the distiller: the same
-instrument that diagnosed the corpus as unfit proves whether reshaping fixed it.
+Runs the same question set against the ORIGINAL corpus and the DISTILLED corpus
+through the readiness scorer (retrieval → borrowable cards → merged top-2
+candidate → a rater) and prints per-corpus coverage side by side. This is the
+acceptance test for the distiller: the same instrument that diagnosed the corpus
+as unfit proves whether reshaping fixed it.
 
-    python -m scripts.lab.compare_corpus                 # sample questions
-    python -m scripts.lab.compare_corpus "q1" "q2" ...   # your questions
+Raters:
+  - judge (default when ANTHROPIC_API_KEY is present): cloud Opus — offline
+    validation only (ADR-001).
+  - local: the shipped heuristic rater (lib.corpus.readiness) — no network.
 
-Needs ANTHROPIC_API_KEY for the judge (retrieval-only preview runs without it).
+    python -m scripts.lab.compare_corpus                          # sample questions
+    python -m scripts.lab.compare_corpus --questions tests/eval/corpus_questions.yaml
+    python -m scripts.lab.compare_corpus --rater local "q1" "q2"
+
 Run the distiller first:  python -m scripts.lab.distiller <src.md> [--backend cloud]
 """
 
 from __future__ import annotations
 
-import sys
+import argparse
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from lib.config import load_config
+from lib.corpus.readiness import Rater, heuristic_rater, readiness
 from lib.paths import get_docs_dir
 from lib.rag import RAGConfig
 from lib.rag_engine import RAGEngine
-from scripts.lab.pipeline import (
-    BORROWABLE_MIN_WORDS,
-    RATING_RANK,
-    SAMPLE_SPANS,
-    TOP_K,
-    clean_markdown,
-)
+from scripts.lab.pipeline import SAMPLE_SPANS, TOP_K
 
 DISTILLED_DIR = Path("data/distilled")
 DISTILLED_DB = Path("data/rag_distilled.db")
+ORIGINAL_DB = Path("data/rag_compare_orig.db")
 
 
 def _mk(docs_dir: Path, db: Path) -> RAGEngine:
@@ -49,75 +53,77 @@ def _mk(docs_dir: Path, db: Path) -> RAGEngine:
     return RAGEngine(docs_dir, db_path=db, config=rc)
 
 
-def _best_rating(eng: RAGEngine, span: str, use_judge: bool) -> dict[str, Any]:
-    """Retrieve top cards, judge each (or preview), return the best rating."""
+def judge_rater(question: str, card: dict[str, Any]) -> dict[str, str]:
+    """Adapt the cloud judge to the Rater protocol. Errors abort the run —
+    a silently degraded judge would misreport coverage."""
     from scripts.lab import judge as _judge
 
-    results = eng._pipeline.retrieve(span, top_k=TOP_K)
-    best_rank, best = -1, {"rating": "gap", "doc": "", "reason": "no cards"}
-    for r in results:
-        cleaned = clean_markdown(r.chunk_text)
-        if len(cleaned.split()) < BORROWABLE_MIN_WORDS:
-            continue
-        if not use_judge:
-            # retrieval-only preview: report the top doc/heading, no rating
-            return {
-                "rating": "?",
-                "doc": Path(r.document_path).name,
-                "heading": (r.heading_path or r.section_heading or "")[-60:],
-                "cosine": round(r.semantic_score, 3),
-            }
-        v = _judge.judge(span, cleaned)
-        if "error" in v:
-            return {"rating": "error", "reason": v["error"]}
-        rating = v.get("rating", "")
-        if rating not in RATING_RANK:
-            # Judge returned an unexpected shape — treat as an error, don't silently
-            # score it as a gap (which would understate coverage).
-            return {"rating": "error", "reason": f"invalid judge rating: {rating!r}"}
-        rank = RATING_RANK[rating]
-        if rank > best_rank:
-            best_rank, best = rank, {
-                "rating": rating,
-                "doc": Path(r.document_path).name,
-                "reason": v.get("reason", ""),
-            }
-    return best
+    v = _judge.judge(question, str(card.get("text", "")))
+    if "error" in v:
+        raise RuntimeError(f"judge failed: {v['error']}")
+    return {"rating": str(v.get("rating", "")), "reason": str(v.get("reason", ""))}
+
+
+def load_questions(path: Path) -> list[str]:
+    """Question texts from a corpus_questions.yaml (list of {id, text, ...})."""
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return [str(q["text"]) for q in data["questions"]]
+
+
+def _score(docs_dir: Path, db: Path, questions: list[str], rater: Rater) -> dict[str, Any]:
+    for suffix in ("", "-wal", "-shm"):
+        Path(f"{db}{suffix}").unlink(missing_ok=True)
+    engine = _mk(docs_dir, db)
+    try:
+        return readiness(engine.retrieve, questions, rater=rater, top_k=TOP_K)
+    finally:
+        engine.close()
 
 
 def main() -> None:
-    questions = sys.argv[1:] or SAMPLE_SPANS
+    ap = argparse.ArgumentParser(description="Original vs distilled corpus coverage.")
+    ap.add_argument("questions", nargs="*", help="questions (default: --questions file or samples)")
+    ap.add_argument("--questions-file", default="", help="corpus_questions.yaml path")
+    ap.add_argument("--rater", choices=["auto", "judge", "local"], default="auto")
+    args = ap.parse_args()
+
+    if args.questions:
+        questions = list(args.questions)
+    elif args.questions_file:
+        questions = load_questions(Path(args.questions_file))
+    else:
+        questions = SAMPLE_SPANS
+
     if not (DISTILLED_DIR.exists() and any(DISTILLED_DIR.glob("*.md"))):
         print(f"No distilled corpus in {DISTILLED_DIR}. Run scripts.lab.distiller first.")
         return
 
     from scripts.lab import judge as _judge
 
-    use_judge = _judge.credential_hint() is None
-    if not use_judge:
-        print(f"(no credential — retrieval-only preview; {_judge.credential_hint()})\n")
+    rater: Rater
+    if args.rater == "judge" or (args.rater == "auto" and _judge.credential_hint() is None):
+        rater, rater_name = judge_rater, f"judge ({_judge.JUDGE_MODEL})"
+    else:
+        rater, rater_name = heuristic_rater, "local heuristic (shipped)"
+        if args.rater == "auto":
+            print(f"(no credential — using local rater; {_judge.credential_hint()})")
 
     cfg = load_config()
-    for f in ("data/rag_distilled.db", "data/rag_distilled.db-wal", "data/rag_distilled.db-shm"):
-        Path(f).unlink(missing_ok=True)
-    orig = _mk(get_docs_dir(cfg.paths.docs_dir), Path("data/rag.db"))
-    dist = _mk(DISTILLED_DIR, DISTILLED_DB)
+    orig = _score(get_docs_dir(cfg.paths.docs_dir), ORIGINAL_DB, questions, rater)
+    dist = _score(DISTILLED_DIR, DISTILLED_DB, questions, rater)
 
-    rows: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
-    for q in questions:
-        rows.append((q, _best_rating(orig, q, use_judge), _best_rating(dist, q, use_judge)))
-
-    def _cov(idx: int) -> str:
-        goods = sum(1 for _, *bs in rows if RATING_RANK.get(bs[idx]["rating"], 0) >= 3)
-        return f"{round(100 * goods / len(rows))}%  ({goods}/{len(rows)} good)"
-
-    print(f"{'QUESTION':<52}  {'ORIGINAL':<22}  DISTILLED")
-    print("-" * 100)
-    for q, bo, bd in rows:
-        print(f"{q[:50]:<52}  {bo.get('rating', '?'):<22}  {bd.get('rating', '?')}")
-    if use_judge:
-        print("-" * 100)
-        print(f"{'COVERAGE (borrowable good answer)':<52}  {_cov(0):<22}  {_cov(1)}")
+    print(f"\nRater: {rater_name}    Questions: {len(questions)}")
+    print(f"{'QUESTION':<58}  {'ORIGINAL':<10}  DISTILLED")
+    print("-" * 92)
+    for ro, rd in zip(orig["rows"], dist["rows"]):
+        mark = " (merged)" if rd.get("merged") else ""
+        print(f"{ro['question'][:56]:<58}  {ro['best']:<10}  {rd['best']}{mark}")
+    print("-" * 92)
+    for name, res in (("ORIGINAL", orig), ("DISTILLED", dist)):
+        print(
+            f"{name:<10} coverage: {res['score_pct']}% good "
+            f"({res['good']}/{res['questions']}; partial {res['partial']}, gap {res['gap']})"
+        )
 
 
 if __name__ == "__main__":

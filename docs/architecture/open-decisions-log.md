@@ -234,10 +234,18 @@ acceptance test. Findings, in order:
    skip-guard keys on raw length so table-heavy sections aren't dropped. Heuristic still
    can't prose-ify tables — that's what the (local) model is for.
 
-4. **Remaining gap → next lever.** INT4's "how much + where degrades" spans **two
-   sections** (1.3 + 1.9); per-section consolidation can't merge them. Next lever:
-   **topic-level grouping** or **multi-unit answers**. Not a content gap — the doc has
-   both halves.
+4. **Compound-question lever — topic-level units (built).** INT4's "how much + where
+   degrades" spans **two sections** (1.3 + 1.9); per-section consolidation can't merge
+   them. Fix: the distiller now also emits one **topic-level unit per multi-section
+   Part** (consolidated across sub-sections). The **cloud** topic unit is the one that
+   closes it — the heuristic concat is too diluted to out-rank the focused section unit.
+   Complementary lever if cloud alone doesn't flip INT4: **multi-unit answers**
+   (retrieve+merge top-k; a legit "show two snippets" live UX). Not a content gap.
+
+**Productization is planned and tracked:** see [ADR-001](ADR-001-local-corpus-distiller.md)
+(local distiller), [corpus-prep-onboarding-spec.md](corpus-prep-onboarding-spec.md)
+(the flow), and **[corpus-prep-execution-prompt.md](corpus-prep-execution-prompt.md)** —
+a self-contained, task-by-task execution prompt (T1–T8) to complete F-701..F-706.
 
 **Caveat:** n=4 is directional, not definitive — trust the coverage delta at ~20 real
 questions. **Product implication:** distillation earns a place as a **one-time prep

@@ -56,6 +56,58 @@ class ReadinessResponse(BaseModel):
     rows: List[GapRow]
 
 
+def _distilled_state() -> Dict[str, Any]:
+    """Describe the distilled corpus, however it was produced.
+
+    Two paths write it: the wizard (`distill_dir`, one manifest for the whole
+    directory) and the lab CLI (`scripts.lab.distiller`, a per-file `.meta.json`
+    sidecar). Reading only the manifest made the wizard report "no distilled
+    corpus" while one sat on disk, which silently blocks its distill/readiness/
+    activate steps. Fall back to the sidecars, then to the files themselves.
+    """
+    state: Dict[str, Any] = {"dir": str(DISTILLED_DIR), "exists": False}
+    if not DISTILLED_DIR.is_dir():
+        return state
+    manifest_path = DISTILLED_DIR / MANIFEST_NAME
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            docs = manifest.get("docs", {})
+            return {
+                "dir": str(DISTILLED_DIR),
+                "exists": True,
+                "backend": manifest.get("backend", ""),
+                "mode": manifest.get("mode", ""),
+                "docs": len(docs),
+                "units": sum(int(d.get("units") or 0) for d in docs.values()),
+                "source": "manifest",
+            }
+        except (json.JSONDecodeError, OSError):
+            state["error"] = "unreadable manifest"
+    corpora = sorted(DISTILLED_DIR.glob("*.distilled.md"))
+    if not corpora:
+        return state
+    backends, units = set(), 0
+    for f in corpora:
+        meta = f.with_name(f".{f.name}.meta.json")
+        if meta.exists():
+            try:
+                m = json.loads(meta.read_text(encoding="utf-8"))
+                backends.add(str(m.get("backend", "")))
+                units += int(m.get("units") or 0)
+            except (json.JSONDecodeError, OSError):
+                continue
+    return {
+        "dir": str(DISTILLED_DIR),
+        "exists": True,
+        "backend": "+".join(sorted(b for b in backends if b)) or "unknown",
+        "mode": "",
+        "docs": len(corpora),
+        "units": units,
+        "source": "sidecar" if backends else "files",
+    }
+
+
 # --- status + sources -------------------------------------------------------
 @router.get("/status")
 def corpus_status() -> Dict[str, Any]:
@@ -70,22 +122,7 @@ def corpus_status() -> Dict[str, Any]:
         if docs_dir.is_dir()
         else []
     )
-    distilled: Dict[str, Any] = {"dir": str(DISTILLED_DIR), "exists": False}
-    manifest_path = DISTILLED_DIR / MANIFEST_NAME
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            docs = manifest.get("docs", {})
-            distilled = {
-                "dir": str(DISTILLED_DIR),
-                "exists": True,
-                "backend": manifest.get("backend", ""),
-                "mode": manifest.get("mode", ""),
-                "docs": len(docs),
-                "units": sum(int(d.get("units") or 0) for d in docs.values()),
-            }
-        except (json.JSONDecodeError, OSError):
-            distilled["error"] = "unreadable manifest"
+    distilled = _distilled_state()
     active = get_active_dir()
     return {
         "docs_dir": str(docs_dir),

@@ -292,8 +292,15 @@ calibration.
 **`/ws/prompts`** — Intelligence results with display metadata:
 - Server → Client: `{"type": "prompt", "trigger_type": "question", "trigger_text": "...", "answer": "...", "confidence": 0.75, "method": "retrieval", "latency_ms": 480, "source": "deployment.md", "heading": "Part 1 > 1.3", "source_text": "full borrowable unit ...", "persistence": "persistent", "dismiss_ms": 0, "display_label": "ANSWER", "display_emoji": "💡"}`
 - The default live path is **retrieval-first** (F-705/D-08, `triggers.retrieval_first`): `method: "retrieval"`, `answer` = glanceable sentence(s) of the best borrowable unit, `source_text` = the full unit for expand-to-source, `heading` = provenance. LLM answers (`method: "hybrid"/...`) appear only from the legacy path (`retrieval_first: false`) or on-demand.
-- Client → Server (HTTP, not WS): `POST /prompts/generate {"trigger_text": "...", "trigger_type": "question"}` → `{"answer", "confidence", "method", "latency_ms", "source"}` — the demoted, user-gated generation path (D-02).
+- Server → Client: `{"type": "listen_state", "armed": true, "enabled": true, "since": 1.7e9, "expires_at": null, "always_on": ["alert"]}` — the D-02 listen window changed. **Not a card**: clients must branch on `type` before rendering, or this spreads into the prompt list as an empty one.
 - Dead-end results (`no_match`, `no_context`, `suppressed`, or empty answer) are filtered server-side and never sent to the client.
+
+**D-02 user-gated surfaces** (HTTP, not WS). None pass through the listen gate — the user asking *is* the permission:
+- `POST /prompts/listen {"armed": true|false|null}` → listen state. `null`/omitted toggles. Also broadcasts `listen_state` on `/ws/prompts`. `GET /prompts/listen` returns the same shape.
+- `POST /prompts/answer {"text": "...", "trigger_type": "question"}` → a `prompt`-shaped card (retrieval-first, `persistence: "persistent"`), or `{"answer": "", "note": "..."}`. Select-to-answer, the spatial path.
+- `POST /prompts/generate {"trigger_text": "...", "trigger_type": "question"}` → `{"answer", "confidence", "method", "latency_ms", "source"}` — the demoted LLM path (the ✨ button).
+
+**Automatic** cards (those pushed on `/ws/prompts`) fire only while the window is armed, except types in `triggers.gating.always_on` (default `["alert"]`). The gate lives at `MeetingOrchestrator._process_trigger` — the one choke point both capture pipelines share.
 
 When adding or changing a message shape, update this section in the same change — it is
 the contract both sides read. Use the `add-api-endpoint` skill.

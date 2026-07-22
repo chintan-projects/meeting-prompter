@@ -7,6 +7,7 @@ interface ShortcutActions {
   onCloseModal: () => void;
   onSaveNotes: () => void;
   onToggleNotes: () => void;
+  onToggleListen: () => void;
 }
 
 /**
@@ -20,6 +21,7 @@ interface ShortcutActions {
  * | Cmd+\         | Toggle transcript     |
  * | Cmd+S         | Save notes            |
  * | Cmd+E         | Toggle notes editor   |
+ * | Cmd+L         | Arm/disarm listening  |
  *
  * Shortcuts that conflict with text input (Space) are suppressed
  * when focus is inside an input, textarea, or select element.
@@ -67,6 +69,15 @@ export function useKeyboardShortcuts(actions: ShortcutActions): void {
       if (isMeta && !e.shiftKey && e.key === "e") {
         e.preventDefault();
         actions.onToggleNotes();
+        return;
+      }
+
+      // Cmd+L — arm/disarm the listen window (D-02). Works from anywhere,
+      // including while editing a turn: it is the one control you reach for
+      // mid-sentence, and it never inserts text.
+      if (isMeta && !e.shiftKey && e.key === "l") {
+        e.preventDefault();
+        actions.onToggleListen();
         return;
       }
 

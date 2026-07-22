@@ -14,6 +14,9 @@ interface StatusBarProps {
   onStop: () => void;
   onPause: () => void;
   onResume: () => void;
+  /** D-02: whether the listen window is open (automatic cards allowed). */
+  isListening: boolean;
+  onToggleListen: () => void;
 }
 
 interface AudioHealth {
@@ -34,6 +37,8 @@ export function StatusBar({
   onStop,
   onPause,
   onResume,
+  isListening,
+  onToggleListen,
 }: StatusBarProps) {
   const [loading, setLoading] = useState(false);
   const [audioWarning, setAudioWarning] = useState("");
@@ -112,13 +117,32 @@ export function StatusBar({
               ⏺ Record
             </button>
           )}
+          {/* D-02: the listen window has no timer, so the ON state has to be
+              unmissable — a forgotten window is exactly the prompt spam this
+              feature exists to remove. */}
+          {isRunning && (
+            <button
+              onClick={onToggleListen}
+              style={{
+                ...styles.btn,
+                ...(isListening ? styles.listenOn : styles.listenOff),
+              }}
+              title={
+                isListening
+                  ? "Listening — answers appear automatically (⌘L to stop)"
+                  : "Quiet — only watch-word alerts (⌘L to listen)"
+              }
+            >
+              {isListening ? "◉ LISTENING" : "○ Quiet"}
+            </button>
+          )}
           <span style={styles.time}>
             {loading ? "Loading models..." : isPaused ? `${timeStr} PAUSED` : timeStr}
           </span>
         </div>
 
         <div style={styles.right}>
-          <span style={styles.shortcuts}>⌘⇧R rec · Space pause · ⌘\\ pane</span>
+          <span style={styles.shortcuts}>⌘L listen · ⌘⇧R rec · Space pause · ⌘\\ pane</span>
           <span style={{ color: transcriptConnected ? "var(--accent-green)" : "var(--accent-red)" }}>
             T {transcriptConnected ? "●" : "○"}
           </span>
@@ -186,6 +210,17 @@ const styles: Record<string, React.CSSProperties> = {
   resumeBtn: {
     background: "var(--accent-green)",
     color: "#1a1a2e",
+  },
+  listenOn: {
+    background: "var(--accent-green)",
+    color: "#1a1a2e",
+    fontWeight: 700,
+    letterSpacing: 0.5,
+  },
+  listenOff: {
+    background: "transparent",
+    color: "var(--text-muted)",
+    border: "1px solid var(--border)",
   },
   warning: {
     background: "#442200",

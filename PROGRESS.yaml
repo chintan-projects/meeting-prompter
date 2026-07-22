@@ -2,18 +2,19 @@
 # Stays LEAN. Only active/in-progress state here.
 
 current_phase: "liquid-rearchitecture (Wave A landed)"
-current_focus: "Wave A landed test-gated (unpushed, liquid-rearch). Wave B F-503 trigger-router head DONE: forge-LoRA bidirectional encoder classifier, shape-first corpus, gated on REAL transcript turns (hybrid macro-F1 0.846 > probe 0.55 > heuristic 0.26), wired config-gated (default OFF). Remaining: WS-14 live call to promote F-503 + F-507/F-508; F-504/F-505 (other Wave B heads) still backlog."
+current_focus: "First live call ran and produced the decisive product finding: prompt spam. D-02 built in response (F-208) — quiet by default, Cmd+L listen window + select-to-answer, gate at _process_trigger. Next: a live call to validate D-02, which also re-runs the WS-14 checklist (F-503 promote/revert, F-507/F-508)."
 
 active_work:
   - id: "WS-14"
     name: "Live dual-stream test (mic + per-app capture)"
     status: pending
-    notes: "Live Zoom/Teams call — validates F-604 segmentation, F-601/F-606 attribution, F-607 corrections; promotes F-507 (Extract) + F-508 (persistent ASR); confirms or reverts f503_router_enabled (currently ON, unproven live). PREFLIGHT DONE 2026-07-22 (docs/ws14-live-call-checklist.md): models/runners/audio devices/backend/WS/cargo all verified; live retrieval path exercised end-to-end at 16-174ms. ONLY BLOCKER: Screen Recording permission (user action, else per-app capture silently degrades to mic-only)."
+    notes: "SECOND RUN pending — first call ran 2026-07-22 and surfaced prompt spam -> D-02/F-208 built. Now also validates the quiet-by-default flow (Cmd+L window, select-to-answer, timer-less window). Original scope: validates F-604 segmentation, F-601/F-606 attribution, F-607 corrections; promotes F-507 (Extract) + F-508 (persistent ASR); confirms or reverts f503_router_enabled (currently ON, unproven live). PREFLIGHT DONE 2026-07-22 (docs/ws14-live-call-checklist.md): models/runners/audio devices/backend/WS/cargo all verified; live retrieval path exercised end-to-end at 16-174ms. ONLY BLOCKER: Screen Recording permission (user action, else per-app capture silently degrades to mic-only)."
 
 blockers: []
 
 pending_decisions:
   - "Review liquid-rearch branch before merge to main (Wave A + F-503)."
+  - "D-02 built quiet-by-default (F-208). Validate on the next live call: does Cmd+L + select-to-answer feel right, and is the timer-less window a problem in practice?"
   - "Flip triggers.f503_router_enabled=true after F-503 validates on a live call (WS-14)."
 
 recent_sessions:

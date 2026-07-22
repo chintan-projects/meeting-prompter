@@ -24,7 +24,7 @@ hand.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ Meeting Prompter    ● Recording   00:12:34                    │
+│ Meeting Prompter    ■ Stop  ❚❚ Pause  ◉ LISTENING   00:12:34  │
 ├──────────────────────────┬───────────────────────────────────┤
 │   TRANSCRIPT             │   INTELLIGENCE               (3)  │
 │                          │                                   │
@@ -46,9 +46,29 @@ hand.
 │                          │  2026 — not yet raised.           │
 │                          │  📎 compliance.md › Certifications│
 ├──────────────────────────┴───────────────────────────────────┤
-│  ⌘R Record  ⌘P Pause  ⌘T Transcript  ⌘N Notes                │
+│  ⌘L listen · ⌘⇧R rec · Space pause · ⌘\ pane                 │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+## It's quiet until you ask
+
+The default is **silence**. Nothing pushes at you while you're talking. You open the
+tap two ways, and both are deliberate:
+
+| | How | What happens |
+|---|---|---|
+| **Temporal** | **⌘L** — arms the listen window | Automatic cards flow while it's open. The status bar shows a green **◉ LISTENING**. ⌘L again closes it. |
+| **Spatial** | **Select any transcript text** → 💡 Answer this | Answers that exact span, instantly, whether or not it looked like a question. Works even while quiet. |
+
+The one exception is **watch words** — those alert you always, because you named them
+yourself in Meeting Setup. That's the only channel you pre-authorized.
+
+Why this shape: a correctly-detected question is not the same as a question you want
+answered on screen, and most of them aren't. A perfect trigger classifier still
+interrupts on every true positive. **Prompt spam is a permission problem, not a
+classification problem** — so the fix is asking, not better guessing.
+
+Restore the old always-on behavior with `triggers.gating.enabled: false`.
 
 **Four kinds of intervention**, each with its own voice and lifetime:
 
@@ -230,6 +250,9 @@ code, no hardcoded model paths. The ones you'll actually touch:
 |---|---|---|
 | `paths.docs_dir` | `context` | where your documents live |
 | `triggers.watch_words` | `[]` | terms that fire HEADS UP (usually per-meeting) |
+| `triggers.gating.enabled` | `true` | D-02 quiet-by-default; `false` = always-on push |
+| `triggers.gating.always_on` | `["alert"]` | trigger types that fire without arming |
+| `triggers.gating.max_listen_seconds` | `0` | `0` = armed window stays open until ⌘L again |
 | `triggers.retrieval_first` | `true` | live cards are retrieved spans, no LLM |
 | `triggers.f503_router_enabled` | `true` | learned trigger router; `false` = pure heuristics |
 | `detection.rag_confidence_minimum` | `0.35` | below this, stay silent |

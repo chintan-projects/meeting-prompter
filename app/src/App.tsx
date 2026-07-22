@@ -69,6 +69,64 @@ function App() {
     notionAvailable: false,
   });
   const promptIdRef = useRef(0);
+  // D-02: default quiet. Backend owns the truth; this mirrors it for the UI.
+  const [isListening, setIsListening] = useState(false);
+
+  /** Add a locally-fetched card (select-to-answer) to the same list as pushed ones. */
+  const addPromptCard = useCallback((msg: Record<string, unknown>) => {
+    promptIdRef.current += 1;
+    setPromptResults((prev) => [
+      {
+        ...(msg as unknown as Omit<PromptResult, "id" | "receivedAt">),
+        id: promptIdRef.current,
+        receivedAt: Date.now(),
+      },
+      ...prev,
+    ]);
+  }, []);
+
+  /** Toggle the listen window. Fire-and-forget: the WS listen_state is the truth. */
+  const toggleListen = useCallback(() => {
+    if (!isRunning) return;
+    fetch(`${API_BASE}/prompts/listen`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((state) => {
+        if (state) setIsListening(Boolean(state.armed));
+      })
+      .catch(() => {
+        /* the indicator stays as-is; the next listen_state corrects it */
+      });
+  }, [isRunning]);
+
+  /** Select-to-answer (D-02, spatial): answer whatever the user highlighted. */
+  const answerSelection = useCallback(
+    (text: string) => {
+      if (!isRunning || !text.trim()) return;
+      fetch(`${API_BASE}/prompts/answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, trigger_type: "question" }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((card) => {
+          if (card && card.answer) {
+            addPromptCard({
+              ...card,
+              display_label: "ANSWER",
+              display_emoji: "\u{1F4A1}",
+            });
+          }
+        })
+        .catch(() => {
+          /* silent: a failed lookup should not interrupt a meeting */
+        });
+    },
+    [isRunning, addPromptCard]
+  );
 
   const handlePinPrompt = useCallback((id: number) => {
     setPinnedIds((prev) => new Set(prev).add(id));
@@ -122,6 +180,13 @@ function App() {
   const promptsWs = useWebSocket({
     url: `${WS_BASE}/ws/prompts`,
     onMessage: useCallback((data: unknown) => {
+      // The channel carries two message types. listen_state is not a card —
+      // spreading it into promptResults would render an empty broken one.
+      const typed = data as { type?: string; armed?: boolean };
+      if (typed.type === "listen_state") {
+        setIsListening(Boolean(typed.armed));
+        return;
+      }
       const msg = data as Omit<PromptResult, "id" | "receivedAt">;
       promptIdRef.current += 1;
       setPromptResults((prev) => [
@@ -351,6 +416,7 @@ function App() {
         setShowNotes((n) => !n);
       }
     },
+    onToggleListen: toggleListen,
   });
 
   return (
@@ -366,6 +432,8 @@ function App() {
         onStop={stopSession}
         onPause={pauseSession}
         onResume={resumeSession}
+        isListening={isListening}
+        onToggleListen={toggleListen}
       />
 
       <div style={styles.main}>
@@ -376,6 +444,7 @@ function App() {
           onEdit={handleEditSegment}
           onRenameSpeaker={handleRenameSpeaker}
           width={transcriptWidth}
+          onAnswerSelection={answerSelection}
         />
         {!transcriptCollapsed && (
           <div

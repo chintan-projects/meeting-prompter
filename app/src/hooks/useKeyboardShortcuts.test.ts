@@ -10,6 +10,7 @@ function createActions() {
     onCloseModal: vi.fn(),
     onSaveNotes: vi.fn(),
     onToggleNotes: vi.fn(),
+    onToggleListen: vi.fn(),
   };
 }
 
@@ -87,6 +88,32 @@ describe("useKeyboardShortcuts", () => {
   it("calls onToggleNotes on Cmd+E", () => {
     fireKey("e", { metaKey: true });
     expect(actions.onToggleNotes).toHaveBeenCalledOnce();
+  });
+
+  // --- Cmd+L (D-02 listen window) ---
+  it("calls onToggleListen on Cmd+L", () => {
+    fireKey("l", { metaKey: true });
+    expect(actions.onToggleListen).toHaveBeenCalledOnce();
+  });
+
+  it("calls onToggleListen on Cmd+L even while editing a turn", () => {
+    // The one control you reach for mid-sentence; it never inserts text.
+    const input = document.createElement("textarea");
+    document.body.appendChild(input);
+    input.focus();
+    fireKey("l", { metaKey: true }, input);
+    expect(actions.onToggleListen).toHaveBeenCalledOnce();
+    document.body.removeChild(input);
+  });
+
+  it("does not toggle listening on a bare L", () => {
+    fireKey("l");
+    expect(actions.onToggleListen).not.toHaveBeenCalled();
+  });
+
+  it("does not toggle listening on Cmd+Shift+L", () => {
+    fireKey("l", { metaKey: true, shiftKey: true });
+    expect(actions.onToggleListen).not.toHaveBeenCalled();
   });
 
   // --- Space ---

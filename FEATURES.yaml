@@ -283,6 +283,34 @@ workstreams:
         files:
           - lib/triggers/engine.py
 
+      - id: F-208
+        name: "User-gated interaction — quiet by default (D-02)"
+        status: done  # 2026-07-22: ListenGate at _process_trigger; Cmd+L window + select-to-answer
+        effort: M
+        description: >
+          The first live call produced prompt spam: a correctly-detected
+          question is not a question the user wants answered on screen, and
+          most are not. A perfect trigger router still interrupts on every
+          true positive — this is a permission problem, not a classification
+          problem. Default is now quiet. Two user-opened channels: TEMPORAL
+          (Cmd+L arms the listen window; automatic cards flow until toggled
+          off) and SPATIAL (select transcript text -> "Answer this", gate-exempt,
+          works while quiet). Watch-word ALERTs stay always-on — the user
+          pre-authorized them by naming the terms. Gate lives at the single
+          choke point both capture pipelines share, and short-circuits BEFORE
+          retrieval. Explicit requests (retrieve_for_text, generate_for_text)
+          never consult it. Set triggers.gating.enabled=false to restore push.
+          OPEN: the window has no timer by product choice; a forgotten window
+          restores always-on behaviour. Mitigated by a loud LISTENING state and
+          an opt-in max_listen_seconds cap. Validate on the next live call.
+        depends_on: [F-705]
+        files:
+          - lib/gating.py
+          - lib/orchestrator.py
+          - src/api/routes/prompts.py
+          - app/src/components/StatusBar.tsx
+          - app/src/components/TranscriptPane.tsx
+
   # ─── WORKSTREAM 3: Speaker Attribution ───────────────────────────
   # Priority: V1.5+ — Tier 1 (You/Others) is done. Tier 2/3 are
   # enhancements that depend on packaging decisions.

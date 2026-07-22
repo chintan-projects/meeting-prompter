@@ -1,13 +1,20 @@
-"""Prompts WebSocket + on-demand generation.
+"""Prompts WebSocket + the user-gated answer paths (D-02).
 
 The live path is retrieval-first (F-705/D-08): /ws/prompts streams borrowable
-units (method="retrieval", with heading + source_text for expand-to-source).
-POST /prompts/generate is the demoted, user-gated LLM path (D-02).
+units (method="retrieval", with heading + source_text for expand-to-source) —
+but only while the listen window is armed, since the default is quiet.
+
+Three user-initiated surfaces, none of which pass through the listen gate
+(asking *is* the permission):
+
+- ``POST /prompts/listen``  — arm/disarm/toggle the temporal window (Cmd+L).
+- ``POST /prompts/answer``  — answer a selected transcript span (spatial).
+- ``POST /prompts/generate``— the demoted LLM path (the ✨ button on a card).
 """
 
 import asyncio
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -23,17 +30,102 @@ class GenerateRequest(BaseModel):
     trigger_type: str = "question"
 
 
+class ListenRequest(BaseModel):
+    """``armed`` omitted/null toggles; true/false sets explicitly (idempotent)."""
+
+    armed: Optional[bool] = None
+
+
+class AnswerRequest(BaseModel):
+    text: str
+    trigger_type: str = "question"
+
+
+def _orchestrator() -> Any:
+    """The live orchestrator, or 409 if no meeting is running."""
+    session = get_session()
+    orch = getattr(session, "_orchestrator", None)
+    if orch is None:
+        raise HTTPException(status_code=409, detail="no active session — start a meeting first")
+    return orch
+
+
+def _gate() -> Any:
+    """The live listen gate. Always present on a real orchestrator."""
+    gate = getattr(_orchestrator(), "listen_gate", None)
+    if gate is None:
+        raise HTTPException(status_code=409, detail="listen gating unavailable")
+    return gate
+
+
+def _card(result: Any, trigger_text: str, trigger_type: str) -> Dict[str, Any]:
+    """Shape a GenerationResult like a `prompt` WS message so the UI renders it identically."""
+    return {
+        "type": "prompt",
+        "trigger_type": trigger_type,
+        "trigger_text": trigger_text,
+        "answer": result.answer,
+        "confidence": result.confidence,
+        "method": result.method,
+        "latency_ms": result.latency_ms,
+        "source": result.source,
+        "heading": getattr(result, "heading", ""),
+        "source_text": getattr(result, "source_text", ""),
+        "persistence": "persistent",  # user asked for it — never auto-dismiss
+        "dismiss_ms": 0,
+    }
+
+
+@router.get("/prompts/listen")
+def listen_state() -> Dict[str, Any]:
+    """Current listen-window state (armed, since, expiry, always-on types)."""
+    return dict(_gate().state())
+
+
+@router.post("/prompts/listen")
+async def set_listen(req: ListenRequest) -> Dict[str, Any]:
+    """Arm, disarm, or toggle the listen window (D-02, temporal).
+
+    Broadcasts the resulting state on /ws/prompts so every connected client
+    agrees on it — the backend is the source of truth, not the keypress.
+    """
+    session = get_session()
+    gate = _gate()
+    if req.armed is None:
+        armed = gate.toggle()
+    elif req.armed:
+        armed = gate.arm()
+    else:
+        armed = gate.disarm()
+    state = dict(gate.state())
+    await session._prompt_queue.put({"type": "listen_state", **state})
+    logger.info("listen window %s via API", "armed" if armed else "disarmed")
+    return state
+
+
+@router.post("/prompts/answer")
+def answer_selection(req: AnswerRequest) -> Dict[str, Any]:
+    """Answer an explicitly selected transcript span (D-02, spatial).
+
+    Retrieval-first and gate-exempt: whatever the user highlighted is the query,
+    whether or not it would have tripped a trigger.
+    """
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text must be non-empty")
+    result = _orchestrator().retrieve_for_text(text, req.trigger_type)
+    if result is None or not result.answer or result.answer.startswith("["):
+        return {"answer": "", "note": "nothing borrowable in your corpus for that"}
+    return _card(result, text, req.trigger_type)
+
+
 @router.post("/prompts/generate")
 def generate_on_demand(req: GenerateRequest) -> Dict[str, Any]:
     """User-gated LLM answer for a trigger (sync — runs in the threadpool)."""
     text = req.trigger_text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="trigger_text must be non-empty")
-    session = get_session()
-    orchestrator = getattr(session, "_orchestrator", None)
-    if orchestrator is None:
-        raise HTTPException(status_code=409, detail="no active session — start a meeting first")
-    result = orchestrator.generate_for_text(text, req.trigger_type)
+    result = _orchestrator().generate_for_text(text, req.trigger_type)
     if result is None or not result.answer or result.answer.startswith("["):
         return {"answer": "", "note": "no grounded answer available"}
     return {

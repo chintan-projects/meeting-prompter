@@ -102,6 +102,16 @@ class MeetingOrchestrator:
         self.on_silence_detected: Optional[SilenceCallback] = None
         self.on_trigger_result: Optional[TriggerResultCallback] = None
 
+        # D-02: default quiet. Automatic cards are suppressed until the user
+        # arms the listen window; watch-word ALERTs stay always-on.
+        from lib.gating import ListenGate
+
+        self.listen_gate = ListenGate(
+            enabled=config.triggers.gating.enabled,
+            always_on=config.triggers.gating.always_on,
+            max_listen_seconds=config.triggers.gating.max_listen_seconds,
+        )
+
         # Load meeting context if provided
         self.meeting_context: Optional[MeetingContext] = None
         if meeting_context_path:
@@ -291,10 +301,47 @@ class MeetingOrchestrator:
                 self._log_result(trigger, result)
 
     def _process_trigger(self, trigger: Trigger) -> Optional[GenerationResult]:
-        """Route a trigger: retrieval-first (default, F-705/D-08) or generation."""
+        """Route an AUTOMATICALLY fired trigger, subject to the listen gate (D-02).
+
+        This is the single choke point both capture pipelines share (the
+        orchestrator's own ``_handle_triggers`` and the session's mic handler),
+        so gating here covers every automatic path by construction. Explicit
+        user requests — ``retrieve_for_text`` (select-to-answer) and
+        ``generate_for_text`` (the ✨ button) — deliberately do not pass through
+        it: the user asking *is* the permission.
+        """
+        if not self.listen_gate.allows(trigger.type.value):
+            logger.debug(
+                "listen gate: suppressed %s (disarmed) — %r",
+                trigger.type.value,
+                trigger.text[:60],
+            )
+            return None
         if self.config.triggers.retrieval_first:
             return self._process_trigger_retrieval(trigger)
         return self._process_trigger_generated(trigger)
+
+    def retrieve_for_text(
+        self, text: str, trigger_type_value: str = "question"
+    ) -> Optional[GenerationResult]:
+        """Answer an explicitly selected span — select-to-answer (D-02, spatial).
+
+        Retrieval-first like the live path (no LLM, ~16-190ms), but gate-exempt
+        and independent of trigger detection: whatever the user highlighted is
+        the query, whether or not it looks like a question.
+        """
+        try:
+            ttype = TriggerType(trigger_type_value)
+        except ValueError:
+            ttype = TriggerType.QUESTION
+        trigger = Trigger(
+            type=ttype,
+            text=text,
+            confidence=1.0,
+            source_context=self.buffer.get_recent_context(),
+            timestamp=time.time(),
+        )
+        return self._process_trigger_retrieval(trigger)
 
     def _process_trigger_retrieval(self, trigger: Trigger) -> Optional[GenerationResult]:
         """Retrieval-first live path: show the best borrowable unit, no LLM.

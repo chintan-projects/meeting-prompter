@@ -76,6 +76,14 @@ triggers:
   f503_router_enabled: true
   f503_router_min_confidence: 0.0
   min_answer_length: 10      # suppress answers shorter than this (F-202)
+  # D-02: default quiet — the user opens the tap instead of being pushed at.
+  # Automatic cards fire only while the listen window is armed (Cmd+L, or
+  # POST /prompts/listen); select-to-answer and the on-demand generate button
+  # bypass the gate entirely. Set enabled=false to restore always-on push.
+  gating:
+    enabled: true
+    always_on: ["alert"]     # watch words are pre-authorized; nothing else is
+    max_listen_seconds: 0    # 0 = the armed window stays open until toggled off
   # F-705 / D-08: retrieval-first live loop — show the borrowable unit (no LLM,
   # ~120-190ms warm); generation is demoted to on-demand (POST /prompts/generate).
   retrieval_first: true

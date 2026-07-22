@@ -107,6 +107,22 @@ class TriggerConfig:
     # question-rescue subsumes it); the deterministic watch-word alert head stays.
     f503_router_enabled: bool = False
     f503_router_min_confidence: float = 0.0
+    gating: "GatingConfig" = field(default_factory=lambda: GatingConfig())
+
+
+@dataclass
+class GatingConfig:
+    """D-02 listen gating — default quiet, the user opens the tap.
+
+    ``enabled=False`` restores the pre-D-02 always-on push. ``always_on`` lists
+    the trigger types that fire regardless (watch-word alerts are the only
+    channel the user pre-authorised). ``max_listen_seconds=0`` keeps an armed
+    window open until it is explicitly toggled off.
+    """
+
+    enabled: bool = True
+    always_on: List[str] = field(default_factory=lambda: ["alert"])
+    max_listen_seconds: float = 0.0
 
 
 @dataclass
@@ -232,6 +248,14 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         logger.warning("Failed to load config.yaml: %s, using defaults", e)
         return AppConfig()
 
+    # triggers.gating is nested: the generic builder would leave it a raw dict,
+    # so attribute access (config.triggers.gating.enabled) would fail at runtime.
+    triggers_raw = dict(raw.get("triggers") or {})
+    gating = _build_dataclass(GatingConfig, triggers_raw.pop("gating", None))
+    triggers = _build_dataclass(TriggerConfig, triggers_raw)
+    assert isinstance(triggers, TriggerConfig) and isinstance(gating, GatingConfig)
+    triggers.gating = gating
+
     models_raw = raw.get("models", {})
     models = ModelsConfig(
         audio=_build_dataclass(AudioModelConfig, models_raw.get("audio")),
@@ -245,7 +269,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         buffer=_build_dataclass(BufferConfig, raw.get("buffer")),
         detection=_build_dataclass(DetectionConfig, raw.get("detection")),
         rag=_build_dataclass(RAGPipelineConfig, raw.get("rag")),
-        triggers=_build_dataclass(TriggerConfig, raw.get("triggers")),
+        triggers=triggers,
         refiner=_build_dataclass(RefinerConfig, raw.get("refiner")),
         diarization=_build_dataclass(DiarizationConfig, raw.get("diarization")),
         dual_stream=_build_dataclass(DualStreamConfig, raw.get("dual_stream")),

@@ -259,6 +259,42 @@ information."
 A prompt-spammy session is a failed session even when every individual card is correct.
 Silence is a feature with a maintenance cost.
 
+### 4.6 Quiet by default: the listen gate (D-02)
+
+The suppression layers above filter *bad* cards. They do nothing about the deeper
+problem, which the first live call surfaced immediately: **a correctly-detected
+question is not the same as a question you want answered on screen**, and in a real
+meeting most of them aren't. A perfect trigger router still interrupts on every true
+positive. Prompt spam is a **permission problem, not a classification problem.**
+
+So the default is quiet, and the user opens the tap two ways:
+
+| Channel | Control | Behaviour |
+|---|---|---|
+| **Temporal** | ⌘L / `POST /prompts/listen` | Arms the listen window; automatic cards flow until toggled off. |
+| **Spatial** | select transcript text → 💡 Answer this | Answers that exact span on demand, gate-exempt, even while quiet. |
+| **Always-on** | `triggers.gating.always_on` | Watch-word ALERTs only — the user pre-authorized them by naming the terms. |
+
+Three implementation properties matter:
+
+- **One choke point.** The gate sits in `MeetingOrchestrator._process_trigger`, which
+  both capture pipelines already call. Gating there covers every automatic path by
+  construction rather than by remembering to check in two places.
+- **Short-circuit, not filter.** A suppressed trigger returns before retrieval runs.
+  Triggers fire on most turns, so filtering after the work would pay the full cost of
+  a feature whose entire point is doing less.
+- **Explicit requests bypass it entirely.** `retrieve_for_text` (select-to-answer) and
+  `generate_for_text` (the ✨ button) never consult the gate. The user asking *is* the
+  permission, and routing consent through a gate the user just opened by hand would be
+  asking twice.
+
+The window has **no timer** (`max_listen_seconds: 0`) — it stays open until toggled
+off. That is a deliberate product call, and its known failure mode is a forgotten
+window quietly restoring the old always-on behaviour. Two mitigations: the status bar
+carries an unmissable green **◉ LISTENING** state, and the safety cap exists as an
+opt-in for anyone who wants it. `triggers.gating.enabled: false` restores always-on
+push wholesale.
+
 ---
 
 ## 5. Corpus preparation (D-09, ADR-001)
@@ -361,7 +397,7 @@ The consequential ones:
 | ID | Question | Status |
 |---|---|---|
 | **D-01** | AEC mic capture (macOS Voice-Processing I/O) — cancel speaker→mic echo *at capture* so attribution is correct by construction, independent of headphones | open, high priority, foundational |
-| **D-02** | User-gated interaction — default quiet, user opens the tap via armed listen-window or select-to-answer; ALERTs stay the only always-on channel | open, high priority |
+| **D-02** | User-gated interaction — default quiet, user opens the tap via armed listen-window or select-to-answer; ALERTs stay the only always-on channel | **decided and built** — see §4.6 |
 | **D-03** | Answer model — 2.6B is wired with 1.2B fallback | leaning 2.6B, operator to confirm |
 | **D-07** | The transcript refiner currently shares the answer-model instance; with a 2.6B reasoning model, per-turn refinement is slow | open |
 | **D-11** | Readiness rater is miscalibrated (57% judge agreement, harsh in 36% of cells) | decided in principle, rater blocked on recalibration |

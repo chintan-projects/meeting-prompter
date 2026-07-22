@@ -46,21 +46,49 @@ Rules:
 - Prefer crisp factual claims (definitions, numbers, when-to-use, tradeoffs) over narration.
 - Return 1-5 statements; fewer is fine. If the section is pure heading/navigation/table with no borrowable claim, return an empty list."""
 
+# consolidated mode: ONE complete answer per section (fixes compound questions that
+# atomic extraction fragments — e.g. "the three levels AND when to use each").
+_CLOUD_SYSTEM_CONSOLIDATED = """You write ONE complete, self-contained answer that \
+captures everything borrowable in a documentation section — a speaker could read it aloud \
+to answer questions about this topic.
+
+Rules:
+- Ground it ONLY in the SECTION text. Do not add outside knowledge.
+- Cover ALL the key facts in the section in one coherent answer: every item in a list, \
+every level/option, every number and when-to-use — don't drop any.
+- Make it fully self-contained: name the subject, resolve pronouns, no "this"/"it" that \
+refers outside the answer.
+- If the section is pure heading/navigation with no borrowable content, return an empty string."""
+
 _CLOUD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {"units": {"type": "array", "items": {"type": "string"}}},
     "required": ["units"],
     "additionalProperties": False,
 }
+_CLOUD_SCHEMA_CONSOLIDATED: dict[str, Any] = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
 
 
-def _distill_heuristic(heading: str, text: str) -> list[str]:
+def _topic_prefix(heading: str, body: str) -> str:
+    """Prepend the section topic unless the body already opens with it (self-contained)."""
+    topic = heading.strip().rstrip(".")
+    return body if topic.lower() in body.lower()[: len(topic) + 20] else f"{topic}: {body}"
+
+
+def _distill_heuristic(heading: str, text: str, mode: str = "atomic") -> list[str]:
     cleaned = clean_markdown(text)
     if len(cleaned.split()) < MIN_SECTION_WORDS:
         return []
+    if mode == "consolidated":
+        # Keep the whole cleaned section as one unit — completeness over glanceability.
+        return [_topic_prefix(heading, cleaned)]
+    # atomic: lead with the topic, then the strongest sentences up to the word cap.
     sentences = extract_sentences(cleaned) or [cleaned]
-    # Build one self-contained unit: lead with the topic, then the strongest sentences.
-    topic = heading.strip().rstrip(".")
     body_words: list[str] = []
     picked: list[str] = []
     for s in sentences:
@@ -68,30 +96,39 @@ def _distill_heuristic(heading: str, text: str) -> list[str]:
         body_words += s.split()
         if len(body_words) >= MAX_UNIT_WORDS:
             break
-    body = " ".join(picked)
-    unit = body if topic.lower() in body.lower()[: len(topic) + 20] else f"{topic}: {body}"
-    return [unit]
+    return [_topic_prefix(heading, " ".join(picked))]
 
 
-def _distill_cloud(heading: str, text: str) -> list[str]:
-    from scripts.lab import judge as _judge
-
+def _distill_cloud(heading: str, text: str, mode: str = "atomic") -> list[str]:
     import anthropic
 
-    cleaned = clean_markdown(text)
-    if len(cleaned.split()) < MIN_SECTION_WORDS:
+    from scripts.lab import judge as _judge
+
+    # Feed the model the RAW section, tables/code intact — much of the answer content
+    # (e.g. the "three levels" table) lives in markdown tables that clean_markdown
+    # strips. Opus reads tables natively and reshapes them into prose. Skip only true
+    # navigation/heading stubs (guard on raw length, not the stripped length, so a
+    # table-heavy section isn't dropped).
+    if len(text.split()) < MIN_SECTION_WORDS:
         return []
-    user = f"SECTION: {heading}\n\n{cleaned[:MAX_SECTION_CHARS]}"
+    consolidated = mode == "consolidated"
+    system = _CLOUD_SYSTEM_CONSOLIDATED if consolidated else _CLOUD_SYSTEM
+    schema = _CLOUD_SCHEMA_CONSOLIDATED if consolidated else _CLOUD_SCHEMA
+    user = f"SECTION: {heading}\n\n{text[:MAX_SECTION_CHARS]}"
     try:
         resp = _judge._get_client().messages.create(
             model=_judge.JUDGE_MODEL,
-            max_tokens=700,
-            system=_CLOUD_SYSTEM,
-            output_config={"format": {"type": "json_schema", "schema": _CLOUD_SCHEMA}},
+            max_tokens=900 if consolidated else 700,
+            system=system,
+            output_config={"format": {"type": "json_schema", "schema": schema}},
             messages=[{"role": "user", "content": user}],
         )
         txt = next(b.text for b in resp.content if b.type == "text")
-        units = json.loads(txt).get("units", [])
+        data = json.loads(txt)
+        if consolidated:
+            answer = str(data.get("answer", "")).strip()
+            return [answer] if answer else []
+        units = data.get("units", [])
         return [u.strip() for u in units if isinstance(u, str) and u.strip()]
     except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
         # Credential problems are fatal for the whole run — re-raise so distill()
@@ -104,7 +141,9 @@ def _distill_cloud(heading: str, text: str) -> list[str]:
         return []
 
 
-def distill(src: Path, out: Path, backend: str = "heuristic") -> dict[str, Any]:
+def distill(
+    src: Path, out: Path, backend: str = "heuristic", mode: str = "atomic"
+) -> dict[str, Any]:
     if backend == "cloud":
         from scripts.lab import judge as _judge
 
@@ -121,7 +160,7 @@ def distill(src: Path, out: Path, backend: str = "heuristic") -> dict[str, Any]:
     for sec in doc.sections:
         heading = sec.heading or "(root)"
         words = len(clean_markdown(sec.content).split())
-        units = fn(heading, sec.content)
+        units = fn(heading, sec.content, mode)
         if not units:
             if words >= MIN_SECTION_WORDS:
                 n_failed += 1  # substantive section produced nothing (likely an extract failure)
@@ -142,6 +181,7 @@ def distill(src: Path, out: Path, backend: str = "heuristic") -> dict[str, Any]:
         logger.warning("%d substantive section(s) produced no units", n_failed)
     return {
         "backend": backend,
+        "mode": mode,
         "sections_used": n_sections,
         "units": n_units,
         "sections_empty": n_failed,
@@ -168,12 +208,18 @@ def main() -> None:
     )
     ap.add_argument("src", nargs="?", help="source .md (default: the configured corpus doc)")
     ap.add_argument("--backend", choices=["heuristic", "cloud"], default="heuristic")
+    ap.add_argument(
+        "--mode",
+        choices=["atomic", "consolidated"],
+        default="consolidated",
+        help="atomic = 1-5 short facts/section; consolidated = one complete answer/section",
+    )
     ap.add_argument("--out", default="")
     args = ap.parse_args()
     src = Path(args.src) if args.src else _default_src()
     out = Path(args.out) if args.out else Path("data/distilled") / f"{src.stem}.distilled.md"
-    logger.info("distilling %s (backend=%s)", src.name, args.backend)
-    stats = distill(src, out, args.backend)
+    logger.info("distilling %s (backend=%s, mode=%s)", src.name, args.backend, args.mode)
+    stats = distill(src, out, args.backend, args.mode)
     print(json.dumps(stats, indent=2))
 
 

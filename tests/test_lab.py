@@ -89,6 +89,15 @@ def test_distill_heuristic_skips_thin_sections() -> None:
     assert distiller._distill_heuristic("Part 1", "too short") == []
 
 
+def test_distill_consolidated_keeps_whole_section_atomic_truncates() -> None:
+    # A long section: atomic caps at MAX_UNIT_WORDS; consolidated keeps it all.
+    text = "Fact one is important. " * 40  # ~160 words
+    atomic = distiller._distill_heuristic("Topic", text, mode="atomic")[0]
+    consolidated = distiller._distill_heuristic("Topic", text, mode="consolidated")[0]
+    assert len(consolidated.split()) > len(atomic.split())
+    assert len(atomic.split()) <= distiller.MAX_UNIT_WORDS + 20  # cap (plus topic prefix)
+
+
 def test_distill_heuristic_produces_self_contained_unit() -> None:
     text = (
         "Speculative decoding is provably lossless. The rejection rule makes the "

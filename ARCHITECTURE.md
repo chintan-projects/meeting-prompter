@@ -288,6 +288,16 @@ Three implementation properties matter:
   permission, and routing consent through a gate the user just opened by hand would be
   asking twice.
 
+**Silence has two audiences.** F-202 suppresses automatic dead ends, and that stays
+right — an unprompted "I couldn't help" is worse than nothing. But the first D-02 test
+showed the rule had been over-applied: a *user-initiated* request that returned nothing
+also rendered nothing, so select-to-answer was indistinguishable from a broken button.
+The split is now explicit — automatic dead ends stay silent; explicit requests always
+resolve to something visible (pending → answer, no-match, or error). Separately,
+triggers that pass the gate and find nothing emit `trigger_miss`, surfaced as a count
+rather than a card, so "the corpus doesn't cover this" can be told apart from "the
+pipeline is dead" without reintroducing spam.
+
 The window has **no timer** (`max_listen_seconds: 0`) — it stays open until toggled
 off. That is a deliberate product call, and its known failure mode is a forgotten
 window quietly restoring the old always-on behaviour. Two mitigations: the status bar

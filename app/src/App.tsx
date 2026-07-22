@@ -34,6 +34,32 @@ interface PromptResult {
   display_emoji: string;
 }
 
+/**
+ * A feedback card for something the user asked for by hand: pending, no match,
+ * or an error. Rendered muted by PromptsPane (no confidence, no generate button).
+ */
+function notice(
+  triggerText: string,
+  answer: string,
+  emoji = "\u{1F4AC}",
+  label = "NOTE"
+): Record<string, unknown> {
+  return {
+    type: "prompt",
+    trigger_type: "notice",
+    trigger_text: triggerText,
+    answer,
+    confidence: 0,
+    method: "notice",
+    latency_ms: 0,
+    source: "",
+    persistence: "standard",
+    dismiss_ms: 20000, // clears itself; a stale "no match" is just clutter
+    display_label: label,
+    display_emoji: emoji,
+  };
+}
+
 interface MeetingConfig {
   title: string;
   agenda_items: string[];
@@ -71,61 +97,122 @@ function App() {
   const promptIdRef = useRef(0);
   // D-02: default quiet. Backend owns the truth; this mirrors it for the UI.
   const [isListening, setIsListening] = useState(false);
+  // Triggers heard while armed that had no borrowable match. Surfaced as a
+  // count so "the corpus can't answer this" is distinguishable from "broken".
+  const [missCount, setMissCount] = useState(0);
 
-  /** Add a locally-fetched card (select-to-answer) to the same list as pushed ones. */
-  const addPromptCard = useCallback((msg: Record<string, unknown>) => {
+  /** Add a locally-built card and return its id so it can be replaced in place. */
+  const addPromptCard = useCallback((msg: Record<string, unknown>): number => {
     promptIdRef.current += 1;
+    const id = promptIdRef.current;
     setPromptResults((prev) => [
       {
         ...(msg as unknown as Omit<PromptResult, "id" | "receivedAt">),
-        id: promptIdRef.current,
+        id,
         receivedAt: Date.now(),
       },
       ...prev,
     ]);
+    return id;
   }, []);
 
-  /** Toggle the listen window. Fire-and-forget: the WS listen_state is the truth. */
+  /** Replace a card's contents in place (pending → answer / no-match / error). */
+  const replacePromptCard = useCallback((id: number, msg: Record<string, unknown>) => {
+    setPromptResults((prev) =>
+      prev.map((p) =>
+        p.id === id
+          ? {
+              ...(msg as unknown as Omit<PromptResult, "id" | "receivedAt">),
+              id,
+              receivedAt: p.receivedAt,
+            }
+          : p
+      )
+    );
+  }, []);
+
+  /** Toggle the listen window. The WS listen_state is the source of truth. */
   const toggleListen = useCallback(() => {
-    if (!isRunning) return;
+    if (!isRunning) {
+      addPromptCard(notice("", "Start a meeting before arming the listen window."));
+      return;
+    }
     fetch(`${API_BASE}/prompts/listen`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((state) => {
-        if (state) setIsListening(Boolean(state.armed));
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`Could not change the listen window (HTTP ${r.status}).`);
+        return r.json();
       })
-      .catch(() => {
-        /* the indicator stays as-is; the next listen_state corrects it */
+      .then((state) => setIsListening(Boolean(state.armed)))
+      .catch((e: Error) => {
+        // Never leave the indicator lying about the backend's actual state.
+        addPromptCard(notice("", e.message));
       });
-  }, [isRunning]);
+  }, [isRunning, addPromptCard]);
 
-  /** Select-to-answer (D-02, spatial): answer whatever the user highlighted. */
+  /**
+   * Select-to-answer (D-02, spatial): answer whatever the user highlighted.
+   *
+   * Every outcome renders a card. Dead-end suppression (F-202) is right for
+   * automatic pushes, but on a request the user made by hand, silence is
+   * indistinguishable from the feature being broken — which is exactly how it
+   * read the first time this was used live.
+   */
   const answerSelection = useCallback(
     (text: string) => {
-      if (!isRunning || !text.trim()) return;
+      const query = text.trim();
+      if (!query) return;
+      const id = addPromptCard(
+        notice(query, "Looking in your corpus…", "\u{1F50D}", "SEARCHING")
+      );
+      if (!isRunning) {
+        replacePromptCard(
+          id,
+          notice(query, "Start a meeting first — the corpus loads with the session.")
+        );
+        return;
+      }
       fetch(`${API_BASE}/prompts/answer`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, trigger_type: "question" }),
+        body: JSON.stringify({ text: query, trigger_type: "question" }),
       })
-        .then((r) => (r.ok ? r.json() : null))
+        .then(async (r) => {
+          if (!r.ok) {
+            const detail =
+              r.status === 409
+                ? "No active session — start a meeting first."
+                : `Lookup failed (HTTP ${r.status}).`;
+            throw new Error(detail);
+          }
+          return r.json();
+        })
         .then((card) => {
           if (card && card.answer) {
-            addPromptCard({
+            replacePromptCard(id, {
               ...card,
               display_label: "ANSWER",
               display_emoji: "\u{1F4A1}",
             });
+          } else {
+            replacePromptCard(
+              id,
+              notice(
+                query,
+                card?.note ??
+                  "Nothing in your corpus answers that. Try selecting a longer phrase, or add a document covering it."
+              )
+            );
           }
         })
-        .catch(() => {
-          /* silent: a failed lookup should not interrupt a meeting */
+        .catch((e: Error) => {
+          replacePromptCard(id, notice(query, e.message || "Lookup failed."));
         });
     },
-    [isRunning, addPromptCard]
+    [isRunning, addPromptCard, replacePromptCard]
   );
 
   const handlePinPrompt = useCallback((id: number) => {
@@ -185,6 +272,11 @@ function App() {
       const typed = data as { type?: string; armed?: boolean };
       if (typed.type === "listen_state") {
         setIsListening(Boolean(typed.armed));
+        return;
+      }
+      if (typed.type === "trigger_miss") {
+        // Heard you, found nothing borrowable. A count, not a card.
+        setMissCount((n) => n + 1);
         return;
       }
       const msg = data as Omit<PromptResult, "id" | "receivedAt">;
@@ -459,6 +551,8 @@ function App() {
           dismissedIds={dismissedIds}
           onPin={handlePinPrompt}
           onDismiss={handleDismissPrompt}
+          isListening={isListening}
+          missCount={missCount}
         />
       </div>
 

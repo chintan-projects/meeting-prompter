@@ -357,6 +357,24 @@ class Session:
         """
         self._transcript_buffer.on_silence(timestamp, source=source)
 
+    def _on_trigger_miss(self, trigger: Trigger) -> None:
+        """A trigger passed the listen gate but nothing borrowable came back.
+
+        Sent as a count, never a card: the user needs to know the pipeline is
+        alive and hearing them (otherwise "my corpus doesn't cover this" looks
+        identical to "this is broken"), but a card per miss is the prompt spam
+        D-02 exists to remove.
+        """
+        logger.info("[trigger] %s heard, no borrowable match", trigger.type.value)
+        self._thread_safe_put(
+            self._prompt_queue,
+            {
+                "type": "trigger_miss",
+                "trigger_type": trigger.type.value,
+                "trigger_text": trigger.text[:120],
+            },
+        )
+
     def _on_trigger_result(self, trigger: Trigger, result: GenerationResult) -> None:
         """Called when a trigger fires and produces a generation result.
 
@@ -670,6 +688,7 @@ class Session:
             self._orchestrator.on_transcription = self._on_transcription
             self._orchestrator.on_silence_detected = self._on_silence_detected
             self._orchestrator.on_trigger_result = self._on_trigger_result
+            self._orchestrator.on_trigger_miss = self._on_trigger_miss
 
             # Create text refiner (shares RAGAnswerGenerator — thread-safe via generate_text())
             refiner_config = getattr(self.config, "refiner", None)

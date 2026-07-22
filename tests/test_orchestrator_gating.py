@@ -35,22 +35,25 @@ def _result(answer: str = "a borrowable sentence") -> GenerationResult:
 class _FakeOrchestrator:
     """Minimal stand-in carrying the real _process_trigger / retrieve_for_text."""
 
-    def __init__(self, gate: ListenGate, retrieval_first: bool = True) -> None:
+    def __init__(self, gate: ListenGate, retrieval_first: bool = True, finds: bool = True) -> None:
         self.listen_gate = gate
         self.config = SimpleNamespace(triggers=SimpleNamespace(retrieval_first=retrieval_first))
         self.buffer = SimpleNamespace(get_recent_context=lambda: "")
         self.retrieval_calls: List[str] = []
         self.generated_calls: List[str] = []
+        self.misses: List[str] = []
+        self._finds = finds
+        self.on_trigger_miss = lambda t: self.misses.append(t.text)
         self._process_trigger = MethodType(MeetingOrchestrator._process_trigger, self)
         self.retrieve_for_text = MethodType(MeetingOrchestrator.retrieve_for_text, self)
 
     def _process_trigger_retrieval(self, trigger: Trigger) -> Optional[GenerationResult]:
         self.retrieval_calls.append(trigger.text)
-        return _result()
+        return _result() if self._finds else None
 
     def _process_trigger_generated(self, trigger: Trigger) -> Optional[GenerationResult]:
         self.generated_calls.append(trigger.text)
-        return _result()
+        return _result() if self._finds else None
 
 
 def _trigger(ttype: TriggerType, text: str = "what is the timeline") -> Trigger:
@@ -114,6 +117,46 @@ class TestGenerationPathAlsoGated:
         orch: Any = _FakeOrchestrator(gate, retrieval_first=False)
         assert orch._process_trigger(_trigger(TriggerType.QUESTION)) is not None
         assert orch.generated_calls and not orch.retrieval_calls
+
+
+class TestTriggerMissSignal:
+    """Heard-but-no-match must be observable, or "corpus can't answer this"
+    looks exactly like "the pipeline is dead" — which is how it read live."""
+
+    def test_miss_fires_when_nothing_borrowable(self) -> None:
+        gate = ListenGate()
+        gate.arm()
+        orch: Any = _FakeOrchestrator(gate, finds=False)
+        assert orch._process_trigger(_trigger(TriggerType.QUESTION, "unmatched q")) is None
+        assert orch.misses == ["unmatched q"]
+
+    def test_no_miss_when_a_card_is_produced(self) -> None:
+        gate = ListenGate()
+        gate.arm()
+        orch: Any = _FakeOrchestrator(gate, finds=True)
+        orch._process_trigger(_trigger(TriggerType.QUESTION))
+        assert orch.misses == []
+
+    def test_suppressed_triggers_do_not_count_as_misses(self) -> None:
+        """A gated trigger was never attempted — counting it would tell the user
+        their corpus failed when nothing was ever looked up."""
+        orch: Any = _FakeOrchestrator(ListenGate(), finds=False)
+        orch._process_trigger(_trigger(TriggerType.QUESTION))
+        assert orch.misses == []
+
+    def test_miss_fires_on_the_generative_path_too(self) -> None:
+        gate = ListenGate()
+        gate.arm()
+        orch: Any = _FakeOrchestrator(gate, retrieval_first=False, finds=False)
+        orch._process_trigger(_trigger(TriggerType.QUESTION, "q"))
+        assert orch.misses == ["q"]
+
+    def test_missing_callback_is_not_an_error(self) -> None:
+        gate = ListenGate()
+        gate.arm()
+        orch: Any = _FakeOrchestrator(gate, finds=False)
+        orch.on_trigger_miss = None  # CLI/dashboard consumers never set it
+        assert orch._process_trigger(_trigger(TriggerType.QUESTION)) is None
 
 
 class TestSelectToAnswerBypassesGate:

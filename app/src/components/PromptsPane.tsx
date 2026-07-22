@@ -26,6 +26,10 @@ interface PromptsPaneProps {
   dismissedIds: ReadonlySet<number>;
   onPin: (id: number) => void;
   onDismiss: (id: number) => void;
+  /** D-02: whether the listen window is armed (drives the empty-state copy). */
+  isListening?: boolean;
+  /** Triggers heard while armed with no borrowable match — proof of life. */
+  missCount?: number;
 }
 
 /** Visual config per trigger type — colors and card styling. */
@@ -34,6 +38,10 @@ const TRIGGER_STYLES: Record<string, { color: string; bgTint: string }> = {
   question: { color: "var(--accent-blue)", bgTint: "transparent" },
   topic: { color: "var(--accent-gray)", bgTint: "transparent" },
   follow_up: { color: "var(--accent-purple)", bgTint: "transparent" },
+  // Feedback for a request the user made by hand. Automatic dead ends stay
+  // silent (F-202), but silence on an explicit ask is indistinguishable from
+  // the feature being broken — which is exactly how it read in testing.
+  notice: { color: "var(--text-muted)", bgTint: "transparent" },
 };
 
 /** Fallback auto-dismiss durations (used when server doesn't send dismiss_ms). */
@@ -49,6 +57,7 @@ const DEFAULT_PERSISTENCE: Record<string, "persistent" | "standard" | "ephemeral
   question: "persistent",
   topic: "ephemeral",
   follow_up: "standard",
+  notice: "standard",
 };
 
 /** Fallback display labels. */
@@ -57,6 +66,7 @@ const DEFAULT_LABELS: Record<string, { label: string; emoji: string }> = {
   question: { label: "ANSWER", emoji: "\ud83d\udca1" },
   topic: { label: "FYI", emoji: "\ud83d\udccc" },
   follow_up: { label: "SUGGEST", emoji: "\ud83d\udcac" },
+  notice: { label: "", emoji: "" },
 };
 
 function getPersistence(r: PromptResult): "persistent" | "standard" | "ephemeral" {
@@ -90,6 +100,8 @@ export function PromptsPane({
   dismissedIds,
   onPin,
   onDismiss,
+  isListening = false,
+  missCount = 0,
 }: PromptsPaneProps) {
   const topRef = useRef<HTMLDivElement>(null);
   const now = Date.now();
@@ -119,12 +131,31 @@ export function PromptsPane({
       <div style={styles.header}>
         <span style={styles.headerTitle}>INTELLIGENCE</span>
         {totalVisible > 0 && <span style={styles.count}>{totalVisible}</span>}
+        {missCount > 0 && (
+          <span
+            style={styles.missCount}
+            title={`${missCount} question(s) heard with nothing borrowable in your corpus. The pipeline is working — the corpus doesn't cover these.`}
+          >
+            {missCount} heard · no match
+          </span>
+        )}
       </div>
 
       <div style={styles.body} ref={topRef}>
         {totalVisible === 0 && (
           <div style={styles.empty}>
-            Listening for questions, topics, and opportunities to help.
+            {isListening ? (
+              <>
+                <strong>Listening.</strong> Answers appear here when something in
+                the conversation matches your corpus. ⌘L to stop.
+              </>
+            ) : (
+              <>
+                <strong>Quiet.</strong> Press ⌘L to listen, or select any
+                transcript text and choose “Answer this”. Watch-word alerts still
+                come through.
+              </>
+            )}
           </div>
         )}
 
@@ -179,9 +210,12 @@ function PromptCard({
   const emoji = getEmoji(result);
   const persistence = getPersistence(result);
   const isCoaching = result.trigger_type === "follow_up";
+  // A notice is feedback about the user's own request (pending / no match /
+  // error), not an answer — so no confidence score and no generate button.
+  const isNotice = result.trigger_type === "notice";
   // Retrieval-first (F-705): borrowable unit with expand-to-source; generation
   // is user-gated (D-02) via the on-demand button.
-  const isBorrowable = result.method === "retrieval";
+  const isBorrowable = result.method === "retrieval" && !isNotice;
   const [showSource, setShowSource] = useState(false);
   const [genAnswer, setGenAnswer] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -222,9 +256,11 @@ function PromptCard({
           {emoji} {label}
         </span>
         <div style={styles.controls}>
-          <span style={styles.meta}>
-            {Math.round(result.confidence * 100)}%
-          </span>
+          {!isNotice && (
+            <span style={styles.meta}>
+              {Math.round(result.confidence * 100)}%
+            </span>
+          )}
           {!isPinned && (
             <button
               style={styles.iconBtn}
@@ -256,7 +292,7 @@ function PromptCard({
       {result.trigger_text && (
         <div style={styles.triggerText}>
           {result.trigger_type === "question" ? "Q: " : ""}
-          {result.trigger_text}
+          {isNotice ? `“${result.trigger_text}”` : result.trigger_text}
         </div>
       )}
 
@@ -340,6 +376,12 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "1px 8px",
     fontSize: 11,
     color: "var(--text-secondary)",
+  },
+  missCount: {
+    marginLeft: "auto",
+    fontSize: 10,
+    color: "var(--text-muted)",
+    cursor: "help",
   },
   body: {
     flex: 1,

@@ -101,6 +101,8 @@ class MeetingOrchestrator:
         self.on_transcription: Optional[TranscriptionCallback] = None
         self.on_silence_detected: Optional[SilenceCallback] = None
         self.on_trigger_result: Optional[TriggerResultCallback] = None
+        # Fired when a trigger passes the listen gate but yields no card.
+        self.on_trigger_miss: Optional[Callable[[Trigger], None]] = None
 
         # D-02: default quiet. Automatic cards are suppressed until the user
         # arms the listen window; watch-word ALERTs stay always-on.
@@ -318,8 +320,16 @@ class MeetingOrchestrator:
             )
             return None
         if self.config.triggers.retrieval_first:
-            return self._process_trigger_retrieval(trigger)
-        return self._process_trigger_generated(trigger)
+            result = self._process_trigger_retrieval(trigger)
+        else:
+            result = self._process_trigger_generated(trigger)
+        if result is None and self.on_trigger_miss:
+            # Heard, but nothing borrowable. Staying silent is right (F-202) —
+            # but with no signal at all, "the corpus can't answer this" is
+            # indistinguishable from "the pipeline is dead". Consumers surface
+            # this as a count, never as a card.
+            self.on_trigger_miss(trigger)
+        return result
 
     def retrieve_for_text(
         self, text: str, trigger_type_value: str = "question"

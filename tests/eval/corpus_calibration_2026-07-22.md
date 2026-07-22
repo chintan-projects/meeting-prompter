@@ -1,5 +1,27 @@
 # Corpus coverage — local rater vs cloud judge, 21-question held-out set
 
+> ## ⚠️ INVALID AS A MEASURE OF DISTILLATION — read this first
+>
+> After this run was recorded, the "distilled" corpus it scored was found to be
+> **corrupt**: the local backend (F-702 v1) wrote the model's *task narration*
+> ("Okay, I need to write a complete, self-contained answer…") into **63 of 88
+> units (72%)** instead of answers. The bug was in `lib/corpus/local.py` — the
+> `<think></think>` prefill does not reliably suppress this reasoning model's
+> planning, and only tagged `<think>` blocks were being stripped.
+>
+> Therefore:
+> - **`original` = 76% (16/21) is VALID** — no distiller touched that corpus.
+> - **`distilled` = 81% (17/21) is VOID.** It scores a broken corpus, so the
+>   "+5 pp" delta measures the bug, not distillation.
+> - The **calibration** figures (local rater vs judge) are computed across both
+>   corpora, so they are contaminated too; only the `original` column can be
+>   trusted for rater comparison.
+>
+> Fixed by a self-containment contract check that rejects narration and falls back
+> to the heuristic floor, with the reject rate reported in the distill stats.
+> **A re-run is required before any conclusion about distillation is drawn.**
+> The per-question data below is kept as the record of what was measured.
+
 **Date:** 2026-07-22 · **Question set:** [corpus_questions.yaml](corpus_questions.yaml) (21, held out from the distiller)
 **Corpora:** original `on-device-capability-playbook.md` vs the **local-backend** distilled corpus
 (88 units — 77 section + 11 topic; F-702 v1 prompted LFM2.5-2.6B)

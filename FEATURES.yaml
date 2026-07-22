@@ -724,7 +724,7 @@ workstreams:
           - new: lib/corpus/distiller.py
       - id: F-702
         name: "Local distiller model (on-device, no cloud egress)"
-        status: blocked  # 2026-07-22: v1 shipped (prompted LFM2.5-2.6B, backend="local", default; 88 units, tables prose-ified). v2 forge fine-tune ON HOLD — judge calibration at n=21 shows distillation is worth only +5pp (76->81%) on this corpus; gate the forge on evidence from a messy corpus. See tests/eval/corpus_calibration_2026-07-22.md
+        status: in_progress  # 2026-07-22: v1 prompted LFM2.5-2.6B ships behind a self-containment contract check — the model narrates its task instead of answering on ~72% of sections, so those fall back to the heuristic floor (reject rate reported in distill stats). A prompt-only local distiller is NOT viable on this model; that is the empirical case FOR forging a specialist. Gate v2 on the cloud-vs-heuristic judge run over the 21-question set.
         effort: XL
         description: >
           Forge a local small model for the section → grounded-answer-unit task

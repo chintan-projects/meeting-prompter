@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +52,43 @@ SECTION: {heading}
 
 _REFUSAL_MARKERS = ("NONE", "I don't have")
 
+# The 2.6B is a reasoning model: on ~58% of sections it narrated its plan ("Okay,
+# I need to write a complete, self-contained answer...") instead of answering, and
+# an empty <think></think> prefill does not reliably suppress it (prompt hardening
+# was tried and produced different meta-text, not less). Those strings are not
+# answers, and a corpus full of them silently poisons retrieval and coverage — so
+# a unit that reads as task-narration is REJECTED and the section falls back to
+# the heuristic floor. The reject rate is reported in the distill stats; a high
+# rate is the empirical case for forging a fine-tuned distiller (F-702 v2).
+# This is a CONTRACT check, not just a style filter: an answer-unit must be
+# self-contained (the prompt's own rule), so text that narrates the task ("I need
+# to write..."), frames the artifact ("The following is a complete answer...") or
+# points outside itself ("the section describes...") is never a valid unit — a
+# speaker cannot read it aloud to answer anything.
+_META_PATTERN = re.compile(
+    r"\b(?:"
+    r"i (?:need to|have to|am going to|want to|must|should|will|shall)\b|i'll|let me|okay,|"
+    r"the user (?:wants|is asking)|my task|"  # task narration
+    r"the following is|here'?s? (?:is )?(?:a|the) (?:complete|answer|self)|"
+    r"this (?:is a|section)|a speaker-friendly|speaker could read|"  # artifact framing
+    r"the(?:\s+\w+){0,2}\s+(?:section|text|passage|document|provided)\b"
+    r"(?:\s+\w+){0,2}\s+(?:describes|explains|states|says|provides|contains|title)|"
+    r"based on the (?:section|provided)|self-contained (?:answer|documentation|explanation)|"
+    r"borrowable"
+    r")",
+    re.IGNORECASE,
+)
+META_SCAN_CHARS = 220  # narration and framing, when they happen, are in the opening
+
+
+def looks_like_meta(text: str) -> bool:
+    """True when the unit narrates/frames the task instead of being the answer.
+
+    Enforces the self-containment contract: a unit that talks *about* an answer,
+    or refers to "the section" it came from, is not borrowable.
+    """
+    return bool(_META_PATTERN.search(" ".join(text.split())[:META_SCAN_CHARS]))
+
 
 def default_model_path() -> Path:
     """The configured generation model (config-driven; MODELS_DIR-resolved)."""
@@ -69,6 +107,9 @@ class LocalDistiller:
 
         self.model_path = model_path or default_model_path()
         self._generator = RAGAnswerGenerator(self.model_path, n_ctx=n_ctx)
+        #: Per-run counts. `rejected` is the headline quality signal for the
+        #: prompted model — a high rate is the case for forging a specialist.
+        self.stats: dict[str, int] = {"model": 0, "rejected": 0, "empty": 0}
 
     def available(self) -> bool:
         """True when the model file exists on disk."""
@@ -92,8 +133,21 @@ class LocalDistiller:
         if not answer or any(answer.startswith(m) for m in _REFUSAL_MARKERS):
             if not clean_markdown(text).split():
                 return []  # genuinely empty after cleaning (e.g. pure table the model refused)
+            self.stats["empty"] += 1
             logger.warning("local distill empty for %r — heuristic fallback", heading)
             return _distill_heuristic(heading, text, "consolidated")
+        if looks_like_meta(answer):
+            # The model narrated the task instead of answering it. Shipping this
+            # would poison retrieval with text no speaker could ever read aloud.
+            self.stats["rejected"] += 1
+            logger.warning(
+                "local distill rejected (task narration, not an answer) for %r: %r "
+                "— heuristic fallback",
+                heading,
+                answer[:80],
+            )
+            return _distill_heuristic(heading, text, "consolidated")
+        self.stats["model"] += 1
         return [answer]
 
 

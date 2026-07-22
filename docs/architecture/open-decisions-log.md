@@ -347,7 +347,34 @@ more likely an under- than over-statement — but the judge run is the trust gat
 (`--rater judge`, needs key); (2) live call (WS-14) to validate the borrowable
 view UX + latency budget; (3) F-702 v2 forge fine-tune decision after (1).
 
-### E-03 judge calibration — the distillation lift does NOT hold at n=21 (2026-07-22)
+### E-03 judge calibration — RETRACTED IN PART (2026-07-22)
+
+> **Correction, same day.** The section below concluded "distillation is worth
+> +5 pp". **That conclusion is withdrawn**: the distilled corpus it scored was
+> corrupt — 72% of its units contained the local model's task narration, not
+> answers (bug in `lib/corpus/local.py`, fixed with a contract check + heuristic
+> fallback + reported reject rate). What survives and what dies:
+>
+> | Claim | Status |
+> |---|---|
+> | Original corpus = **76%** judge-scored (16/21) | **stands** — no distiller involved |
+> | Original = 25% on E-03's own 4 questions; 88% on the other 17 | **stands** — the probe sampled the hard tail |
+> | Distilled = 81%, so distillation ≈ **+5 pp** | **VOID** — measured a broken corpus |
+> | "Put the F-702 forge on hold" | **withdrawn** — see below; the evidence now points the other way |
+> | Local rater is miscalibrated vs judge | **stands on the `original` column** (see F-707) |
+>
+> **The 25% → 75% from the earlier cloud run is NOT contradicted by anything
+> measured here** — the cloud distiller has never been scored on the 21-question
+> set. The two runs differ in *three* ways (question set, distiller backend, and
+> this bug), and today's run isolated none of them.
+>
+> **New evidence for the forge, not against it:** the prompted 2.6B produces a
+> contract-valid answer-unit only **~28% of the time** (63/88 rejected); prompt
+> hardening was tried and merely produced different narration. A prompt-only local
+> distiller is not viable on this model — which is precisely the job a forged
+> specialist (F-702 v2) exists to do.
+
+### (superseded) the original conclusion, kept for the record
 
 The operator ran the judge (Opus 4.8) over the full held-out 21-question set, on the
 original corpus and the local-distilled corpus. Full per-question data + method:
@@ -398,11 +425,17 @@ on the corpora users actually bring (meeting notes, slide dumps, Notion exports,
 messier inputs where the 88%-already-good baseline should not hold. **Unproven either way; we
 have measured exactly one corpus, and it was a good one.**
 
-**Recommendation (operator's call):**
-- **Do not start the F-702 v2 forge** yet. A fine-tuned distiller would be chasing a 5-point
-  remainder on the only corpus we have measured. Gate it on evidence from a messy corpus.
-- **Recalibrate the readiness rater** (F-703) against a fresh dev question set before the
-  wizard's score is shown to anyone as a verdict — it is the user-facing number and it is
-  currently wrong by ~38 points in the direction that destroys trust.
-- **Re-run this comparison on a messy corpus** (Notion export or raw meeting notes). That is
-  the cheapest decisive test of whether corpus-prep is a product step or a solved problem.
+**Recommendation — REVISED after the corruption was found:**
+1. **Re-run the local comparison on the fixed corpus** (guard active, reject rate reported).
+   Free, no credential. Until then there is *no* valid local-backend coverage number.
+2. **Cloud-distill the same corpus and judge it over all 21** — this is the decisive
+   experiment nobody has run: it isolates *backend quality* from *question sample*, and it
+   is the only way to know whether 25%→75% was a sampling artifact, a cloud-vs-local gap,
+   or both. Needs the operator's key.
+3. **F-702 v2 forge: no longer "on hold" — pending (2).** The prompted 2.6B is contract-valid
+   on ~28% of sections, so a prompt-only local distiller is not viable. If (2) shows cloud
+   materially beats the heuristic on the 21, the forge has a measured target and should
+   proceed; if cloud ≈ heuristic, the ceiling is the corpus and the forge is pointless here.
+4. **Recalibrate the readiness rater** (F-707) on a fresh dev set — it understates the
+   *original* corpus by 38 points, and that column is uncontaminated.
+5. **Then test a messy corpus** (F-708) — Notion export, raw meeting notes.

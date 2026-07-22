@@ -102,9 +102,11 @@ class _StubGenerator:
 
 
 def _local_with(reply: str) -> "local.LocalDistiller":
+    """A LocalDistiller with a stub generator — no model load, no network."""
     d = local.LocalDistiller.__new__(local.LocalDistiller)
     d.model_path = Path("/nonexistent.gguf")
     d._generator = _StubGenerator(reply)  # type: ignore[assignment]
+    d.stats = {"model": 0, "rejected": 0, "empty": 0}
     return d
 
 
@@ -134,6 +136,56 @@ def test_local_distill_falls_back_to_heuristic_on_refusal() -> None:
     units = d.distill_section("2.4 Three Levels", SECTION)
     # section has real prose → heuristic floor, not empty
     assert units and "tokenizer constraint" in units[0]
+    assert d.stats["empty"] == 1
+
+
+# The reasoning model narrates its task instead of answering on a majority of
+# sections; shipping that text poisons retrieval. These are real outputs observed
+# in the 2026-07-22 run (see tests/eval/corpus_calibration_2026-07-22.md).
+NARRATION_SAMPLES = [
+    "Okay, I need to write a complete, self-contained answer that captures everything.",
+    "I will now carefully analyze this entire SECTION and extract every key fact.",
+    "The user wants a complete, self-contained answer from the given SECTION text.",
+    "The following is a complete, self-contained documentation section for a speaker.",
+    "A speaker-friendly, self-contained explanation of the 'Finding What to Cut' section.",
+    "The entire section describes a multi-layered model architecture.",
+    "THE SECTION TITLE IS '2.5 Reasoning-Trace Distillation' AND IT CONTAINS A CODE BLOCK.",
+]
+
+REAL_ANSWER_SAMPLES = [
+    "A weight functions as a signed volume knob that multiplies an input signal.",
+    "INT4 quantization costs about one to three percent of quality for a 4x smaller model.",
+    "Router collapse happens when a Mixture-of-Experts router sends most tokens to few experts.",
+    "The loss is the KL divergence between the teacher and student distributions.",
+    "Speculative decoding is provably lossless because the rejection rule preserves the "
+    "target model's output distribution exactly.",
+]
+
+
+@pytest.mark.parametrize("sample", NARRATION_SAMPLES)
+def test_meta_detector_flags_task_narration(sample: str) -> None:
+    assert local.looks_like_meta(sample)
+
+
+@pytest.mark.parametrize("sample", REAL_ANSWER_SAMPLES)
+def test_meta_detector_passes_real_answers(sample: str) -> None:
+    assert not local.looks_like_meta(sample)
+
+
+def test_local_distill_rejects_narration_and_counts_it() -> None:
+    d = _local_with("Okay, I need to write a complete, self-contained answer about levels.")
+    units = d.distill_section("2.4 Three Levels", SECTION)
+    assert units and "tokenizer constraint" in units[0]  # heuristic floor, not the narration
+    assert "I need to" not in units[0]
+    assert d.stats == {"model": 0, "rejected": 1, "empty": 0}
+
+
+def test_local_distill_counts_accepted_model_output() -> None:
+    d = _local_with(
+        "Logit-level distillation transfers full dark knowledge but needs one tokenizer."
+    )
+    d.distill_section("2.4 Three Levels", SECTION)
+    assert d.stats == {"model": 1, "rejected": 0, "empty": 0}
 
 
 def test_local_backend_unavailable_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:

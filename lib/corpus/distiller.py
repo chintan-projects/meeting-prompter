@@ -255,7 +255,7 @@ def distill(
     out.write_text("\n".join(lines), encoding="utf-8")
     if n_failed:
         logger.warning("%d substantive section(s) produced no units", n_failed)
-    return {
+    stats: dict[str, Any] = {
         "backend": backend,
         "mode": mode,
         "sections_used": n_sections,
@@ -264,3 +264,22 @@ def distill(
         "sections_empty": n_failed,
         "out": str(out),
     }
+    if backend == "local":
+        # Surface how much of the corpus the model actually produced vs how much
+        # fell back to the heuristic floor — without this the corpus silently
+        # looks model-made when most of it isn't (see lib/corpus/local.py).
+        from lib.corpus.local import get_local_distiller
+
+        counts = get_local_distiller().stats
+        attempted = counts["model"] + counts["rejected"] + counts["empty"]
+        stats["local"] = {
+            **counts,
+            "reject_pct": round(100 * counts["rejected"] / attempted) if attempted else 0,
+        }
+        if counts["rejected"]:
+            logger.warning(
+                "local backend: %d/%d section(s) rejected as task-narration → heuristic floor",
+                counts["rejected"],
+                attempted,
+            )
+    return stats

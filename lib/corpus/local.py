@@ -81,6 +81,11 @@ _META_PATTERN = re.compile(
 META_SCAN_CHARS = 220  # narration and framing, when they happen, are in the opening
 
 
+def _strip_heading_lines(text: str) -> str:
+    """The section body with markdown heading lines removed."""
+    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+
+
 def looks_like_meta(text: str) -> bool:
     """True when the unit narrates/frames the task instead of being the answer.
 
@@ -124,6 +129,15 @@ class LocalDistiller:
         from lib.corpus.distiller import MIN_SECTION_WORDS, _distill_heuristic
 
         if len(text.split()) < MIN_SECTION_WORDS:
+            return []
+        # A heading-only section (an "# Part 5 — ..." divider with no body) has
+        # nothing to distill. The raw-word guard above passes it because long
+        # headings clear the threshold, and the model then narrates rather than
+        # answers ("This section is titled X but contains only the heading").
+        # Test the raw body, not the cleaned text: a section that is *purely* a
+        # table also cleans down to just its heading, and that one must go to the
+        # model — prose-ifying tables is the whole point of the local backend.
+        if not _strip_heading_lines(text).strip():
             return []
         prompt = _PROMPT.format(heading=heading, text=text[:MAX_SECTION_CHARS])
         answer = self._generator.generate_text(prompt, max_tokens=MAX_ANSWER_TOKENS)

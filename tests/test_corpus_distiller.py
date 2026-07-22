@@ -180,6 +180,25 @@ def test_local_distill_rejects_narration_and_counts_it() -> None:
     assert d.stats == {"model": 0, "rejected": 1, "empty": 0}
 
 
+def test_local_distill_skips_heading_only_section_without_calling_model() -> None:
+    # An "# Part 5 — ..." divider clears the raw-word guard on heading length alone;
+    # the model then narrates instead of answering. Skip it at source.
+    d = _local_with("This section is titled Part 5 but contains only the heading.")
+    heading = "Part 5 — Speculative Decoding: Small Model Proposes, Big Model Disposes"
+    assert d.distill_section(heading, f"# {heading}") == []
+    assert d._generator.prompts == []  # type: ignore[attr-defined]
+    assert d.stats == {"model": 0, "rejected": 0, "empty": 0}
+
+
+def test_local_distill_still_runs_on_table_heavy_section() -> None:
+    # Guard must not catch table-heavy sections: they clean down to almost nothing
+    # but are exactly what the model is for (prose-ifying the table).
+    d = _local_with("Logit-level distillation is strongest but requires a shared tokenizer.")
+    table = "## 2.4 Levels\n\n| Level | Strength |\n|---|---|\n| Logit | Strongest |\n"
+    assert d.distill_section("2.4 Levels", table) != []
+    assert d.stats["model"] == 1
+
+
 def test_local_distill_counts_accepted_model_output() -> None:
     d = _local_with(
         "Logit-level distillation transfers full dark knowledge but needs one tokenizer."

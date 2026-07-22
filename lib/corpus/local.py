@@ -41,6 +41,7 @@ Rules:
 - Cover ALL the key facts: every item in a list, every level/option, every number and when-to-use — don't drop any.
 - If the section contains a table, express the table's content as prose.
 - Make it fully self-contained: name the subject, resolve pronouns, no "this"/"it" that refers outside the answer.
+- Never refer to the source document: no "this section", "Section 1.3, titled ...", "the text describes". Do not name or number sections. Write the answer directly, in the words a speaker would use out loud.
 - Reply with just the answer prose. If the section is pure heading/navigation with no borrowable content, reply with exactly: NONE<|im_end|>
 <|im_start|>user
 SECTION: {heading}
@@ -73,6 +74,11 @@ _META_PATTERN = re.compile(
     r"this (?:is a|section)|a speaker-friendly|speaker could read|"  # artifact framing
     r"the(?:\s+\w+){0,2}\s+(?:section|text|passage|document|provided)\b"
     r"(?:\s+\w+){0,2}\s+(?:describes|explains|states|says|provides|contains|title)|"
+    # "Section 1.3, titled "X," explains …" / "Part 9, titled "Y," is a heading":
+    # document-referential framing without a leading article. Present in ~52% of
+    # cloud units, and invisible to the clause above.
+    r"(?:section|part|chapter)\s+[\d.]+\s*,?\s*(?:titled|entitled)|"
+    r"^[^.]{0,60},\s+titled\s+[\"“]|"
     r"based on the (?:section|provided)|self-contained (?:answer|documentation|explanation)|"
     r"borrowable"
     r")",

@@ -182,3 +182,61 @@ The gap is now measured and unambiguous:
 ADR-001 requires distillation to run on-device, so **the forge (F-702 v2) is the only
 path to shipping the 95%**. It now has a measured target, a measured baseline, and a
 demonstrated reason the prompt-only route cannot get there.
+
+---
+
+## Run 2 — topic tier repaired: 76% → 90% (and what it falsified)
+
+Second cloud run, budget fix applied. **`topic_units: 11, topics_failed: 0, units: 88`** —
+the topic tier fully recovered.
+
+| Run | topic units | judge coverage | improved |
+|---|---|---|---|
+| Run 1 | 2 of 11 | **95%** (20/21) | Q02, Q03, Q11, Q21 |
+| Run 2 | **11 of 11** | **90%** (19/21) | Q02, Q03, Q11 |
+
+### 1. The INT4 / topic-unit hypothesis is FALSIFIED
+
+Q01 stayed `partial` *with* the Part 1 topic unit present. Verified directly:
+
+- The Part 1 topic unit **contains both halves** — "~1–3% quality cost" and the
+  MMLU-vs-MATH degradation figures.
+- It **is retrieved**, at rank #2 (cos 0.600), behind the focused §1.3 unit (0.699).
+- It is **910 words**.
+
+The content is there and reachable; it still doesn't score `good`. The judge's bar is
+"the speaker could borrow it as-is" — and a 910-word restatement of an entire Part is
+not something anyone reads aloud. **Topic units as designed trade borrowability for
+coverage.** E-03 finding #4 predicted topic units would close INT4; on the evidence they
+do not, and the reason is unit *length*, not missing content.
+
+Implication: a topic unit should be a bounded cross-section answer (~150 words), not a
+chapter restatement. Design change, not a bug — deliberately not made here, because it
+changes what the tier is for and needs its own validation run.
+
+### 2. Run-to-run variance is ±1 question — do not over-read 90 vs 95
+
+The `original` column is **identical** across both runs (76%, same per-question verdicts),
+so the judge is stable. The variance is in the *distilled* corpus: cloud generation is
+non-deterministic, and Q21 landed `good` in run 1 and `partial` in run 2.
+
+**Report the effect as 76% → 90–95% (+14 to +19 pp).** At n=21 one question is 4.8 pp, so
+the difference between the two runs is noise. The lift is far outside it; the exact figure
+is not. A trustworthy headline needs 3 runs and a median, or deterministic sampling.
+
+### 3. Over half the cloud units refer to the document instead of answering
+
+**46 of 88 units (52%)** open with document-referential framing — *"Section 1.3, titled
+'Rounding to a Codebook — INT4 First,' explains quantization."* That is the same
+self-containment violation the local backend's contract check rejects, and the top unit
+for **both** remaining `partial` questions has it. Not proven causal (n=2), but it is a
+real defect at scale, and it matters twice over:
+
+- These units are what a speaker is asked to read aloud.
+- **They are the forge's training data.** Training a local specialist on them would teach
+  the framing defect.
+
+Fixed at the input (an explicit "never refer to the source document" rule now in all three
+distiller prompts) and at the output (`looks_like_meta` extended to catch the
+`Section N, titled …` variant — detection on the cloud corpus went 3% → 38%).
+Needs a re-run to confirm the prompt rule takes.

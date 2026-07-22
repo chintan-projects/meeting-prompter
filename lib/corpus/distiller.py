@@ -52,6 +52,7 @@ to answer a question.
 Rules:
 - Ground every statement ONLY in the SECTION text. Do not add outside knowledge.
 - Make each statement fully self-contained: resolve pronouns, name the subject, no "this"/"it"/"the above" that refers outside the statement.
+- Never refer to the source document: no "this section", "Section 1.3, titled ...", "the text describes". Do not name or number sections. Write the answer directly, in the words a speaker would use out loud.
 - Prefer crisp factual claims (definitions, numbers, when-to-use, tradeoffs) over narration.
 - Return 1-5 statements; fewer is fine. If the section is pure heading/navigation/table with no borrowable claim, return an empty list."""
 
@@ -67,6 +68,7 @@ Rules:
 every level/option, every number and when-to-use — don't drop any.
 - Make it fully self-contained: name the subject, resolve pronouns, no "this"/"it" that \
 refers outside the answer.
+- Never refer to the source document: no "this section", "Section 1.3, titled ...", "the text describes". Do not name or number sections. Write the answer directly, in the words a speaker would use out loud.
 - If the section is pure heading/navigation with no borrowable content, return an empty string."""
 
 _CLOUD_SCHEMA: dict[str, Any] = {

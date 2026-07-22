@@ -297,3 +297,28 @@ def test_cli_overwrite_guard_is_silent_without_provenance(tmp_path: Path) -> Non
     out = tmp_path / "c.distilled.md"
     out.write_text("corpus with no meta", encoding="utf-8")
     _guard_overwrite(out, "local", force=False)  # unknown provenance → don't block
+
+
+# Document-referential framing observed in ~52% of cloud units. A unit that says
+# "Section 1.3, titled X, explains ..." describes the document instead of being
+# the answer, so it is not borrowable — the same contract violation as narration.
+FRAMING_SAMPLES = [
+    'Section 1.3, titled "Rounding to a Codebook — INT4 First," explains quantization.',
+    'Part 9, titled "Multi-Token Prediction," is a section heading with no body.',
+    "Section 4.5, titled The Trade Curve, describes an accuracy-versus-tokens curve.",
+]
+
+
+@pytest.mark.parametrize("sample", FRAMING_SAMPLES)
+def test_meta_detector_flags_document_referential_framing(sample: str) -> None:
+    assert local.looks_like_meta(sample)
+
+
+def test_all_distiller_prompts_forbid_source_references() -> None:
+    # The contract is enforced by a regex at the output; the prompts must state it
+    # at the input too, for every backend.
+    from lib.corpus.distiller import _CLOUD_SYSTEM, _CLOUD_SYSTEM_CONSOLIDATED
+    from lib.corpus.local import _PROMPT
+
+    for prompt in (_CLOUD_SYSTEM, _CLOUD_SYSTEM_CONSOLIDATED, _PROMPT):
+        assert "Never refer to the source document" in prompt

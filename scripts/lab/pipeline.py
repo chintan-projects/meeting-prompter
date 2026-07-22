@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
 import subprocess
 import sys
@@ -27,6 +26,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from lib.config import AppConfig, load_config
+from lib.corpus.text import clean_markdown  # noqa: F401 — re-exported for lab compat
 from lib.paths import get_docs_dir, get_models_dir
 from lib.rag import RAGConfig
 from lib.rag.index.fts import _sanitize_fts_query, fts_search
@@ -75,34 +75,7 @@ RATING_RANK = {"good": 3, "partial": 2, "wrong": 1, "noise": 0}
 BORROWABLE_MIN_WORDS = 8  # below this, a cleaned chunk isn't an answer-shaped unit
 
 
-def clean_markdown(text: str) -> str:
-    """Reduce a raw chunk to readable, borrowable prose.
-
-    Drops what you would never *say* out loud — fenced code, table rows, heading
-    hashes, blockquote/list markers, inline emphasis/link syntax — and collapses
-    whitespace. Tables/code are removed on purpose: a chunk that's mostly table is
-    not an answer-shaped unit, and the near-empty result is itself a corpus signal
-    (surfaced via BORROWABLE_MIN_WORDS).
-    """
-    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)  # fenced code blocks
-    kept: list[str] = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        if line.startswith("|") or re.fullmatch(r"[-|:\s]+", line):
-            continue  # table row / separator
-        line = re.sub(r"^#{1,6}\s*", "", line)  # heading hashes
-        line = re.sub(r"^>\s*", "", line)  # blockquote
-        line = re.sub(r"^[-*+]\s+", "", line)  # bullet
-        line = re.sub(r"^\d+\.\s+", "", line)  # ordered list
-        kept.append(line)
-    out = " ".join(kept)
-    out = re.sub(r"\*\*(.+?)\*\*", r"\1", out)  # bold
-    out = re.sub(r"\*(.+?)\*", r"\1", out)  # italic
-    out = re.sub(r"`([^`]+)`", r"\1", out)  # inline code
-    out = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", out)  # links → text
-    return re.sub(r"\s+", " ", out).strip()
+# clean_markdown moved to lib/corpus/text.py (F-701); re-exported for lab compat.
 
 
 def _load_records(path: Path) -> list[dict[str, Any]]:

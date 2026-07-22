@@ -19,8 +19,10 @@
 >
 > Fixed by a self-containment contract check that rejects narration and falls back
 > to the heuristic floor, with the reject rate reported in the distill stats.
-> **A re-run is required before any conclusion about distillation is drawn.**
 > The per-question data below is kept as the record of what was measured.
+>
+> **Post-fix re-run (local rater only — the judge has NOT been re-run):** see
+> *"Local-rater results after the fix"* at the end of this file.
 
 **Date:** 2026-07-22 · **Question set:** [corpus_questions.yaml](corpus_questions.yaml) (21, held out from the distiller)
 **Corpora:** original `on-device-capability-playbook.md` vs the **local-backend** distilled corpus
@@ -95,3 +97,40 @@ Split by the E-03 probe subset:
 
 E-03's "25% original" reproduces **exactly** on its own 4 questions — that probe sampled the
 corpus's four hardest (table/compound) cases, not a representative slice.
+
+---
+
+## Local-rater results after the fix (clean corpus, same 21 questions)
+
+The distiller was re-run with the contract check and the heading-only guard active.
+Resulting corpus: **83 units, 0 narration** — of which **25 came from the model and 59
+fell back to the heuristic floor (70% reject rate)**.
+
+| Corpus | local rater | notes |
+|---|---|---|
+| Original | 38% (8/21), 1 gap | unchanged baseline |
+| Heuristic-distilled | 71% (15/21), 0 gaps | no model involved |
+| **Local-distilled (clean)** | **76% (16/21), 0 gaps** | 30% model units / 70% heuristic |
+| Local-distilled (contaminated) | 67% (14/21) | the bug cost ~9 points |
+
+**Read this carefully — it is mostly not a measurement of the model.** 70% of the units
+in the "local-distilled" corpus *are* the heuristic corpus. The 25 surviving model units
+are worth about +5 points over heuristic-only under this rater (71% → 76%).
+
+## What is still unknown
+
+1. **The judge has not been re-run on the clean corpus.** The only valid judge numbers are
+   for the *original* corpus (76%). Any statement of the form "distillation is worth N
+   points, judge-scored" is currently unsupported.
+2. **The cloud distiller has never been scored on these 21 questions** — so the earlier
+   session's 25% → 75% (cloud, 4 questions) and everything here remain non-comparable.
+   This is the decisive experiment: it isolates *backend quality* from *question sample*.
+3. **The local rater disagrees with the judge by 38 points on the original corpus**, so its
+   76% here must not be read against the judge's 76% there — different instruments (F-707).
+
+Commands (2 needs a credential):
+
+```bash
+python -m scripts.lab.compare_corpus --questions-file tests/eval/corpus_questions.yaml --rater judge
+python -m scripts.lab.distiller --backend cloud --mode consolidated
+```

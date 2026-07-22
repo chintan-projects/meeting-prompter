@@ -75,10 +75,34 @@ def rate(req: RateRequest) -> JSONResponse:
     if req.rating not in ("good", "partial", "wrong", "noise"):
         return JSONResponse({"error": f"bad rating: {req.rating}"}, status_code=400)
     eng = engine()
-    eng.record_rating(req.span, req.chunk_id, req.doc, req.rating)
-    return JSONResponse(eng.coverage())
+    eng.record_rating(req.span, req.chunk_id, req.doc, req.rating, source="human")
+    return JSONResponse(eng.coverage("human"))
 
 
 @app.get("/coverage")
-def coverage() -> JSONResponse:
-    return JSONResponse(engine().coverage())
+def coverage(source: str = "human") -> JSONResponse:
+    return JSONResponse(engine().coverage(source))
+
+
+class JudgeRequest(BaseModel):
+    span: str
+
+
+@app.post("/judge")
+def judge(req: JudgeRequest) -> JSONResponse:
+    span = (req.span or "").strip()
+    if not span:
+        return JSONResponse({"error": "empty span"}, status_code=400)
+    return JSONResponse(engine().judge_span(span))
+
+
+@app.get("/calibration")
+def calibration() -> JSONResponse:
+    return JSONResponse(engine().calibration())
+
+
+@app.get("/judge_status")
+def judge_status() -> JSONResponse:
+    from scripts.lab import judge as _judge
+
+    return JSONResponse({"model": _judge.JUDGE_MODEL, "hint": _judge.credential_hint()})

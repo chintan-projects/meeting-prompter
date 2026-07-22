@@ -297,8 +297,14 @@ class LabEngine:
         }
 
     # --- ratings + corpus coverage -----------------------------------------
-    def record_rating(self, span: str, chunk_id: int, doc: str, rating: str) -> None:
-        """Append one operator judgement (good/partial/wrong/noise) to the log."""
+    def record_rating(
+        self, span: str, chunk_id: int, doc: str, rating: str, source: str = "human"
+    ) -> None:
+        """Append one judgement (good/partial/wrong/noise) to the log.
+
+        source is "human" (operator click) or "judge" (LLM). Both are kept so the
+        judge can be calibrated against the human ground truth.
+        """
         RATINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         rec = {
             "ts": datetime.now().isoformat(timespec="seconds"),
@@ -306,28 +312,36 @@ class LabEngine:
             "chunk_id": chunk_id,
             "doc": doc,
             "rating": rating,
+            "source": source,
         }
         with open(RATINGS_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec) + "\n")
 
-    def coverage(self) -> dict[str, Any]:
-        """Aggregate ratings into a fit-for-purpose score: what fraction of the
-        questions asked have a genuinely borrowable ('good') answer in the corpus.
-        """
-        if not RATINGS_PATH.exists():
-            return {"questions": 0, "good": 0, "partial": 0, "gap": 0, "rows": []}
+    def _best_by_span(self, source: str) -> dict[str, tuple[int, str, str]]:
+        """For one source, the best rating per question (latest write wins ties)."""
         best: dict[str, tuple[int, str, str]] = {}
+        if not RATINGS_PATH.exists():
+            return best
         for line in RATINGS_PATH.read_text(encoding="utf-8").splitlines():
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if rec.get("source", "human") != source:
+                continue
             span = str(rec.get("span", "")).strip()
             if not span:
                 continue
             rank = RATING_RANK.get(rec.get("rating", ""), 0)
-            if span not in best or rank > best[span][0]:
+            if span not in best or rank >= best[span][0]:
                 best[span] = (rank, rec.get("rating", ""), rec.get("doc", ""))
+        return best
+
+    def coverage(self, source: str = "human") -> dict[str, Any]:
+        """Fit-for-purpose score: fraction of questions with a borrowable ('good')
+        answer in the corpus, from one rating source (human or judge).
+        """
+        best = self._best_by_span(source)
         good = partial = gap = 0
         rows: list[dict[str, Any]] = []
         for span, (rank, rating, doc) in best.items():
@@ -339,7 +353,69 @@ class LabEngine:
             else:
                 gap += 1
         rows.sort(key=lambda r: RATING_RANK.get(r["best"], 0))  # gaps first
-        return {"questions": len(best), "good": good, "partial": partial, "gap": gap, "rows": rows}
+        return {
+            "source": source,
+            "questions": len(best),
+            "good": good,
+            "partial": partial,
+            "gap": gap,
+            "rows": rows,
+        }
+
+    # --- LLM-as-judge (cloud) + calibration --------------------------------
+    def judge_span(self, span: str) -> dict[str, Any]:
+        """Run the cloud judge over the borrowable cards for a span, record its
+        verdicts (source="judge"), and return them plus refreshed calibration.
+        """
+        from scripts.lab import judge as _judge
+
+        retrieval = self.retrieve_stages(span)
+        borrowable = self.build_borrowable(span, retrieval)
+        verdicts: list[dict[str, Any]] = []
+        for c in borrowable["cards"]:
+            v = _judge.judge(span, c["text"])
+            v.update({"chunk_id": c["chunk_id"], "doc": c["doc"]})
+            if "rating" in v:
+                self.record_rating(span, c["chunk_id"], c["doc"], v["rating"], source="judge")
+            verdicts.append(v)
+        return {
+            "model": _judge.JUDGE_MODEL,
+            "verdicts": verdicts,
+            "judge_coverage": self.coverage("judge"),
+            "calibration": self.calibration(),
+        }
+
+    def calibration(self) -> dict[str, Any]:
+        """Judge-vs-human agreement over (span, chunk) pairs rated by BOTH.
+
+        This is the trust gate: only lean on the judge's coverage once it agrees
+        with the human ground truth. Reports exact-match agreement and the rows.
+        """
+        human: dict[tuple[str, int], str] = {}
+        judge_r: dict[tuple[str, int], str] = {}
+        if RATINGS_PATH.exists():
+            for line in RATINGS_PATH.read_text(encoding="utf-8").splitlines():
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                key = (str(rec.get("span", "")).strip(), int(rec.get("chunk_id", -1)))
+                target = human if rec.get("source", "human") == "human" else judge_r
+                target[key] = rec.get("rating", "")  # latest write wins
+        pairs = sorted(set(human) & set(judge_r))
+        rows = [
+            {
+                "span": k[0],
+                "chunk_id": k[1],
+                "human": human[k],
+                "judge": judge_r[k],
+                "match": human[k] == judge_r[k],
+            }
+            for k in pairs
+        ]
+        agree = sum(1 for r in rows if r["match"])
+        pct = round(100 * agree / len(rows)) if rows else 0
+        return {"pairs": len(rows), "agree": agree, "agreement_pct": pct, "rows": rows}
 
     # --- stage 4: answers ---------------------------------------------------
     def answer_llama(self, key: str, span: str, context: str, max_tokens: int) -> dict[str, Any]:

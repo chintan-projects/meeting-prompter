@@ -114,6 +114,25 @@
       .rbtn.on.r-partial { background: var(--warn); color: #1a1206; border-color: var(--warn); }
       .rbtn.on.r-wrong, .rbtn.on.r-noise { background: #c56b6b; color: #180808; border-color: #c56b6b; }
 
+      .judgebtn { background: transparent; border: 1px solid var(--acc); color: var(--acc); font-size: 12px; padding: 4px 12px; font-weight: 600; }
+      .judgebtn:disabled { opacity: .4; border-color: var(--line); color: var(--mut); }
+      .jverdict { margin-top: 8px; font-size: 12px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+      .jchip { font-family: var(--mono); font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); }
+      .jchip.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+      .jchip.partial { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+      .jchip.wrong, .jchip.noise { color: #d98b8b; border-color: color-mix(in srgb, #d98b8b 45%, var(--line)); }
+      .jverdict .jreason { color: var(--mut); font-style: italic; }
+      .jverdict .jerr { color: var(--warn); font-family: var(--mono); font-size: 11px; }
+
+      #calibration { margin-top: 22px; }
+      .calbar { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+      .calbar .big { font-size: 22px; font-weight: 700; font-family: var(--mono); }
+      .calbar .big.hi { color: var(--good); } .calbar .big.lo { color: var(--warn); }
+      #calibration table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+      #calibration td, #calibration th { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+      #calibration th { color: var(--mut); font-weight: 600; }
+      tr.mismatch { color: #d98b8b; }
+
       #coverage { margin-top: 22px; }
       .covbar { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; margin-bottom: 10px; }
       .covnum { font-size: 15px; } .covnum b { font-size: 22px; color: var(--good); font-family: var(--mono); }
@@ -153,6 +172,7 @@
       <div class="chips" id="chips"></div>
 
       <section id="coverage" style="display:none"></section>
+      <section id="calibration" style="display:none"></section>
 
       <div id="out"></div>
 
@@ -208,13 +228,23 @@
 
       const RATINGS = ["good", "partial", "wrong", "noise"];
 
+      let JUDGE_HINT = null;
+      fetch("/judge_status").then((r) => r.json()).then((d) => { JUDGE_HINT = d.hint; }).catch(() => {});
+
       function borrowableSection(b, span) {
         const l = b || {};
         const s = el("section");
-        s.appendChild(el("h2", null, "★ Borrowable answers — rank &amp; rate <span class='muted' style='text-transform:none;letter-spacing:0'>— what you'd read/say verbatim · retrieval " + (l.retrieval_ms ?? "?") + "ms</span>"));
+        const h = el("h2", null, "★ Borrowable answers — rank &amp; rate <span class='muted' style='text-transform:none;letter-spacing:0'>— what you'd read/say verbatim · retrieval " + (l.retrieval_ms ?? "?") + "ms</span>");
+        const jbtn = el("button", "judgebtn", "🤖 Judge (Opus 4.8)");
+        jbtn.style.cssText = "float:right;margin-top:-2px";
+        jbtn.title = JUDGE_HINT || "Auto-rate every card with cloud Opus 4.8";
+        jbtn.onclick = () => judgeSpan(span, jbtn);
+        h.appendChild(jbtn);
+        s.appendChild(h);
         const box = el("div", "live");
         (l.cards || []).forEach((c, i) => {
           const card = el("div", "lcard" + (c.answer_shaped ? "" : " gap"));
+          card.dataset.chunkId = c.chunk_id;
           card.appendChild(el("div", "src",
             `<span class="rank">#${i + 1}</span><b>${esc(c.doc)}</b>${c.heading ? " › " + esc(c.heading) : ""} · cos ${c.cosine ?? "—"} · ${c.words} words`));
           if (c.note) card.appendChild(el("div", "gapnote", "⚠ " + esc(c.note)));
@@ -263,6 +293,57 @@
         wrap.innerHTML = html;
       }
       fetch("/coverage").then((r) => r.json()).then(renderCoverage).catch(() => {});
+
+      async function judgeSpan(span, btn) {
+        btn.disabled = true;
+        const orig = btn.textContent;
+        btn.textContent = "judging…";
+        try {
+          const r = await fetch("/judge", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ span }),
+          });
+          const d = await r.json();
+          (d.verdicts || []).forEach((v) => attachVerdict(v));
+          if (d.calibration) renderCalibration(d.calibration);
+        } catch (e) {
+          alert("Judge failed: " + e);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = orig;
+        }
+      }
+
+      function attachVerdict(v) {
+        const card = document.querySelector('.lcard[data-chunk-id="' + v.chunk_id + '"]');
+        if (!card) return;
+        card.querySelector(".jverdict")?.remove();
+        const jv = el("div", "jverdict");
+        if (v.error) jv.appendChild(el("span", "jerr", "judge: " + esc(v.error)));
+        else {
+          jv.appendChild(el("span", "jchip " + v.rating, "judge: " + v.rating));
+          jv.appendChild(el("span", "muted", "conf " + v.confidence));
+          if (v.reason) jv.appendChild(el("span", "jreason", esc(v.reason)));
+        }
+        card.appendChild(jv);
+      }
+
+      function renderCalibration(cal) {
+        const c = cal || {};
+        const wrap = $("#calibration");
+        if (!c.pairs) { wrap.style.display = "none"; return; }
+        wrap.style.display = "block";
+        const cls = c.agreement_pct >= 80 ? "hi" : "lo";
+        let html =
+          "<h2>Judge calibration <span class='muted' style='text-transform:none;letter-spacing:0'>— judge vs your ratings; trust the judge only if this is high</span></h2>" +
+          `<div class="calbar"><span class="big ${cls}">${c.agreement_pct}%</span>` +
+          `<span class="muted">agreement over ${c.pairs} card(s) you both rated (${c.agree} match)</span></div>`;
+        html += "<table><thead><tr><th>Question</th><th>You</th><th>Judge</th></tr></thead><tbody>" +
+          c.rows.map((r) => `<tr class="${r.match ? "" : "mismatch"}"><td>${esc(r.span.slice(0, 80))}</td><td><b>${esc(r.human)}</b></td><td><b>${esc(r.judge)}</b></td></tr>`).join("") +
+          "</tbody></table>";
+        wrap.innerHTML = html;
+      }
+      fetch("/calibration").then((r) => r.json()).then(renderCalibration).catch(() => {});
 
       function render(d) {
         const out = $("#out");

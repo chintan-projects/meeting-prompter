@@ -1,0 +1,8 @@
+# Optional deps for the offline Corpus & Retrieval Lab (scripts/lab/).
+# Kept OUT of the app's requirements.txt on purpose: the meeting-prompter product
+# is local-only and must not depend on a cloud SDK. Only the LLM-as-judge (an
+# offline eval) needs this, and it imports it lazily.
+#
+#   pip install -r scripts/lab/requirements.txt
+#   ANTHROPIC_API_KEY=sk-ant-... uvicorn scripts.lab.server:app --port 8555
+anthropic>=0.40

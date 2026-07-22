@@ -21,7 +21,7 @@ Reasoning source: [transcription-attribution-interaction-investigation.md](trans
 | **D-03** | **Answer model selection** — 2.6B is currently *wired* (config-driven, `models.generation.model_file`, 1.2B fallback) but the call is the operator's, made from the **lab (E-02)**, not by me. 350M-Extract returns structured JSON fields (extraction), not answers → notes/F-507 lane. Prompt tuned: strict grounding + empty-`<think>` prefill + think-strip. **Correction:** I earlier wrote this "DECIDED" and committed the switch without the operator's call — reverted to provisional; 2.6B stays wired pending their judgement via the lab. | leaning 2.6B (provisional; operator to confirm via E-02) | high | yes | §5b, E-01, E-02 |
 | **D-07** | **Refiner/answer model coupling** — the transcript refiner shares the answer-model instance. With 2.6B (reasoning, ~1.5–3.5s) that makes *per-turn* refinement slow. Decouple the refiner to a fast small model, or gate/disable it, once D-02 (user-gated) lands. | open | med | no | E-01 |
 | **D-08** | **Live loop is retrieval-first, not generative; corpus is the ceiling.** In a verbatim-retrieval product the output *is* a span of the corpus — no model papers over a weak source — so corpus quality is an upper bound on output quality. Live = retrieve + show borrowable text (no LLM, ~120-190ms warm, grounded). Generation demoted to on-demand / post-meeting. Evidence: lab (E-02) — 1.2B fluent-but-unvettable, 2.6B slow/truncates, Extract is a field extractor; retrieval ranks right docs (Hit@1 94%). Next work is **corpus refinement** (answer-shaped, self-contained, clean, deduped, meeting-matched) measured by lab **coverage**. | leaning strongly (operator agreed) | high | yes | E-02, below |
-| **D-09** | **Corpus preparation is a product step** — "**Prepare corpus**" onboarding: bring your docs → **distill** into borrowable answer-units → **readiness check** → ready for calls. One-time/offline, not live. This is the productization of the lab work. **Built (F-701..F-706), but its evidence base broke:** judge-scored at n=21 the distill step buys **+5 pp** (76%→81%), not the 25%→75% E-03 claimed — that probe was a worst-case sample. Value on *messy* user corpora is untested. | **re-open (built; benefit unproven)** | high | yes | [spec](corpus-prep-onboarding-spec.md), [calibration](../../tests/eval/corpus_calibration_2026-07-22.md) |
+| **D-09** | **Corpus preparation is a product step** — "**Prepare corpus**" onboarding: bring your docs → **distill** into borrowable answer-units → **readiness check** → ready for calls. One-time/offline, not live. This is the productization of the lab work. **Built (F-701..F-706) and CONFIRMED:** cloud distiller, judge-scored on 21 held-out questions, lifts coverage **76% → 95%** (+19 pp, 4 questions fixed, 0 regressions). Value on *messy* user corpora (Notion, meeting notes) is still untested (F-708). | **decided (proven at n=21)** | high | yes | [spec](corpus-prep-onboarding-spec.md), [calibration](../../tests/eval/corpus_calibration_2026-07-22.md) |
 | **D-10** | **The distiller runs on a LOCAL small model** — no user corpus leaves the device in the product; cloud (Opus 4.8) is offline-validation + training-data only; a cloud distiller may later be an optional consent-gated quality toggle. Promoted to **ADR-001**. | **decided** | high | yes (done) | [ADR-001](ADR-001-local-corpus-distiller.md) |
 | **D-11** | **Readiness score = onboarding gate** — the judge/coverage instrument (fit-for-purpose %, gap list) tells users if their content can answer their meetings *before* they rely on it live. The product differentiator. Open: user-provided vs auto-generated question set; local judge vs heuristic for the shipped check. **Shipped rater is miscalibrated** — 57% agreement with the judge, harsh in 36% of cells vs soft in 7%, understates a good corpus by 38 pp. Recalibrate on a *separate* dev question set before the score is shown to a user as a verdict. | decided (**rater blocked on recalibration**) | high | maybe | [calibration](../../tests/eval/corpus_calibration_2026-07-22.md) |
 | **D-04** | **Refiner scope = readability only** — never a meaning/error-correction stage (an LLM error-corrector hallucinates into a trusted record). | leaning yes | low | no | §2 |
@@ -34,7 +34,7 @@ Reasoning source: [transcription-attribution-interaction-investigation.md](trans
 |----|------------|--------|-------|-----|
 | **E-01** | **Select-driven model + retrieval comparison harness** (CLI) — `scripts/exp_model_retrieval_compare.py`, `exp_pipeline_probe.py`. v1 ran; findings below. Superseded by E-02 (visual). | ran v1 | D-03, D-02 (select-to-answer) | §5b |
 | **E-02** | **Corpus & retrieval lab** — `scripts/lab/` (FastAPI + single page). Reframed from model-picker to **corpus-fitness instrument** (D-08): span → full **cleaned borrowable answer** cards (markdown stripped) you **rate** (good/partial/wrong/noise) → a **coverage** metric (% of questions with a borrowable answer). Now also: **LLM-as-judge** (cloud Opus 4.8) that auto-rates cards, with a **calibration** panel (judge-vs-human agreement) as the trust gate. Retrieval stages + 3-model answers kept below. | built + verified live | D-03, D-08, D-11 | §5b, below |
-| **E-03** | **Corpus distiller + before/after coverage** — `scripts/lab/distiller.py` reshapes an explainer doc into grounded answer-units (provenance-tagged); `compare_corpus.py` judges original vs distilled. Heuristic + cloud backends; atomic + **consolidated** modes. | **ran; n=4 result did not replicate at n=21 (+5 pp, judge-scored)** | D-09, D-10, D-11 | [calibration](../../tests/eval/corpus_calibration_2026-07-22.md) |
+| **E-03** | **Corpus distiller + before/after coverage** — `scripts/lab/distiller.py` reshapes an explainer doc into grounded answer-units (provenance-tagged); `compare_corpus.py` judges original vs distilled. Heuristic + cloud backends; atomic + **consolidated** modes. | **SETTLED: cloud 76% → 95% judge-scored at n=21** | D-09, D-10, D-11 | [calibration](../../tests/eval/corpus_calibration_2026-07-22.md) |
 
 ## Related (tracked elsewhere)
 - **BUG-004** Chrome crash on per-app capture — `investigating`, evidence overturns the tap hypothesis (see BUGS.yaml).
@@ -346,6 +346,41 @@ more likely an under- than over-statement — but the judge run is the trust gat
 **Operator follow-ups:** (1) judge run for calibration + INT4 confirmation
 (`--rater judge`, needs key); (2) live call (WS-14) to validate the borrowable
 view UX + latency budget; (3) F-702 v2 forge fine-tune decision after (1).
+
+### ✅ E-03 SETTLED — cloud distillation lifts coverage 76% → 95% (2026-07-22)
+
+The decisive experiment ran: **cloud distiller, judge-scored, all 21 held-out questions.**
+Data: [corpus_calibration_2026-07-22.md](../../tests/eval/corpus_calibration_2026-07-22.md).
+
+| Corpus | judge coverage |
+|---|---|
+| Original | **76%** (16/21; 5 partial, 0 gap) |
+| **Cloud-distilled** | **95%** (20/21; 1 partial, 0 gap) |
+
+**+19 pp, four questions fixed, zero regressions.** Distillation works — the direction of
+the original 4-question probe (25% → 75%) holds at 5× the sample against a much stronger
+baseline. **D-09 is confirmed: corpus preparation earns its place as a product step.**
+
+**The lone holdout is Q01 (INT4), and its designed fix never ran.** Q01 is the compound
+question whose answer spans §1.3 + §1.9 — exactly what topic-level units merge — and this
+run emitted only 2 of 11 topic units (`topics_failed: 9`, Part 1 among them). So 95% was
+reached *without* the compound-question lever. Cause was an output-budget bug (units
+*restate* their input, but the budget granted ~1× the input's token count), now ~2× with
+a doubling retry. **Re-running cloud distill should yield `topic_units: 11` and may flip
+Q01, putting the ceiling at or near 100%.**
+
+**F-702 forge — the case is now made, with numbers.** ADR-001 requires on-device
+distillation, so the forge is the only path to shipping this result:
+
+| Backend | judge coverage | note |
+|---|---|---|
+| Cloud (Opus) | **95%** | proven — but ADR-001 forbids it in the product |
+| Local (prompted 2.6B) | unmeasurable | contract-valid on only ~30% of sections |
+| Heuristic | not judge-scored | the fallback floor |
+
+Measured target (95%), measured baseline, and a demonstrated reason the prompt-only route
+cannot reach it. My earlier "hold the forge" recommendation is **withdrawn in full** — it
+rested on a corpus corrupted by my own narration bug.
 
 ### E-03 judge calibration — RETRACTED IN PART (2026-07-22)
 

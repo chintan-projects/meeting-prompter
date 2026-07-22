@@ -81,7 +81,31 @@ toggle** (same posture as Notion export), but **local is the default and the pro
 3. **Ship local as default**; keep cloud as an optional consent-gated quality toggle.
 4. **Move readiness eval local** (local judge or heuristic) as a follow-on.
 
-## Validation update (2026-07-22) — the motivating evidence did not replicate
+## Validation update #2 (2026-07-22, later) — CONFIRMED, and the forge is now the blocker
+
+The decisive experiment ran. Cloud distiller, judge-scored, on the full 21-question
+held-out set: **76% → 95%** (+19 pp, 4 questions fixed, 0 regressions). Data:
+[tests/eval/corpus_calibration_2026-07-22.md](../../tests/eval/corpus_calibration_2026-07-22.md).
+
+**Update #1 below is withdrawn.** Its "+5 pp" figure came from a corpus corrupted by a
+narration bug in the local backend (72% of units were the model describing its task).
+Distillation works, and the Context section's premise stands.
+
+This makes **step 2 (forge a local distiller) the critical path, not an optional
+follow-on**:
+
+| Backend | judge coverage | status |
+|---|---|---|
+| Cloud (Opus) | **95%** | proven — but this ADR forbids it in the product |
+| Local (prompted 2.6B) | unmeasurable | contract-valid on only ~30% of sections |
+
+The 95% is real and reachable, and the privacy decision says it must be reached
+on-device. A prompt-only local distiller demonstrably cannot get there. **Forge it.**
+
+Still open: step 4 (readiness rater) remains untrustworthy — 57% agreement with the
+judge, harsh in 36% of cells (F-707).
+
+## ~~Validation update (2026-07-22) — the motivating evidence did not replicate~~ (WITHDRAWN — see above)
 
 Steps 3 and 4 shipped (F-702 v1 prompted on-device backend is the default; the readiness
 check runs on a local heuristic rater). **Step 2 is now on hold**, and the Context section

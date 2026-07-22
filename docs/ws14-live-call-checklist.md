@@ -36,11 +36,18 @@ If denied: System Settings → Privacy & Security → Screen & System Audio Reco
 for your terminal (dev mode) or the packaged app. Then re-run the check. In the app, the
 Meeting Setup dialog also surfaces this and offers an explicit "Start mic-only instead".
 
-## 2. Start it
+## 2. Start it — from your own terminal
 
 ```bash
 cd app && npm run tauri dev
 ```
+
+**Launch it yourself.** macOS attributes Screen Recording to the *responsible process* at
+the top of the spawn chain, so the grant follows whatever starts the app. Launched from
+your terminal (verified granted), `audio-tap` inherits that grant. Launched from some other
+tool — an agent, an IDE task runner, anything with its own TCC identity — it inherits
+*that* app's permission instead, and a denied one degrades the session to mic-only with no
+error. Same reason the preflight reported `denied` while your terminal reports `granted`.
 
 The Rust shell spawns the Python backend itself — don't start uvicorn separately or port
 8420 will conflict.

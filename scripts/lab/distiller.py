@@ -35,6 +35,7 @@ logger = logging.getLogger("lab.distiller")
 MIN_SECTION_WORDS = 12  # below this a section is navigation/heading — no borrowable claim
 MAX_UNIT_WORDS = 60  # keep units glanceable
 MAX_SECTION_CHARS = 6000  # cap section text sent to the cloud extractor (token budget)
+MAX_TOPIC_CHARS = 12000  # cap the concatenated Part text for a topic-level unit
 
 _CLOUD_SYSTEM = """You extract BORROWABLE answer-statements from a documentation section \
 for a meeting-assistant corpus. A borrowable statement is one a speaker could read aloud \
@@ -141,6 +142,24 @@ def _distill_cloud(heading: str, text: str, mode: str = "atomic") -> list[str]:
         return []
 
 
+def _part_of(section: Any) -> str:
+    """The top-level Part a section belongs to (first segment of its heading path)."""
+    hp = section.heading_path or section.heading or ""
+    return hp.split(" > ")[0].strip() or (section.heading or "").strip()
+
+
+def _group_by_part(sections: list[Any]) -> dict[str, list[Any]]:
+    """Group sections under their level-1 Part, preserving order."""
+    groups: dict[str, list[Any]] = {}
+    for sec in sections:
+        groups.setdefault(_part_of(sec), []).append(sec)
+    return groups
+
+
+def _emit(lines: list[str], src_name: str, heading: str, unit: str, prov: str) -> None:
+    lines.extend([f"## {heading}", "", unit, "", f"_Source: {src_name} › {prov}_", ""])
+
+
 def distill(
     src: Path, out: Path, backend: str = "heuristic", mode: str = "atomic"
 ) -> dict[str, Any]:
@@ -154,27 +173,33 @@ def distill(
     doc = CompositeParser().parse(src)
     fn = _distill_cloud if backend == "cloud" else _distill_heuristic
     lines: list[str] = [f"# Distilled: {src.name}", ""]
-    n_units = 0
-    n_sections = 0
-    n_failed = 0
+    n_units = n_sections = n_failed = n_topics = 0
+
+    # 1. Section-level units — specific answers.
     for sec in doc.sections:
         heading = sec.heading or "(root)"
-        words = len(clean_markdown(sec.content).split())
         units = fn(heading, sec.content, mode)
         if not units:
-            if words >= MIN_SECTION_WORDS:
-                n_failed += 1  # substantive section produced nothing (likely an extract failure)
+            if len(clean_markdown(sec.content).split()) >= MIN_SECTION_WORDS:
+                n_failed += 1  # substantive section produced nothing (likely a failure)
             continue
         n_sections += 1
-        prov = sec.heading_path or heading
         for u in units:
             n_units += 1
-            lines.append(f"## {heading}")
-            lines.append("")
-            lines.append(u)
-            lines.append("")
-            lines.append(f"_Source: {src.name} › {prov}_")
-            lines.append("")
+            _emit(lines, src.name, heading, u, sec.heading_path or heading)
+
+    # 2. Topic-level units — one consolidated answer per multi-section Part, so
+    #    compound questions whose answer spans sub-sections (e.g. INT4 "how much"
+    #    in 1.3 + "where degrades" in 1.9) get a single unit that covers both.
+    for part, secs in _group_by_part(doc.sections).items():
+        if len(secs) < 2:
+            continue  # single-section Part == its section unit; nothing to merge
+        content = "\n\n".join(s.content for s in secs)[:MAX_TOPIC_CHARS]
+        for u in fn(part, content, "consolidated"):
+            n_units += 1
+            n_topics += 1
+            _emit(lines, src.name, f"Topic — {part}", u, f"{part} (topic)")
+
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines), encoding="utf-8")
     if n_failed:
@@ -183,6 +208,7 @@ def distill(
         "backend": backend,
         "mode": mode,
         "sections_used": n_sections,
+        "topic_units": n_topics,
         "units": n_units,
         "sections_empty": n_failed,
         "out": str(out),

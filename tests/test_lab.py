@@ -108,6 +108,26 @@ def test_distill_heuristic_produces_self_contained_unit() -> None:
     assert "lossless" in units[0].lower()
 
 
+def test_distill_emits_topic_unit_for_multisection_part(tmp_path: Path) -> None:
+    # A Part with two sub-sections whose answers are split → a topic unit merges them.
+    src = tmp_path / "doc.md"
+    src.write_text(
+        "# Doc\n\n# Part 1 — Quantization\n\n"
+        "## 1.3 INT4 cost\n\nINT4 quantization costs about one to three percent of "
+        "model quality for a four times smaller footprint.\n\n"
+        "## 1.9 Where it degrades\n\nQuantization degrades most on multi-step math "
+        "and reasoning tasks, far less on factual recall.\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "doc.distilled.md"
+    stats = distiller.distill(src, out, backend="heuristic", mode="consolidated")
+    assert stats["topic_units"] >= 1
+    body = out.read_text(encoding="utf-8")
+    # the topic unit for Part 1 should carry BOTH the cost and the degrade content
+    topic = [b for b in body.split("## ") if b.startswith("Topic — Part 1")][0]
+    assert "percent" in topic and "degrades" in topic
+
+
 def test_distill_writes_markdown_with_provenance(tmp_path: Path) -> None:
     src = tmp_path / "doc.md"
     src.write_text(

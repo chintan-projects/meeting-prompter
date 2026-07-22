@@ -88,3 +88,56 @@ bugs:
       silent no-op that left a blank non-running screen) and keeps the setup
       dialog open with the error. Tests: tests/test_session_start_route.py (412
       on denied per-app, start on granted, mic-only bypass)."
+
+  - id: "BUG-006"
+    severity: critical
+    component: "lib/rag/embedder.py"
+    status: resolved
+    reported_in: "2026-07-22"
+    resolved_in: "2026-07-22"
+    title: "Embedder model load races on session start — first query crashes the live path"
+    repro: "Construct MeetingOrchestrator with triggers.retrieval_first=true, then fire any trigger. NotImplementedError: 'Cannot copy out of meta tensor; no data!' from SentenceTransformer.__init__ via embed_query."
+    root_cause: >
+      SentenceTransformerEmbedder._load_model() was a check-then-set with no
+      lock. The race was latent while loading only ever happened on one thread
+      (indexing, then queries, all sequential in the pipeline thread). F-705
+      made it live: session start now pre-warms the embedder on a background
+      thread (RAGEngine.warm_up) while the pipeline queries on another, so two
+      threads enter _load_model simultaneously. torch materialises weights from
+      meta device during construction, and the concurrent second construction
+      dies. Severity is critical because it crashes the first retrieval of every
+      session — i.e. the entire live product path.
+    fix: >
+      Double-checked locking in _load_model (threading.Lock), with the model
+      published to self._model only after it is fully constructed so the
+      unlocked fast path can never observe a half-built instance. Steady-state
+      embedding stays lock-free. Regression test
+      tests/test_rag_embedder_concurrency.py drives 8 concurrent embed_query
+      calls against a stub whose construction window is wide enough to lose the
+      race; it fails without the lock. Fixed in c90520d.
+    notes: >
+      Found by driving the live trigger path during WS-14 preflight, not by a
+      test — the whole test suite (800 tests) was green while this was broken,
+      because nothing exercised concurrent load.
+
+  - id: "BUG-007"
+    severity: medium
+    component: "src/api/routes/corpus.py"
+    status: resolved
+    reported_in: "2026-07-22"
+    resolved_in: "2026-07-22"
+    title: "Prepare-corpus wizard reports 'no distilled corpus' when the lab CLI built one"
+    repro: "python -m scripts.lab.distiller --backend cloud (writes data/distilled/ + a per-file .meta.json), then GET /corpus/status → distilled.exists=false despite 88 units on disk."
+    root_cause: >
+      Two paths write the distilled corpus and record provenance differently:
+      the wizard's distill_dir writes one .distill_manifest.json for the whole
+      directory, while the lab CLI writes a per-file .<name>.meta.json sidecar.
+      /corpus/status only read the manifest, so a CLI-built corpus was invisible
+      to the wizard — which gates its own distill / readiness / activate steps on
+      distilled.exists, leaving the user unable to score or activate a corpus
+      that was sitting right there.
+    fix: >
+      _distilled_state() now resolves manifest -> per-file sidecars -> bare
+      *.distilled.md files, and reports which source it used so the ambiguity is
+      visible rather than silent. Tests in tests/test_corpus_routes.py cover all
+      four states (absent, manifest, sidecar, no-provenance). Fixed in 50d8d66.

@@ -112,15 +112,19 @@ def _distill_heuristic(heading: str, text: str, mode: str = "atomic") -> list[st
 def max_output_tokens(input_chars: int, consolidated: bool) -> int:
     """Output budget for one cloud call, scaled to the input.
 
-    A consolidated unit restates everything borrowable in the section, so its
-    length tracks the input. A flat 900 truncated every topic-level unit (whole
-    Parts, up to MAX_TOPIC_CHARS) and every large section — the JSON came back
-    cut mid-string and the whole topic tier silently produced nothing. Budget
-    ~1 output token per 3 input chars, clamped to a sane floor/ceiling.
+    A consolidated unit *restates* everything borrowable in its input rather than
+    summarising it, so output length tracks input length — roughly
+    ``input_chars / 3.5`` tokens. Budget 2x that so a verbose Part still fits.
+
+    History: a flat 900 truncated every topic unit and every large section. The
+    first fix used ``input_chars // 3`` (≈1x input tokens, no headroom) and still
+    lost 9 of 11 topic units, failing non-monotonically with size — the tell that
+    the budget was marginal rather than simply too small for the big ones.
+    max_tokens is a cap, not a charge: unused headroom costs nothing.
     """
     if not consolidated:
         return 700  # atomic units are 1-5 short statements regardless of input
-    return max(900, min(4000, input_chars // 3))
+    return max(1500, min(8000, int(input_chars / 1.75)))
 
 
 def _distill_cloud(heading: str, text: str, mode: str = "atomic") -> list[str]:
@@ -140,10 +144,11 @@ def _distill_cloud(heading: str, text: str, mode: str = "atomic") -> list[str]:
     system = _CLOUD_SYSTEM_CONSOLIDATED if consolidated else _CLOUD_SYSTEM
     schema = _CLOUD_SCHEMA_CONSOLIDATED if consolidated else _CLOUD_SCHEMA
     user = f"SECTION: {heading}\n\n{text[:MAX_SECTION_CHARS]}"
+    budget = max_output_tokens(len(user), consolidated)
     try:
         resp = cloud.get_client().messages.create(
             model=cloud.CLOUD_MODEL,
-            max_tokens=max_output_tokens(len(user), consolidated),
+            max_tokens=budget,
             system=system,
             output_config={"format": {"type": "json_schema", "schema": schema}},
             messages=[{"role": "user", "content": user}],
@@ -151,14 +156,30 @@ def _distill_cloud(heading: str, text: str, mode: str = "atomic") -> list[str]:
         if getattr(resp, "stop_reason", None) == "max_tokens":
             # Structured output truncated mid-string: json.loads would raise an
             # opaque "Unterminated string" and the section would look like a model
-            # failure. Name it for what it is — the budget, not the model.
+            # failure. Name it for what it is — the budget, not the model — and
+            # retry once with double. A truncated call is already 100% wasted
+            # spend, so one retry is strictly better than dropping the unit.
             logger.warning(
-                "cloud extract TRUNCATED at max_tokens on %r (input %d chars) — "
-                "raise the output budget; section dropped",
+                "cloud extract truncated at %d tokens on %r (input %d chars) — retrying at %d",
+                budget,
                 heading,
                 len(user),
+                budget * 2,
             )
-            return []
+            resp = cloud.get_client().messages.create(
+                model=cloud.CLOUD_MODEL,
+                max_tokens=budget * 2,
+                system=system,
+                output_config={"format": {"type": "json_schema", "schema": schema}},
+                messages=[{"role": "user", "content": user}],
+            )
+            if getattr(resp, "stop_reason", None) == "max_tokens":
+                logger.error(
+                    "cloud extract TRUNCATED AGAIN at %d tokens on %r — unit dropped",
+                    budget * 2,
+                    heading,
+                )
+                return []
         txt = next(b.text for b in resp.content if b.type == "text")
         data = json.loads(txt)
         if consolidated:

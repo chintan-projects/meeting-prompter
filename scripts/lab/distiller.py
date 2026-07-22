@@ -41,7 +41,9 @@ def _default_src() -> Path:
 
 
 def _meta_path(out: Path) -> Path:
-    return out.with_suffix(out.suffix + ".meta.json")
+    """Provenance sidecar, dot-prefixed so the RAG indexer skips it as bookkeeping
+    (an `x.md.meta.json` next to the corpus gets picked up and logs a parse error)."""
+    return out.with_name(f".{out.name}.meta.json")
 
 
 def _guard_overwrite(out: Path, backend: str, force: bool) -> None:

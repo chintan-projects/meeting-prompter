@@ -218,8 +218,12 @@ def test_output_budget_scales_with_input_for_consolidated() -> None:
     # A whole-Part topic unit (MAX_TOPIC_CHARS) needs far more than the old flat
     # 900 — that truncated the JSON mid-string and killed every topic unit.
     assert distiller.max_output_tokens(distiller.MAX_TOPIC_CHARS, consolidated=True) > 900
-    assert distiller.max_output_tokens(600, consolidated=True) == 900  # floor for small
-    assert distiller.max_output_tokens(10**6, consolidated=True) <= 4000  # ceiling
+    assert distiller.max_output_tokens(600, consolidated=True) == 1500  # floor for small
+    assert distiller.max_output_tokens(10**6, consolidated=True) <= 8000  # ceiling
+    # A consolidated unit restates its input, so the budget must exceed the
+    # input's own token count (~chars/3.5) — the bug was budgeting under it.
+    for chars in (2745, 3179, 4154, 6144):  # the Parts that lost their topic unit
+        assert distiller.max_output_tokens(chars, consolidated=True) > chars / 3.5
 
 
 def test_output_budget_flat_for_atomic() -> None:

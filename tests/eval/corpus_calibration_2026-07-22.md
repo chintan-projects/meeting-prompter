@@ -134,3 +134,51 @@ Commands (2 needs a credential):
 python -m scripts.lab.compare_corpus --questions-file tests/eval/corpus_questions.yaml --rater judge
 python -m scripts.lab.distiller --backend cloud --mode consolidated
 ```
+
+---
+
+## ✅ DECISIVE RUN — cloud distiller, judge-scored, 21 questions (2026-07-22)
+
+The experiment that isolates *backend quality* from *question sample*. Cloud distiller
+(Opus 4.8) over the same 21 held-out questions, judged by Opus 4.8.
+
+| Corpus | judge coverage | |
+|---|---|---|
+| Original | **76%** (16/21; 5 partial, 0 gap) | baseline |
+| **Cloud-distilled** | **95%** (20/21; 1 partial, 0 gap) | **+19 pp** |
+
+Four questions moved `partial → good`: three levels of distillation (the table),
+speculative decoding, KV-cache size, test-time compute curve. **Zero regressions.**
+
+**Distillation works.** This confirms the direction of the earlier 4-question probe
+(25% → 75%) at 5× the sample and against a much stronger baseline. The interim claim
+that distillation was "worth +5 pp" was an artifact of a corrupted local corpus and is
+fully retracted.
+
+### The lone holdout is the compound question — and its fix never ran
+
+Q01 (INT4: "how much does it hurt AND where does it degrade") is the only remaining
+`partial`. Its answer spans §1.3 + §1.9, which is exactly what the **topic-level unit**
+tier exists to merge — and this run emitted only **2 of 11 topic units**
+(`topics_failed: 9`), Part 1 among the failures. So 95% was reached *without* the
+compound-question lever. The cause was an output-budget bug, not the model:
+`max_output_tokens` budgeted ~1× the input's token count for a unit that *restates* its
+input, so calls truncated marginally and non-monotonically with size. Now budgeted at
+~2× input tokens with a doubling retry on truncation.
+
+**Open:** re-run cloud distill and expect `topic_units: 11, topics_failed: 0`; Q01 may
+then flip, putting the ceiling at or near 100%.
+
+### What this means for the local backend (F-702)
+
+The gap is now measured and unambiguous:
+
+| Backend | judge coverage | status |
+|---|---|---|
+| Cloud (Opus) | **95%** | proven, but ADR-001 forbids it in the product |
+| Local (prompted 2.6B) | not measurable | contract-valid on only ~30% of sections |
+| Heuristic | not judge-scored | the fallback floor |
+
+ADR-001 requires distillation to run on-device, so **the forge (F-702 v2) is the only
+path to shipping the 95%**. It now has a measured target, a measured baseline, and a
+demonstrated reason the prompt-only route cannot get there.

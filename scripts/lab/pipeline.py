@@ -26,6 +26,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from lib.config import AppConfig, load_config
+from lib.corpus.readiness import (  # noqa: F401 — re-exported for lab compat
+    BORROWABLE_MIN_WORDS,
+    RATING_RANK,
+    aggregate_coverage,
+)
 from lib.corpus.text import clean_markdown  # noqa: F401 — re-exported for lab compat
 from lib.paths import get_docs_dir, get_models_dir
 from lib.rag import RAGConfig
@@ -70,12 +75,9 @@ SAMPLE_SPANS = [
 
 # Ratings persist here so corpus coverage can be aggregated across questions/sessions.
 RATINGS_PATH = Path("data/corpus_ratings.jsonl")
-# A question is "covered" only if some retrieved chunk is a genuinely borrowable answer.
-RATING_RANK = {"good": 3, "partial": 2, "wrong": 1, "noise": 0}
-BORROWABLE_MIN_WORDS = 8  # below this, a cleaned chunk isn't an answer-shaped unit
 
-
-# clean_markdown moved to lib/corpus/text.py (F-701); re-exported for lab compat.
+# clean_markdown, RATING_RANK, BORROWABLE_MIN_WORDS and aggregate_coverage moved to
+# lib/corpus/ (F-701/F-703); re-exported above for lab compat.
 
 
 def _load_records(path: Path) -> list[dict[str, Any]]:
@@ -89,47 +91,6 @@ def _load_records(path: Path) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return records
-
-
-def aggregate_coverage(records: list[dict[str, Any]], source: str = "human") -> dict[str, Any]:
-    """Pure: coverage counts for one source. A question is `good` if any of its
-    chunks has a borrowable answer, `partial` if the best is partial, else `gap`.
-
-    Collapses to the LATEST rating per (span, chunk) first, so re-rating a chunk
-    downward correctly lowers coverage — then takes the best chunk per question.
-    """
-    latest: dict[tuple[str, int], dict[str, Any]] = {}
-    for rec in records:
-        if rec.get("source", "human") != source:
-            continue
-        span = str(rec.get("span", "")).strip()
-        if not span:
-            continue
-        latest[(span, int(rec.get("chunk_id", -1)))] = rec  # later write wins
-    best: dict[str, tuple[int, str, str]] = {}
-    for (span, _cid), rec in latest.items():
-        rank = RATING_RANK.get(rec.get("rating", ""), 0)
-        if span not in best or rank > best[span][0]:  # best chunk wins for the question
-            best[span] = (rank, rec.get("rating", ""), rec.get("doc", ""))
-    good = partial = gap = 0
-    rows: list[dict[str, Any]] = []
-    for span, (rank, rating, doc) in best.items():
-        rows.append({"span": span, "best": rating, "doc": doc})
-        if rank >= 3:
-            good += 1
-        elif rank == 2:
-            partial += 1
-        else:
-            gap += 1
-    rows.sort(key=lambda r: RATING_RANK.get(r["best"], 0))  # gaps first
-    return {
-        "source": source,
-        "questions": len(best),
-        "good": good,
-        "partial": partial,
-        "gap": gap,
-        "rows": rows,
-    }
 
 
 def aggregate_calibration(records: list[dict[str, Any]]) -> dict[str, Any]:

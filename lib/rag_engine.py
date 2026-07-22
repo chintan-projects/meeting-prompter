@@ -19,7 +19,7 @@ from lib.rag.parser.composite_parser import CompositeParser
 
 if TYPE_CHECKING:
     from lib.config import NotionConfig
-    from lib.rag.types import IndexResult
+    from lib.rag.types import IndexResult, RetrievalResult
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,15 @@ class RAGEngine:
             self._chunk_count,
             self.docs_dir,
         )
+
+    def retrieve(self, text: str, top_k: int = 5) -> "list[RetrievalResult]":
+        """Full hybrid retrieval with per-result scores and citations.
+
+        Public counterpart to query() for callers that need the individual
+        results (borrowable cards, readiness scoring) rather than a fused
+        context string.
+        """
+        return self._pipeline.retrieve(text, top_k=top_k)
 
     def query(self, text: str) -> Tuple[str, float, str]:
         """Find most relevant content for the query.

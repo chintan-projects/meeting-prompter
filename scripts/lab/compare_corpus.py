@@ -70,10 +70,15 @@ def _best_rating(eng: RAGEngine, span: str, use_judge: bool) -> dict[str, Any]:
         v = _judge.judge(span, cleaned)
         if "error" in v:
             return {"rating": "error", "reason": v["error"]}
-        rank = RATING_RANK.get(v.get("rating", ""), 0)
+        rating = v.get("rating", "")
+        if rating not in RATING_RANK:
+            # Judge returned an unexpected shape — treat as an error, don't silently
+            # score it as a gap (which would understate coverage).
+            return {"rating": "error", "reason": f"invalid judge rating: {rating!r}"}
+        rank = RATING_RANK[rating]
         if rank > best_rank:
             best_rank, best = rank, {
-                "rating": v["rating"],
+                "rating": rating,
                 "doc": Path(r.document_path).name,
                 "reason": v.get("reason", ""),
             }

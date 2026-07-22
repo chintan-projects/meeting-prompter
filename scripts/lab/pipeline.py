@@ -105,6 +105,86 @@ def clean_markdown(text: str) -> str:
     return re.sub(r"\s+", " ", out).strip()
 
 
+def _load_records(path: Path) -> list[dict[str, Any]]:
+    """Read the ratings JSONL into a list of dicts (skips unparseable lines)."""
+    records: list[dict[str, Any]] = []
+    if not path.exists():
+        return records
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
+def aggregate_coverage(records: list[dict[str, Any]], source: str = "human") -> dict[str, Any]:
+    """Pure: coverage counts for one source. A question is `good` if any of its
+    chunks has a borrowable answer, `partial` if the best is partial, else `gap`.
+
+    Collapses to the LATEST rating per (span, chunk) first, so re-rating a chunk
+    downward correctly lowers coverage — then takes the best chunk per question.
+    """
+    latest: dict[tuple[str, int], dict[str, Any]] = {}
+    for rec in records:
+        if rec.get("source", "human") != source:
+            continue
+        span = str(rec.get("span", "")).strip()
+        if not span:
+            continue
+        latest[(span, int(rec.get("chunk_id", -1)))] = rec  # later write wins
+    best: dict[str, tuple[int, str, str]] = {}
+    for (span, _cid), rec in latest.items():
+        rank = RATING_RANK.get(rec.get("rating", ""), 0)
+        if span not in best or rank > best[span][0]:  # best chunk wins for the question
+            best[span] = (rank, rec.get("rating", ""), rec.get("doc", ""))
+    good = partial = gap = 0
+    rows: list[dict[str, Any]] = []
+    for span, (rank, rating, doc) in best.items():
+        rows.append({"span": span, "best": rating, "doc": doc})
+        if rank >= 3:
+            good += 1
+        elif rank == 2:
+            partial += 1
+        else:
+            gap += 1
+    rows.sort(key=lambda r: RATING_RANK.get(r["best"], 0))  # gaps first
+    return {
+        "source": source,
+        "questions": len(best),
+        "good": good,
+        "partial": partial,
+        "gap": gap,
+        "rows": rows,
+    }
+
+
+def aggregate_calibration(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pure: exact-match agreement between human and judge over (span, chunk) pairs
+    rated by BOTH. Latest write wins per (source, key).
+    """
+    human: dict[tuple[str, int], str] = {}
+    judge_r: dict[tuple[str, int], str] = {}
+    for rec in records:
+        key = (str(rec.get("span", "")).strip(), int(rec.get("chunk_id", -1)))
+        target = human if rec.get("source", "human") == "human" else judge_r
+        target[key] = rec.get("rating", "")
+    pairs = sorted(set(human) & set(judge_r))
+    rows = [
+        {
+            "span": k[0],
+            "chunk_id": k[1],
+            "human": human[k],
+            "judge": judge_r[k],
+            "match": human[k] == judge_r[k],
+        }
+        for k in pairs
+    ]
+    agree = sum(1 for r in rows if r["match"])
+    pct = round(100 * agree / len(rows)) if rows else 0
+    return {"pairs": len(rows), "agree": agree, "agreement_pct": pct, "rows": rows}
+
+
 class LabEngine:
     """Holds the warm RAG engine + cached answer generators for the lab server."""
 
@@ -317,50 +397,11 @@ class LabEngine:
         with open(RATINGS_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec) + "\n")
 
-    def _best_by_span(self, source: str) -> dict[str, tuple[int, str, str]]:
-        """For one source, the best rating per question (latest write wins ties)."""
-        best: dict[str, tuple[int, str, str]] = {}
-        if not RATINGS_PATH.exists():
-            return best
-        for line in RATINGS_PATH.read_text(encoding="utf-8").splitlines():
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if rec.get("source", "human") != source:
-                continue
-            span = str(rec.get("span", "")).strip()
-            if not span:
-                continue
-            rank = RATING_RANK.get(rec.get("rating", ""), 0)
-            if span not in best or rank >= best[span][0]:
-                best[span] = (rank, rec.get("rating", ""), rec.get("doc", ""))
-        return best
-
     def coverage(self, source: str = "human") -> dict[str, Any]:
         """Fit-for-purpose score: fraction of questions with a borrowable ('good')
         answer in the corpus, from one rating source (human or judge).
         """
-        best = self._best_by_span(source)
-        good = partial = gap = 0
-        rows: list[dict[str, Any]] = []
-        for span, (rank, rating, doc) in best.items():
-            rows.append({"span": span, "best": rating, "doc": doc})
-            if rank >= 3:
-                good += 1
-            elif rank == 2:
-                partial += 1
-            else:
-                gap += 1
-        rows.sort(key=lambda r: RATING_RANK.get(r["best"], 0))  # gaps first
-        return {
-            "source": source,
-            "questions": len(best),
-            "good": good,
-            "partial": partial,
-            "gap": gap,
-            "rows": rows,
-        }
+        return aggregate_coverage(_load_records(RATINGS_PATH), source)
 
     # --- LLM-as-judge (cloud) + calibration --------------------------------
     def judge_span(self, span: str) -> dict[str, Any]:
@@ -391,31 +432,7 @@ class LabEngine:
         This is the trust gate: only lean on the judge's coverage once it agrees
         with the human ground truth. Reports exact-match agreement and the rows.
         """
-        human: dict[tuple[str, int], str] = {}
-        judge_r: dict[tuple[str, int], str] = {}
-        if RATINGS_PATH.exists():
-            for line in RATINGS_PATH.read_text(encoding="utf-8").splitlines():
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                key = (str(rec.get("span", "")).strip(), int(rec.get("chunk_id", -1)))
-                target = human if rec.get("source", "human") == "human" else judge_r
-                target[key] = rec.get("rating", "")  # latest write wins
-        pairs = sorted(set(human) & set(judge_r))
-        rows = [
-            {
-                "span": k[0],
-                "chunk_id": k[1],
-                "human": human[k],
-                "judge": judge_r[k],
-                "match": human[k] == judge_r[k],
-            }
-            for k in pairs
-        ]
-        agree = sum(1 for r in rows if r["match"])
-        pct = round(100 * agree / len(rows)) if rows else 0
-        return {"pairs": len(rows), "agree": agree, "agreement_pct": pct, "rows": rows}
+        return aggregate_calibration(_load_records(RATINGS_PATH))
 
     # --- stage 4: answers ---------------------------------------------------
     def answer_llama(self, key: str, span: str, context: str, max_tokens: int) -> dict[str, Any]:

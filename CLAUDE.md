@@ -1,6 +1,11 @@
 # CLAUDE.md — meeting-prompter
 
-Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-Audio, detects 4 trigger types (questions, topics, alerts, follow-ups), retrieves context via hybrid FTS5 + vector RAG, and generates mode-aware responses using LFM2.5-1.2B-Instruct. Everything runs locally on Apple Silicon. Includes a Tauri desktop app with dual-pane UI (editable transcript + live prompts) and optional Notion export/ingest.
+Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-Audio, detects 4 trigger types (questions, topics, alerts, follow-ups), retrieves context via hybrid FTS5 + vector RAG, and serves borrowable spans of your corpus (retrieval-first, D-08) with on-demand LFM2.5-2.6B generation. Everything runs locally on Apple Silicon. Includes a Tauri desktop app with dual-pane UI (editable transcript + live prompts) and optional Notion export/ingest.
+
+**Docs:** [README.md](README.md) (product) · [ARCHITECTURE.md](ARCHITECTURE.md) (why —
+output-shape audit, model map, open decisions, future scope) ·
+[docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) (build from zero) ·
+[docs/distillation.md](docs/distillation.md) (corpus methodology + evidence).
 
 ## Key Paths
 
@@ -20,7 +25,7 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │   ├── stream_dedup.py             # Cross-stream echo suppression (SequenceMatcher)
 │   ├── diarization.py             # Neural speaker diarization (Tier 2)
 │   ├── answer_extractor.py        # Sentence extraction for grounding (fallback)
-│   ├── rag_generator.py           # LFM2.5-1.2B-Instruct generation (ChatML)
+│   ├── rag_generator.py           # LFM2.5-2.6B generation (ChatML), on-demand
 │   ├── rag_engine.py              # Hybrid RAG adapter (FTS5 + vector → same query() API)
 │   ├── dashboard.py               # CLI dashboard with trigger-type coloring
 │   ├── triggers/                  # Multi-mode trigger engine
@@ -51,7 +56,7 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │       ├── index/                 # FTS5 lexical + vector semantic indexing
 │       ├── retrieval/             # Weighted fusion engine
 │       ├── rank/                  # Heuristic re-ranking
-│       ├── embedder.py            # all-MiniLM-L6-v2 (384-dim, lazy-load)
+│       ├── embedder.py            # LFM2.5-Embedding-350M (1024-dim, lazy-load)
 │       ├── config.py              # RAGConfig dataclass (14 tunables)
 │       └── types.py               # Citation, RetrievalResult, FusedHit
 ├── src/api/                       # FastAPI backend for Tauri app
@@ -130,13 +135,18 @@ cd app && npx tsc --noEmit                   # TypeScript check
 
 ## Architecture
 
-### Two-Model Pipeline (+ embedding model)
+### Model Pipeline
+
+One model per output shape (see [ARCHITECTURE.md](ARCHITECTURE.md#2-why-the-liquid-architecture)).
 
 | Model | Size | Stage | Latency |
 |-------|------|-------|---------|
 | LFM2.5-Audio-1.5B | 1.2 GB | Speech → text | ~300ms |
-| all-MiniLM-L6-v2 | 80 MB | Hybrid retrieval (FTS5 + vector) | ~50ms |
-| LFM2.5-1.2B-Instruct | 700 MB | Mode-aware generation | ~500ms |
+| LFM2.5-Embedding-350M | ~350 MB | Hybrid retrieval (FTS5 + vector), 1024-dim | ~50ms |
+| LFM2.5-Encoder-350M | ~350 MB | Intelligence heads (frozen backbone, mean-pooled) | ~14ms/turn |
+| LFM2.5-TriggerRouter-350M | ~75 KB adapter | Trigger routing head (F-503) | negligible |
+| LFM2.5-2.6B-Q4_K_M | ~1.6 GB | Generation — **on-demand only** (D-08) | ~1.5–3.5s |
+| LFM2.5-350M-Extract | ~350 MB | Structured notes (F-507) | — |
 
 ### Pipeline Flow
 
@@ -299,8 +309,15 @@ Models in `~/Projects/_models/` (shared). Set `MODELS_DIR` env var to override.
 | Model | Path | Purpose |
 |-------|------|---------|
 | LFM2.5-Audio-1.5B | `${MODELS_DIR}/LFM2.5-Audio-1.5B-GGUF/` | ASR via `llama-liquid-audio-cli` |
-| all-MiniLM-L6-v2 | HuggingFace cache (auto-download) | Sentence embeddings for hybrid RAG |
-| LFM2.5-1.2B-Instruct | `${MODELS_DIR}/LFM2.5-1.2B-Instruct-Q4_K_M.gguf` | Generation (ChatML) |
+| LFM2.5-Embedding-350M | `${MODELS_DIR}/LFM2.5-Embedding-350M/` | Retrieval embeddings (1024-dim, `trust_remote_code`) |
+| LFM2.5-Encoder-350M | `${MODELS_DIR}/LFM2.5-Encoder-350M/` | Intelligence backbone — optional, heuristics without it |
+| LFM2.5-TriggerRouter-350M | `${MODELS_DIR}/LFM2.5-TriggerRouter-350M/` | Trigger router adapter — optional |
+| LFM2.5-2.6B | `${MODELS_DIR}/LFM2.5-2.6B-Q4_K_M.gguf` | Generation (ChatML); 1.2B-Instruct is the fallback |
+| LFM2.5-350M-Extract | `${MODELS_DIR}/LFM2.5-350M-Extract-023-v1/` | Structured notes extraction |
+| all-MiniLM-L6-v2 | HuggingFace cache | Legacy 384-dim embedder — offline fallback only |
+
+Every model is config-selected (`config.yaml`), never hardcoded. The encoder and its
+heads lazy-load, so the test suite runs on a machine with no models present.
 
 ## Configuration
 

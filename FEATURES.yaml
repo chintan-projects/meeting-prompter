@@ -692,3 +692,92 @@ workstreams:
         depends_on: [F-601]
         files:
           - new: lib/attribution/zoom_sdk.py
+
+  # ─── WORKSTREAM 8: Corpus Preparation ────────────────────────────
+  # Priority: V1.5 — productizes the lab work. Retrieval-first means the
+  # corpus IS the product (ADR: D-08); this makes any user's content
+  # meeting-ready and tells them, honestly, if it can answer their meetings.
+  # Prototyped end-to-end in scripts/lab/. See docs/architecture/
+  # corpus-prep-onboarding-spec.md and ADR-001-local-corpus-distiller.md.
+
+  corpus_prep:
+    name: "Corpus Preparation (Prepare-corpus flow)"
+    phase: V1.5
+    description: >
+      Bring-your-own-knowledge → distill into borrowable answer-units →
+      readiness score → ready for calls. One-time, on-device prep. The
+      distiller and coverage/judge instrument are prototyped in scripts/lab/.
+
+    features:
+      - id: F-701
+        name: "Corpus distiller (reshape docs → grounded answer-units)"
+        status: in_progress
+        effort: L
+        description: >
+          Walk a source doc section-by-section and emit self-contained, grounded
+          answer-units with a provenance pointer. Consolidated mode (one complete
+          answer per section) + reads tables. Prototyped in scripts/lab/distiller.py
+          (cloud + heuristic); productize into lib/corpus/ with a local backend.
+        depends_on: []
+        files:
+          - scripts/lab/distiller.py
+          - new: lib/corpus/distiller.py
+      - id: F-702
+        name: "Local distiller model (on-device, no cloud egress)"
+        status: backlog
+        effort: XL
+        description: >
+          Forge a local small model for the section → grounded-answer-unit task
+          (incl. table reading), bootstrapped from cloud-distilled training data.
+          Ships as the default distiller; cloud stays offline-validation only.
+          See ADR-001.
+        depends_on: [F-701]
+        files:
+          - new: lib/corpus/distiller.py
+      - id: F-703
+        name: "Corpus readiness score (fit-for-purpose gate)"
+        status: in_progress
+        effort: M
+        description: >
+          Run likely questions through the corpus, score each retrieved answer
+          (borrowable/partial/gap), show a fit-for-purpose % + gap list before the
+          user relies on it live. Prototyped: scripts/lab/pipeline.py coverage +
+          judge.py + calibration. Productize (local judge or heuristic proxy).
+        depends_on: [F-701]
+        files:
+          - scripts/lab/pipeline.py
+          - scripts/lab/judge.py
+          - new: lib/corpus/readiness.py
+      - id: F-704
+        name: "'Prepare corpus' onboarding wizard (Tauri)"
+        status: backlog
+        effort: L
+        description: >
+          Add sources (folder/upload/Notion) → distill (progress) → readiness
+          score + gap list → ready. Extends MeetingSetup / a Corpus manager screen.
+        depends_on: [F-701, F-703]
+        files:
+          - new: app/src/components/CorpusPrep.tsx
+          - src/api/routes/context.py
+      - id: F-705
+        name: "Retrieval-first live borrowable view"
+        status: backlog
+        effort: M
+        description: >
+          Live: retrieve the borrowable answer-unit + source, glanceable,
+          user-gated (D-02). No live generation. ~120-190ms. Prototyped as the
+          lab borrowable cards.
+        depends_on: [F-701]
+        files:
+          - app/src/components/PromptsPane.tsx
+          - lib/answer_extractor.py
+      - id: F-706
+        name: "Incremental re-distill on doc change"
+        status: backlog
+        effort: S
+        description: >
+          Re-distill only changed documents when the corpus updates, keeping the
+          answer-unit index fresh without a full rebuild.
+        depends_on: [F-701]
+        files:
+          - new: lib/corpus/distiller.py

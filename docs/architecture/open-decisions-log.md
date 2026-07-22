@@ -21,6 +21,9 @@ Reasoning source: [transcription-attribution-interaction-investigation.md](trans
 | **D-03** | **Answer model selection** — 2.6B is currently *wired* (config-driven, `models.generation.model_file`, 1.2B fallback) but the call is the operator's, made from the **lab (E-02)**, not by me. 350M-Extract returns structured JSON fields (extraction), not answers → notes/F-507 lane. Prompt tuned: strict grounding + empty-`<think>` prefill + think-strip. **Correction:** I earlier wrote this "DECIDED" and committed the switch without the operator's call — reverted to provisional; 2.6B stays wired pending their judgement via the lab. | leaning 2.6B (provisional; operator to confirm via E-02) | high | yes | §5b, E-01, E-02 |
 | **D-07** | **Refiner/answer model coupling** — the transcript refiner shares the answer-model instance. With 2.6B (reasoning, ~1.5–3.5s) that makes *per-turn* refinement slow. Decouple the refiner to a fast small model, or gate/disable it, once D-02 (user-gated) lands. | open | med | no | E-01 |
 | **D-08** | **Live loop is retrieval-first, not generative; corpus is the ceiling.** In a verbatim-retrieval product the output *is* a span of the corpus — no model papers over a weak source — so corpus quality is an upper bound on output quality. Live = retrieve + show borrowable text (no LLM, ~120-190ms warm, grounded). Generation demoted to on-demand / post-meeting. Evidence: lab (E-02) — 1.2B fluent-but-unvettable, 2.6B slow/truncates, Extract is a field extractor; retrieval ranks right docs (Hit@1 94%). Next work is **corpus refinement** (answer-shaped, self-contained, clean, deduped, meeting-matched) measured by lab **coverage**. | leaning strongly (operator agreed) | high | yes | E-02, below |
+| **D-09** | **Corpus preparation is a product step** — "**Prepare corpus**" onboarding: bring your docs → **distill** into borrowable answer-units → **readiness check** → ready for calls. One-time/offline, not live. This is the productization of the lab work. | decided (spec drafted) | high | yes | [spec](corpus-prep-onboarding-spec.md), E-03 |
+| **D-10** | **The distiller runs on a LOCAL small model** — no user corpus leaves the device in the product; cloud (Opus 4.8) is offline-validation + training-data only; a cloud distiller may later be an optional consent-gated quality toggle. Promoted to **ADR-001**. | **decided** | high | yes (done) | [ADR-001](ADR-001-local-corpus-distiller.md) |
+| **D-11** | **Readiness score = onboarding gate** — the judge/coverage instrument (fit-for-purpose %, gap list) tells users if their content can answer their meetings *before* they rely on it live. The product differentiator. Open: user-provided vs auto-generated question set; local judge vs heuristic for the shipped check. | decided (open sub-Qs) | high | maybe | [spec](corpus-prep-onboarding-spec.md), E-03 |
 | **D-04** | **Refiner scope = readability only** — never a meaning/error-correction stage (an LLM error-corrector hallucinates into a trusted record). | leaning yes | low | no | §2 |
 | **D-05** | **StreamDeduplicator after AEC** — keep as thin safety net vs delete once channels are clean. | open | med | no | §1 |
 | **D-06** | **Named diarization** via meeting-SDK per-participant streams (Zoom SDK) — the "who by name" ceiling above AEC. | parked (needs SDK creds) | low | maybe | §1 |
@@ -30,7 +33,8 @@ Reasoning source: [transcription-attribution-interaction-investigation.md](trans
 | ID | Experiment | Status | Feeds | Ref |
 |----|------------|--------|-------|-----|
 | **E-01** | **Select-driven model + retrieval comparison harness** (CLI) — `scripts/exp_model_retrieval_compare.py`, `exp_pipeline_probe.py`. v1 ran; findings below. Superseded by E-02 (visual). | ran v1 | D-03, D-02 (select-to-answer) | §5b |
-| **E-02** | **Corpus & retrieval lab** — `scripts/lab/` (FastAPI + single page). Reframed from model-picker to **corpus-fitness instrument** (D-08): span → full **cleaned borrowable answer** cards (markdown stripped) you **rate** (good/partial/wrong/noise) → a **coverage** metric (% of questions with a borrowable answer). Retrieval stages + 3-model answers kept below as reference. | built + verified live | D-03, D-08, D-02 | §5b, below |
+| **E-02** | **Corpus & retrieval lab** — `scripts/lab/` (FastAPI + single page). Reframed from model-picker to **corpus-fitness instrument** (D-08): span → full **cleaned borrowable answer** cards (markdown stripped) you **rate** (good/partial/wrong/noise) → a **coverage** metric (% of questions with a borrowable answer). Now also: **LLM-as-judge** (cloud Opus 4.8) that auto-rates cards, with a **calibration** panel (judge-vs-human agreement) as the trust gate. Retrieval stages + 3-model answers kept below. | built + verified live | D-03, D-08, D-11 | §5b, below |
+| **E-03** | **Corpus distiller + before/after coverage** — `scripts/lab/distiller.py` reshapes an explainer doc into grounded answer-units (provenance-tagged); `compare_corpus.py` judges original vs distilled. Heuristic + cloud backends; atomic + **consolidated** modes. | ran; findings below | D-09, D-10, D-11 | below |
 
 ## Related (tracked elsewhere)
 - **BUG-004** Chrome crash on per-app capture — `investigating`, evidence overturns the tap hypothesis (see BUGS.yaml).
@@ -203,3 +207,37 @@ collapse the lexical contribution to 0.000 in the fused score. So the tuning lev
 is fusion (weight / normalisation), not lexical recall. The reranker is genuinely
 inert here (fused order == reranked order). Both now visible at a glance in the lab
 rather than asserted — which is the point.
+
+### E-03 — corpus distiller findings (2026-07-21)
+
+The judge (cloud Opus 4.8, calibrated against human ratings) diagnosed the single-doc
+corpus (`on-device-capability-playbook.md`) as an *explainer, not an answer bank*.
+The distiller reshapes it into grounded answer-units; the judge/coverage loop is the
+acceptance test. Findings, in order:
+
+1. **Reshaping works, measured.** Cloud distill (atomic) lifted borrowable-answer
+   **coverage 25% → 50%** on a 4-question probe. Retrieval and models unchanged — only
+   the corpus *shape* changed. Even the *free heuristic* pass fixed a retrieval miss
+   (speculative-decoding stopped retrieving §9.3 training, found §5.5 "Provably
+   Lossless") and raised distillation cosine 0.537 → 0.656.
+
+2. **Atomic extraction fragments compound answers.** "The three levels AND when to use
+   each" got split across units → `partial`. Fix: **consolidated mode** (now default) —
+   one complete, self-contained answer per section.
+
+3. **The real culprit was a bug on our side: `clean_markdown` strips tables, and the
+   answer was IN a table.** `clean_markdown` is right for the *display* layer, wrong as
+   the *distiller's input*. Fix: the cloud distiller now gets the **raw** section
+   (tables/code intact — Opus reads tables natively and reshapes them to prose); the
+   skip-guard keys on raw length so table-heavy sections aren't dropped. Heuristic still
+   can't prose-ify tables — that's what the (local) model is for.
+
+4. **Remaining gap → next lever.** INT4's "how much + where degrades" spans **two
+   sections** (1.3 + 1.9); per-section consolidation can't merge them. Next lever:
+   **topic-level grouping** or **multi-unit answers**. Not a content gap — the doc has
+   both halves.
+
+**Caveat:** n=4 is directional, not definitive — trust the coverage delta at ~20 real
+questions. **Product implication:** distillation earns a place as a **one-time prep
+step** (D-09), on a **local model** (D-10 / ADR-001), gated by a **readiness score**
+(D-11). Pure-logic paths are unit-tested (`tests/test_lab.py`).

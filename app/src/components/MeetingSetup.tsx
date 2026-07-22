@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type React from "react";
+import { CorpusPrep } from "./CorpusPrep";
 
 const API_BASE = "http://127.0.0.1:8420";
 
@@ -45,6 +46,7 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel, startError }: Me
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [selectedPid, setSelectedPid] = useState(0);
   const [permissionGranted, setPermissionGranted] = useState(true);
+  const [showCorpusPrep, setShowCorpusPrep] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -219,7 +221,18 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel, startError }: Me
       onClick={handleOverlayClick}
     >
       <div style={styles.dialog}>
-        <h2 style={styles.heading}>Meeting Setup</h2>
+        <div style={styles.headingRow}>
+          <h2 style={styles.heading}>Meeting Setup</h2>
+          <button
+            type="button"
+            style={styles.corpusBtn}
+            onClick={() => setShowCorpusPrep(true)}
+            title="Distill your docs into borrowable answer-units and check readiness"
+          >
+            Prepare corpus…
+          </button>
+        </div>
+        {showCorpusPrep && <CorpusPrep onClose={() => setShowCorpusPrep(false)} />}
 
         <label style={styles.label}>
           Title
@@ -434,6 +447,20 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 14,
   },
   heading: { fontSize: 20, fontWeight: 700, marginBottom: 4 },
+  headingRow: {
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+  },
+  corpusBtn: {
+    background: "transparent",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    color: "var(--text-secondary)",
+    padding: "5px 12px",
+    fontSize: 12,
+    cursor: "pointer",
+  },
   label: {
     display: "flex",
     flexDirection: "column",

@@ -15,6 +15,7 @@ treated as a HuggingFace hub id.
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -78,23 +79,37 @@ class SentenceTransformerEmbedder:
         self._query_prompt = query_prompt
         self._document_prompt = document_prompt
         self._model: Optional[object] = None
+        self._load_lock = threading.Lock()
 
     def _load_model(self) -> None:
-        """Lazy-load the sentence-transformers model."""
+        """Lazy-load the sentence-transformers model (thread-safe).
+
+        Two threads racing here corrupts the load — torch materialises weights
+        from meta device during construction, and a concurrent second
+        construction fails with "Cannot copy out of meta tensor; no data!".
+        The race went live when session start began pre-warming the embedder on
+        a background thread (F-705) while the pipeline queried on another.
+
+        Double-checked locking: the unlocked fast path keeps steady-state
+        embedding lock-free, and the model is published to ``self._model`` only
+        once fully constructed, so the fast path can never see a half-built one.
+        """
         if self._model is not None:
             return
-        from sentence_transformers import SentenceTransformer
+        with self._load_lock:
+            if self._model is not None:
+                return
+            from sentence_transformers import SentenceTransformer
 
-        logger.info(
-            "Loading embedding model: %s (dim=%d, trust_remote_code=%s)",
-            self._model_name,
-            self._dimension,
-            self._trust_remote_code,
-        )
-        self._model = SentenceTransformer(
-            self._model_name, trust_remote_code=self._trust_remote_code
-        )
-        logger.info("Embedding model ready (dim=%d)", self._dimension)
+            logger.info(
+                "Loading embedding model: %s (dim=%d, trust_remote_code=%s)",
+                self._model_name,
+                self._dimension,
+                self._trust_remote_code,
+            )
+            model = SentenceTransformer(self._model_name, trust_remote_code=self._trust_remote_code)
+            self._model = model
+            logger.info("Embedding model ready (dim=%d)", self._dimension)
 
     def embed(self, text: str) -> list[float]:
         """Embed a single passage/document string into a float vector."""

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type React from "react";
+import { CorpusPrep } from "./CorpusPrep";
 
 const API_BASE = "http://127.0.0.1:8420";
 
@@ -30,9 +31,10 @@ interface MeetingSetupProps {
   onStart: (config: MeetingConfig) => void;
   onQuickStart: (device: string, micDevice?: string) => void;
   onCancel: () => void;
+  startError?: string;
 }
 
-export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupProps) {
+export function MeetingSetup({ onStart, onQuickStart, onCancel, startError }: MeetingSetupProps) {
   const [title, setTitle] = useState("");
   const [agenda, setAgenda] = useState("");
   const [watchWords, setWatchWords] = useState("pricing, timeline, budget, competitor");
@@ -44,6 +46,7 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [selectedPid, setSelectedPid] = useState(0);
   const [permissionGranted, setPermissionGranted] = useState(true);
+  const [showCorpusPrep, setShowCorpusPrep] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -135,6 +138,17 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
 
   const selectedApp = apps.find((a) => a.pid === selectedPid);
 
+  // BUG-005: per-app capture is a dual-stream (two-speaker) guarantee. When
+  // Screen Recording permission is missing it silently degrades to mic-only.
+  // Block the per-app start paths and require an explicit mic-only choice.
+  const perAppSelected = appTapAvailable && selectedPid > 0;
+  const permissionBlocked = perAppSelected && !permissionGranted;
+
+  const handleStartMicOnly = () => {
+    // Explicit, honest mic-only: no per-app PID, so no false dual-stream promise.
+    onQuickStart(audioDevice, micDevice);
+  };
+
   const refreshApps = () => {
     fetch(`${API_BASE}/session/apps`)
       .then((r) => r.json())
@@ -207,7 +221,18 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
       onClick={handleOverlayClick}
     >
       <div style={styles.dialog}>
-        <h2 style={styles.heading}>Meeting Setup</h2>
+        <div style={styles.headingRow}>
+          <h2 style={styles.heading}>Meeting Setup</h2>
+          <button
+            type="button"
+            style={styles.corpusBtn}
+            onClick={() => setShowCorpusPrep(true)}
+            title="Distill your docs into borrowable answer-units and check readiness"
+          >
+            Prepare corpus…
+          </button>
+        </div>
+        {showCorpusPrep && <CorpusPrep onClose={() => setShowCorpusPrep(false)} />}
 
         <label style={styles.label}>
           Title
@@ -248,6 +273,11 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
             placeholder="Alice (PM), Bob (Eng)"
           />
         </label>
+        <p style={styles.enrollmentHint}>
+          Roster names bound speaker clustering. Enrolled colleague voice profiles
+          (config: diarization.enrollment_path) auto-name matching speakers instead
+          of "Speaker A".
+        </p>
 
         <div style={styles.deviceRow}>
           <label style={{ ...styles.label, flex: 1 }}>
@@ -277,10 +307,22 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
                   </button>
                 </div>
                 {!permissionGranted && (
-                  <span style={styles.permWarn}>
-                    ⚠ Screen Recording permission required — grant in System Settings →
-                    Privacy & Security → Screen & System Audio Recording
-                  </span>
+                  <div style={styles.permBlock}>
+                    <strong>Screen Recording permission required</strong>
+                    <span>
+                      Per-app capture is off, so remote speakers won&apos;t be
+                      transcribed. Grant it in System Settings → Privacy &amp; Security
+                      → Screen &amp; System Audio Recording, then Refresh (↻). Or start
+                      mic-only below.
+                    </span>
+                    <button
+                      type="button"
+                      style={styles.micOnlyBtn}
+                      onClick={handleStartMicOnly}
+                    >
+                      Start mic-only instead
+                    </button>
+                  </div>
                 )}
                 {permissionGranted && selectedPid === 0 && (
                   <span style={styles.permWarn}>
@@ -334,6 +376,12 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
           </label>
         </div>
 
+        {startError && (
+          <div style={styles.startError} role="alert">
+            {startError}
+          </div>
+        )}
+
         <div style={styles.actions}>
           <button
             style={styles.cancelBtn}
@@ -342,12 +390,33 @@ export function MeetingSetup({ onStart, onQuickStart, onCancel }: MeetingSetupPr
             Cancel
           </button>
           <button
-            style={styles.quickBtn}
+            style={{
+              ...styles.quickBtn,
+              ...(permissionBlocked ? styles.disabledBtn : {}),
+            }}
             onClick={handleQuickStartWithApp}
+            disabled={permissionBlocked}
+            title={
+              permissionBlocked
+                ? "Grant Screen Recording permission, or use “Start mic-only instead”"
+                : undefined
+            }
           >
             Quick Start
           </button>
-          <button style={styles.startBtn} onClick={handleStart}>
+          <button
+            style={{
+              ...styles.startBtn,
+              ...(permissionBlocked ? styles.disabledBtn : {}),
+            }}
+            onClick={handleStart}
+            disabled={permissionBlocked}
+            title={
+              permissionBlocked
+                ? "Grant Screen Recording permission, or use “Start mic-only instead”"
+                : undefined
+            }
+          >
             Start Meeting
           </button>
         </div>
@@ -378,6 +447,20 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 14,
   },
   heading: { fontSize: 20, fontWeight: 700, marginBottom: 4 },
+  headingRow: {
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+  },
+  corpusBtn: {
+    background: "transparent",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    color: "var(--text-secondary)",
+    padding: "5px 12px",
+    fontSize: 12,
+    cursor: "pointer",
+  },
   label: {
     display: "flex",
     flexDirection: "column",
@@ -385,6 +468,13 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     fontWeight: 600,
     color: "var(--text-secondary)",
+  },
+  enrollmentHint: {
+    margin: "-4px 0 0",
+    fontSize: 11,
+    lineHeight: 1.4,
+    color: "var(--text-secondary)",
+    opacity: 0.7,
   },
   input: {
     background: "var(--bg-primary)",
@@ -451,5 +541,44 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#ffaa33",
     fontSize: 11,
     marginTop: 2,
+  },
+  permBlock: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    marginTop: 6,
+    padding: "10px 12px",
+    borderRadius: 6,
+    border: "1px solid rgba(255,170,51,0.5)",
+    background: "rgba(255,170,51,0.08)",
+    color: "#ffcc80",
+    fontSize: 11,
+    lineHeight: 1.4,
+    fontWeight: 500,
+  },
+  micOnlyBtn: {
+    alignSelf: "flex-start",
+    background: "transparent",
+    border: "1px solid rgba(255,170,51,0.6)",
+    borderRadius: 6,
+    color: "#ffcc80",
+    padding: "5px 12px",
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  disabledBtn: {
+    opacity: 0.4,
+    cursor: "not-allowed",
+  },
+  startError: {
+    padding: "10px 12px",
+    borderRadius: 6,
+    border: "1px solid rgba(255,90,90,0.5)",
+    background: "rgba(255,90,90,0.1)",
+    color: "#ff9b9b",
+    fontSize: 12,
+    lineHeight: 1.4,
+    whiteSpace: "pre-line",
   },
 };

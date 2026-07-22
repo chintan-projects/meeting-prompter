@@ -25,11 +25,39 @@ interface PromptResult {
   method: string;
   latency_ms: number;
   source: string;
+  heading?: string;
+  source_text?: string;
   receivedAt: number;
   persistence: "persistent" | "standard" | "ephemeral";
   dismiss_ms: number;
   display_label: string;
   display_emoji: string;
+}
+
+/**
+ * A feedback card for something the user asked for by hand: pending, no match,
+ * or an error. Rendered muted by PromptsPane (no confidence, no generate button).
+ */
+function notice(
+  triggerText: string,
+  answer: string,
+  emoji = "\u{1F4AC}",
+  label = "NOTE"
+): Record<string, unknown> {
+  return {
+    type: "prompt",
+    trigger_type: "notice",
+    trigger_text: triggerText,
+    answer,
+    confidence: 0,
+    method: "notice",
+    latency_ms: 0,
+    source: "",
+    persistence: "standard",
+    dismiss_ms: 20000, // clears itself; a stale "no match" is just clutter
+    display_label: label,
+    display_emoji: emoji,
+  };
 }
 
 interface MeetingConfig {
@@ -45,6 +73,7 @@ interface MeetingConfig {
 
 function App() {
   const [showSetup, setShowSetup] = useState(true);
+  const [startError, setStartError] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -66,6 +95,125 @@ function App() {
     notionAvailable: false,
   });
   const promptIdRef = useRef(0);
+  // D-02: default quiet. Backend owns the truth; this mirrors it for the UI.
+  const [isListening, setIsListening] = useState(false);
+  // Triggers heard while armed that had no borrowable match. Surfaced as a
+  // count so "the corpus can't answer this" is distinguishable from "broken".
+  const [missCount, setMissCount] = useState(0);
+
+  /** Add a locally-built card and return its id so it can be replaced in place. */
+  const addPromptCard = useCallback((msg: Record<string, unknown>): number => {
+    promptIdRef.current += 1;
+    const id = promptIdRef.current;
+    setPromptResults((prev) => [
+      {
+        ...(msg as unknown as Omit<PromptResult, "id" | "receivedAt">),
+        id,
+        receivedAt: Date.now(),
+      },
+      ...prev,
+    ]);
+    return id;
+  }, []);
+
+  /** Replace a card's contents in place (pending → answer / no-match / error). */
+  const replacePromptCard = useCallback((id: number, msg: Record<string, unknown>) => {
+    setPromptResults((prev) =>
+      prev.map((p) =>
+        p.id === id
+          ? {
+              ...(msg as unknown as Omit<PromptResult, "id" | "receivedAt">),
+              id,
+              receivedAt: p.receivedAt,
+            }
+          : p
+      )
+    );
+  }, []);
+
+  /** Toggle the listen window. The WS listen_state is the source of truth. */
+  const toggleListen = useCallback(() => {
+    if (!isRunning) {
+      addPromptCard(notice("", "Start a meeting before arming the listen window."));
+      return;
+    }
+    fetch(`${API_BASE}/prompts/listen`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`Could not change the listen window (HTTP ${r.status}).`);
+        return r.json();
+      })
+      .then((state) => setIsListening(Boolean(state.armed)))
+      .catch((e: Error) => {
+        // Never leave the indicator lying about the backend's actual state.
+        addPromptCard(notice("", e.message));
+      });
+  }, [isRunning, addPromptCard]);
+
+  /**
+   * Select-to-answer (D-02, spatial): answer whatever the user highlighted.
+   *
+   * Every outcome renders a card. Dead-end suppression (F-202) is right for
+   * automatic pushes, but on a request the user made by hand, silence is
+   * indistinguishable from the feature being broken — which is exactly how it
+   * read the first time this was used live.
+   */
+  const answerSelection = useCallback(
+    (text: string) => {
+      const query = text.trim();
+      if (!query) return;
+      const id = addPromptCard(
+        notice(query, "Looking in your corpus…", "\u{1F50D}", "SEARCHING")
+      );
+      if (!isRunning) {
+        replacePromptCard(
+          id,
+          notice(query, "Start a meeting first — the corpus loads with the session.")
+        );
+        return;
+      }
+      fetch(`${API_BASE}/prompts/answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: query, trigger_type: "question" }),
+      })
+        .then(async (r) => {
+          if (!r.ok) {
+            const detail =
+              r.status === 409
+                ? "No active session — start a meeting first."
+                : `Lookup failed (HTTP ${r.status}).`;
+            throw new Error(detail);
+          }
+          return r.json();
+        })
+        .then((card) => {
+          if (card && card.answer) {
+            replacePromptCard(id, {
+              ...card,
+              display_label: "ANSWER",
+              display_emoji: "\u{1F4A1}",
+            });
+          } else {
+            replacePromptCard(
+              id,
+              notice(
+                query,
+                card?.note ??
+                  "Nothing in your corpus answers that. Try selecting a longer phrase, or add a document covering it."
+              )
+            );
+          }
+        })
+        .catch((e: Error) => {
+          replacePromptCard(id, notice(query, e.message || "Lookup failed."));
+        });
+    },
+    [isRunning, addPromptCard, replacePromptCard]
+  );
 
   const handlePinPrompt = useCallback((id: number) => {
     setPinnedIds((prev) => new Set(prev).add(id));
@@ -91,6 +239,7 @@ function App() {
           is_final: boolean;
           speaker: string;
           source: string;
+          low_confidence?: boolean;
         };
         if (
           msg.type === "transcript_update" ||
@@ -106,6 +255,7 @@ function App() {
             speaker: msg.speaker ?? "",
             source: msg.source ?? "",
             is_final: msg.is_final ?? msg.type !== "transcript_update",
+            low_confidence: msg.low_confidence ?? false,
           });
         }
       },
@@ -117,6 +267,18 @@ function App() {
   const promptsWs = useWebSocket({
     url: `${WS_BASE}/ws/prompts`,
     onMessage: useCallback((data: unknown) => {
+      // The channel carries two message types. listen_state is not a card —
+      // spreading it into promptResults would render an empty broken one.
+      const typed = data as { type?: string; armed?: boolean };
+      if (typed.type === "listen_state") {
+        setIsListening(Boolean(typed.armed));
+        return;
+      }
+      if (typed.type === "trigger_miss") {
+        // Heard you, found nothing borrowable. A count, not a card.
+        setMissCount((n) => n + 1);
+        return;
+      }
       const msg = data as Omit<PromptResult, "id" | "receivedAt">;
       promptIdRef.current += 1;
       setPromptResults((prev) => [
@@ -184,7 +346,8 @@ function App() {
 
   // --- Session control functions ---
 
-  const startSession = async (config: MeetingConfig) => {
+  const startSession = async (config: MeetingConfig): Promise<boolean> => {
+    setStartError("");
     try {
       const res = await fetch(`${API_BASE}/session/start`, {
         method: "POST",
@@ -207,9 +370,28 @@ function App() {
         setMeetingTitle(config.title);
         transcriptWs.connect();
         promptsWs.connect();
+        return true;
       }
+      // Non-OK (e.g. 412 permission gate): surface it instead of silently
+      // leaving the user on a blank, non-running screen (BUG-005).
+      let message = `Couldn't start the session (HTTP ${res.status}).`;
+      try {
+        const data = await res.json();
+        const detail = data?.detail;
+        if (detail && typeof detail === "object" && detail.message) {
+          message = detail.remedy ? `${detail.message}\n${detail.remedy}` : detail.message;
+        } else if (typeof detail === "string") {
+          message = detail;
+        }
+      } catch {
+        // response had no JSON body — keep the generic message
+      }
+      setStartError(message);
+      return false;
     } catch (err) {
       console.error("Failed to start session:", err);
+      setStartError("Couldn't reach the backend. Make sure it's running, then try again.");
+      return false;
     }
   };
 
@@ -260,13 +442,14 @@ function App() {
   };
 
   const handleSetupStart = async (config: MeetingConfig) => {
-    setShowSetup(false);
-    await startSession(config);
+    // Keep the setup dialog open until the session actually starts, so a
+    // failure (e.g. the permission gate) is shown in-context (BUG-005).
+    const ok = await startSession(config);
+    if (ok) setShowSetup(false);
   };
 
-  const handleQuickStart = (device: string, micDevice?: string) => {
-    setShowSetup(false);
-    startSession({
+  const handleQuickStart = async (device: string, micDevice?: string) => {
+    const ok = await startSession({
       title: "",
       agenda_items: [],
       watch_words: [],
@@ -276,6 +459,7 @@ function App() {
       system_audio_pid: 0,
       system_audio_app: "",
     });
+    if (ok) setShowSetup(false);
   };
 
   const handleEditSegment = (id: string, text: string) => {
@@ -324,6 +508,7 @@ function App() {
         setShowNotes((n) => !n);
       }
     },
+    onToggleListen: toggleListen,
   });
 
   return (
@@ -339,6 +524,8 @@ function App() {
         onStop={stopSession}
         onPause={pauseSession}
         onResume={resumeSession}
+        isListening={isListening}
+        onToggleListen={toggleListen}
       />
 
       <div style={styles.main}>
@@ -349,6 +536,7 @@ function App() {
           onEdit={handleEditSegment}
           onRenameSpeaker={handleRenameSpeaker}
           width={transcriptWidth}
+          onAnswerSelection={answerSelection}
         />
         {!transcriptCollapsed && (
           <div
@@ -363,6 +551,8 @@ function App() {
           dismissedIds={dismissedIds}
           onPin={handlePinPrompt}
           onDismiss={handleDismissPrompt}
+          isListening={isListening}
+          missCount={missCount}
         />
       </div>
 
@@ -370,7 +560,11 @@ function App() {
         <MeetingSetup
           onStart={handleSetupStart}
           onQuickStart={handleQuickStart}
-          onCancel={() => setShowSetup(false)}
+          onCancel={() => {
+            setStartError("");
+            setShowSetup(false);
+          }}
+          startError={startError}
         />
       )}
 

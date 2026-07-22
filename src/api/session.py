@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     import numpy as np
 
 from lib.config import AppConfig, load_config
+from lib.attribution import AttributionResolver, Regime
 from lib.conversation.meeting_context import MeetingContext, load_meeting_context
 from lib.diarization import SpeakerDiarizer
 from lib.generation.types import GenerationResult
@@ -102,6 +103,10 @@ class Session:
         # Speaker name mapping: diarizer label → custom name (e.g. "Speaker A" → "Alice")
         self._speaker_names: dict[str, str] = {}
 
+        # Attribution hierarchy (F-601): single place that decides a turn's
+        # speaker label — L1 channel, L3 acoustic, L4 roster, regime-aware.
+        self._resolver = AttributionResolver()
+
         # Cross-stream echo suppression: detects when mic and system audio
         # both capture the same speech (acoustic coupling without headphones)
         self._deduplicator = StreamDeduplicator(self.config.dual_stream)
@@ -138,6 +143,12 @@ class Session:
     def load_context(self, path: Path) -> Optional[MeetingContext]:
         """Load meeting context from YAML."""
         self.meeting_context = load_meeting_context(path)
+        # L4 roster: seed the attribution resolver with expected participants.
+        if self.meeting_context and self.meeting_context.participants:
+            self._resolver.set_roster(self.meeting_context.participants)
+        # F-606: conference-room regime → honest degradation to a flagged bucket.
+        if self.meeting_context and self.meeting_context.conference_room:
+            self._resolver.set_regime(Regime.CONFERENCE_ROOM)
         return self.meeting_context
 
     def start(
@@ -346,6 +357,24 @@ class Session:
         """
         self._transcript_buffer.on_silence(timestamp, source=source)
 
+    def _on_trigger_miss(self, trigger: Trigger) -> None:
+        """A trigger passed the listen gate but nothing borrowable came back.
+
+        Sent as a count, never a card: the user needs to know the pipeline is
+        alive and hearing them (otherwise "my corpus doesn't cover this" looks
+        identical to "this is broken"), but a card per miss is the prompt spam
+        D-02 exists to remove.
+        """
+        logger.info("[trigger] %s heard, no borrowable match", trigger.type.value)
+        self._thread_safe_put(
+            self._prompt_queue,
+            {
+                "type": "trigger_miss",
+                "trigger_type": trigger.type.value,
+                "trigger_text": trigger.text[:120],
+            },
+        )
+
     def _on_trigger_result(self, trigger: Trigger, result: GenerationResult) -> None:
         """Called when a trigger fires and produces a generation result.
 
@@ -405,6 +434,8 @@ class Session:
                 "method": result.method,
                 "latency_ms": result.latency_ms,
                 "source": result.source,
+                "heading": result.heading,
+                "source_text": result.source_text,
                 "persistence": persistence,
                 "dismiss_ms": dismiss_ms,
                 "display_label": trigger.type.label,
@@ -439,11 +470,11 @@ class Session:
         mic → "You", system → "Others". If Tier 2 diarization is enabled,
         system turns are then relabeled with neural speaker embeddings.
         """
-        # Source-based speaker attribution — deterministic, no ML (Tier 1)
-        if turn.source == "mic":
-            turn.speaker = "You"
-        elif turn.source == "system":
-            turn.speaker = "Others"
+        # L1 channel attribution (deterministic) via the resolver. Unknown
+        # sources yield an empty label → keep the turn's existing speaker.
+        channel = self._resolver.resolve_channel(turn.source)
+        if channel.speaker:
+            turn.speaker = channel.speaker
 
         # Emit raw finalization immediately
         self.transcript.upsert(
@@ -510,14 +541,16 @@ class Session:
             if audio_segment is None:
                 return
 
-            speaker = self._diarizer.process_turn(
+            diar_label = self._diarizer.process_turn(
                 audio_segment,
                 self.config.audio.sample_rate,
             )
-            if speaker:
-                speaker = self._speaker_names.get(speaker, speaker)
+            # L3/L4 + regime via the resolver (roster names, honest degradation).
+            attribution = self._resolver.resolve_acoustic(diar_label, names=self._speaker_names)
+            speaker = attribution.speaker
             if speaker and speaker != turn.speaker:
                 turn.speaker = speaker
+                turn.low_confidence = attribution.low_confidence
                 self.transcript.upsert(
                     seg_id=turn.id,
                     text=turn.text,
@@ -526,6 +559,7 @@ class Session:
                     is_final=True,
                     speaker=speaker,
                     source=turn.source,
+                    low_confidence=attribution.low_confidence,
                 )
                 self._thread_safe_put(
                     self._transcript_queue,
@@ -538,9 +572,15 @@ class Session:
                         "is_final": True,
                         "speaker": speaker,
                         "source": turn.source,
+                        "low_confidence": attribution.low_confidence,
                     },
                 )
-                logger.info("Turn %s relabeled: Others → %s", turn.id, speaker)
+                logger.info(
+                    "Turn %s relabeled: Others → %s%s",
+                    turn.id,
+                    speaker,
+                    " (low confidence)" if attribution.low_confidence else "",
+                )
         except Exception as e:
             logger.warning("Speaker relabeling failed for %s: %s", turn.id, e)
 
@@ -648,6 +688,7 @@ class Session:
             self._orchestrator.on_transcription = self._on_transcription
             self._orchestrator.on_silence_detected = self._on_silence_detected
             self._orchestrator.on_trigger_result = self._on_trigger_result
+            self._orchestrator.on_trigger_miss = self._on_trigger_miss
 
             # Create text refiner (shares RAGAnswerGenerator — thread-safe via generate_text())
             refiner_config = getattr(self.config, "refiner", None)
@@ -665,6 +706,20 @@ class Session:
             if self.config.diarization.enabled:
                 try:
                     self._diarizer = SpeakerDiarizer(self.config.diarization)
+                    # F-604: bound clustering to the known roster when available.
+                    if self.meeting_context and self.meeting_context.participants:
+                        self._diarizer.set_roster_size(len(self.meeting_context.participants))
+                    # F-605: attach voice-enrollment profiles if configured.
+                    enroll_path = self.config.diarization.enrollment_path
+                    if enroll_path:
+                        from lib.speaker_enrollment import VoiceEnrollment
+
+                        self._diarizer.set_enrollment(
+                            VoiceEnrollment.load(
+                                Path(enroll_path),
+                                match_threshold=self.config.diarization.enrollment_threshold,
+                            )
+                        )
                     if self._diarizer.available:
                         logger.info("Tier 2 speaker diarization enabled")
                     else:

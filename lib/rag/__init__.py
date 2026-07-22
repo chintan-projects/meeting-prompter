@@ -85,6 +85,8 @@ class RAGPipeline:
             elif path.is_dir():
                 pattern = "**/*" if recursive else "*"
                 for file_path in sorted(path.glob(pattern)):
+                    if file_path.name.startswith("."):
+                        continue  # hidden bookkeeping (.distill_manifest.json, .DS_Store)
                     if file_path.is_file() and file_path.suffix.lower() in file_types:
                         self._index_file(file_path, result)
 

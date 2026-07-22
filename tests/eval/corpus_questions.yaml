@@ -1,0 +1,99 @@
+# Readiness question set — on-device-capability-playbook corpus (T4 / F-703).
+#
+# ~20 realistic meeting questions a listener could ask about this corpus.
+# INDEPENDENCE RULE (execution-prompt constraint 3): this set is the held-out
+# acceptance instrument for distillation/readiness. The distiller must never be
+# tuned against these specific questions — coverage here has to reflect a real
+# corpus, not a gamed one.
+#
+# kind: single   = answer lives in one section
+#       table    = answer lives in (or partly in) a markdown table
+#       compound = answer spans multiple sections (the INT4-class failure mode)
+# sections: where a complete answer lives in the source doc (for gap analysis).
+
+corpus: on-device-capability-playbook
+questions:
+  - id: Q01
+    text: "How much does INT4 quantization hurt accuracy, and where does it degrade most?"
+    kind: compound
+    sections: ["1.3", "1.9"]
+  - id: Q02
+    text: "What are the three levels of distillation and when do we use each?"
+    kind: table
+    sections: ["2.4"]
+  - id: Q03
+    text: "Is speculative decoding lossless, and how much speedup does it give?"
+    kind: compound
+    sections: ["5.5", "5.4"]
+  - id: Q04
+    text: "When should we prune versus quantize — do they stack?"
+    kind: table
+    sections: ["3.6"]
+  - id: Q05
+    text: "Why does extreme quantization like ternary need training instead of post-training rounding?"
+    kind: single
+    sections: ["1.7"]
+  - id: Q06
+    text: "What do GPTQ and AWQ do differently from plain INT4 rounding?"
+    kind: single
+    sections: ["1.4"]
+  - id: Q07
+    text: "Why can't we do logit-level distillation from DeepSeek into an LFM model?"
+    kind: single
+    sections: ["2.4"]
+  - id: Q08
+    text: "What did the R1 release teach us about reasoning-trace distillation?"
+    kind: single
+    sections: ["2.5"]
+  - id: Q09
+    text: "Why doesn't unstructured pruning actually speed anything up on real hardware?"
+    kind: single
+    sections: ["3.2"]
+  - id: Q10
+    text: "How does self-consistency majority voting work and what does it cost at inference?"
+    kind: single
+    sections: ["4.3"]
+  - id: Q11
+    text: "How big does the KV cache get at long context, and why does it dominate the footprint?"
+    kind: single
+    sections: ["6.2"]
+  - id: Q12
+    text: "What are the architectural fixes for KV cache size, like sharing heads?"
+    kind: single
+    sections: ["6.3"]
+  - id: Q13
+    text: "Should we merge LoRA adapters into the base or hot-swap them when serving multiple specialists?"
+    kind: single
+    sections: ["7.5"]
+  - id: Q14
+    text: "What is QLoRA, and does LoRA work on a ternary base?"
+    kind: compound
+    sections: ["7.6"]
+  - id: Q15
+    text: "Why is RAG a better place for facts than model weights?"
+    kind: single
+    sections: ["8.1"]
+  - id: Q16
+    text: "Why is RAG especially valuable for a quantized model?"
+    kind: single
+    sections: ["8.5"]
+  - id: Q17
+    text: "What does multi-token prediction buy us at training time and at inference time?"
+    kind: compound
+    sections: ["9.3", "9.4"]
+  - id: Q18
+    text: "What do total versus active parameters mean for a mixture-of-experts model, and what is the measured latency win?"
+    kind: compound
+    sections: ["10.1", "10.4"]
+  - id: Q19
+    text: "What is router collapse in a mixture-of-experts model and how is it prevented?"
+    kind: single
+    sections: ["10.5"]
+  - id: Q20
+    text: "How is the LFM2 hybrid architecture different from Mamba-style SSM models?"
+    kind: single
+    sections: ["11.4"]
+  - id: Q21
+    text: "When does test-time compute stop helping — what does the trade curve look like?"
+    kind: single
+    sections: ["4.5"]

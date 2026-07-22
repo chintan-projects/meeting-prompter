@@ -1,0 +1,140 @@
+# forge genspec — F-503 trigger-router head (meeting-prompter)
+#
+# FIRST PRINCIPLE (the whole point): teach the SHAPE, not the content.
+# The four trigger types are pragmatic SPEECH ACTS, not topics —
+#   question = information-seeking act · alert = warning/heads-up act ·
+#   topic = declarative assertion of a fact · followup = deontic "later" suggestion ·
+#   none = phatic/backchannel.
+# The router must key ONLY on that shape and be blind to subject matter, because the
+# meetings this ships into are arbitrarily diverse. Downstream layers handle content
+# (RAG decides if a `topic` assertion matches a doc; watch-words handle `alert` terms).
+#
+# HOW that principle is encoded here:
+#  - families = ~30 WILDLY UNRELATED domains (none about ML/Liquid AI), rotated so the
+#    subject never recurs and no content feature can become a label signal;
+#  - label definitions are stripped of all domain content — pure speech-act form,
+#    "regardless of subject matter";
+#  - NO content cues (they would re-lock the head to a domain). Diversity + the generic
+#    dedup/diversity/masked-probe gates enforce that content is not a shortcut.
+# The bidirectional encoder backbone is right for exactly this: shape often turns on the
+# END of a turn (a trailing "…, right?" flips question→none), which needs a two-way read.
+#
+# Serves a BARE ASR turn → families are conditioning (never stored). Contract:
+# forge/f503-trigger-router/contract.md.
+
+task: "Route one spoken meeting utterance to its intent type by PRAGMATIC SHAPE, independent of subject matter."
+
+# Override the default style: a raw voice-transcript turn with a wildly varied subject.
+style: "one short spoken turn from a meeting participant, written as a raw ASR voice transcript (lowercase, disfluent, often with no terminal punctuation, 1 short sentence), with a concrete subject that varies widely every time"
+
+labels:
+  question:
+    share: 0.2
+    definition: >
+      An information-seeking speech act: the speaker is asking the group for information
+      — an interrogative or an embedded ask ("remind me what X was", "do we have Y") —
+      regardless of what it is about. The pragmatic force is: I want an answer now.
+    boundary:
+      - "a rhetorical or tag question (right? / you know? / makes sense?)"
+      - "a question the speaker immediately answers themselves"
+
+  alert:
+    share: 0.2
+    definition: >
+      A speech act that flags a problem, risk, limitation, resource constraint, blocker,
+      negative consequence, or a CONTRADICTION of something said earlier — something the
+      group must be aware of or act on now, regardless of subject. CRUCIAL: MOST alerts
+      carry NO marker word — the warning force lives in the CONTENT, stated as a bare
+      declarative. e.g. "we don't have the memory budget for that", "that contradicts the
+      numbers from last week", "this pushes the launch past the deadline", "the current
+      approach loses about seven percent accuracy", "if we change the schema we have to
+      retrain everything", "that's the part that's going to break under load". Only a
+      MINORITY should open with "heads up" / "careful" / "wait" / "just flagging". The
+      difference from a topic is VALENCE: an alert states a fact that is a problem or risk;
+      a topic states a neutral fact.
+    boundary:
+      - "a suggestion about what to do later"
+
+  topic:
+    share: 0.2
+    definition: >
+      A neutral declarative assertion: the speaker states that some fact IS the case —
+      any fact, in any domain — with NO problem/risk valence, no request, no suggestion.
+      The pragmatic force is: I am asserting a neutral piece of information.
+    boundary:
+      - "a fact that implies a problem, risk, limitation, or contradiction (that is alert)"
+      - "a question"
+      - "a suggestion to do something later"
+
+  followup:
+    share: 0.2
+    definition: >
+      A deontic suggestion for LATER action — proposing a future action, regardless of
+      what the action is about. The pragmatic force is: let's do this later. VARY THE
+      OPENING every time — do NOT begin most turns with "we should"; rotate freely
+      across "let's", "let's make sure to", "it might be worth ...-ing", "remind me to",
+      "we ought to", "let's plan to", "maybe we should", "can we make a note to",
+      "it'd be good to", "down the line let's", "at some point we need to". ALSO include
+      DIRECT REQUESTS to a named person ("can you send me the deck", "priya can you pull
+      the numbers before next time") and FIRST-PERSON COMMITMENTS to a future action
+      ("let me go check the old logs and report back", "i'll look into it and sync with
+      you", "i'll follow up on that after this call") — these are followups too.
+    boundary:
+      - "an immediate heads-up that must be acted on now"
+      - "a direct question asked now"
+
+  none:
+    share: 0.2
+    definition: >
+      Phatic backchannel, filler, agreement, or meeting logistics with no routable
+      intent — regardless of context. The abstain class. VARY THE SURFACE widely — do
+      NOT begin most turns with "uh yeah"; rotate across agreement ("yeah totally", "for
+      sure", "makes sense", "sounds good"), fillers ("um", "so anyway", "right right"),
+      logistics ("let me share my screen", "hang on", "can everyone hear me", "sorry you
+      cut out"), sign-offs ("thanks everyone", "talk soon", "good work"), and reactions
+      ("haha", "oh nice", "wow okay").
+    boundary:
+      - "any turn carrying a real question, alert, topic, or followup intent"
+
+# ~30 deliberately UNRELATED domains. The label must NOT be inferable from which domain
+# a row is in — every shape appears across every domain. role: conditioning → the domain
+# conditions the teacher but is never stored in the served input (the head sees a bare turn).
+families:
+  role: conditioning
+  values:
+    - "a hospital ward staffing meeting"
+    - "a construction site weekly planning call"
+    - "a video-game studio sprint standup"
+    - "a school board budget discussion"
+    - "a freight and logistics operations sync"
+    - "a restaurant kitchen pre-service brief"
+    - "a film production scheduling call"
+    - "a nonprofit fundraising committee sync"
+    - "a municipal transit planning meeting"
+    - "a biotech lab results review"
+    - "a wedding-planning vendor call"
+    - "a retail store merchandising review"
+    - "a farm co-op harvest planning meeting"
+    - "an airline ground-ops shift handover"
+    - "a university admissions committee meeting"
+    - "a fashion brand product-line review"
+    - "a fire department incident debrief"
+    - "a podcast production planning call"
+    - "a real-estate development zoning discussion"
+    - "an esports team strategy session"
+    - "a museum exhibit planning meeting"
+    - "a solar-installation project kickoff"
+    - "a legal case-strategy meeting"
+    - "a climate-research field-study planning call"
+    - "a car-dealership sales floor huddle"
+    - "a veterinary practice staff meeting"
+    - "a music festival logistics sync"
+    - "an insurance claims triage meeting"
+    - "a coffee-roastery operations review"
+    - "a city hospital pharmacy inventory review"
+
+volume: 600
+holdout_frac: 0.15
+teacher_model: "openai/gpt-4o"  # stronger teacher — gpt-4o-mini collapsed followup/none to one template
+# Robustness mass; lower-case bumped for the ASR/voice-transcript serving register.
+perturbations: { lower: 0.12, upper: 0.04, flat: 0.04, ocr: 0.02 }

@@ -1,4 +1,5 @@
 """Notes routes — editing, structured notes generation, export, and save."""
+
 import logging
 import time
 from datetime import datetime, timezone
@@ -16,6 +17,18 @@ from src.api.session import Session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/notes", tags=["notes"])
+
+
+def _get_extractor(session: Session) -> Optional[object]:
+    """Return the Extract-model generator (F-507) if the orchestrator wired one.
+
+    Returns None today — the LFM2.5-350M-Extract runtime is plumbed but not yet
+    wired as the default (needs a live verification run). When the orchestrator
+    exposes ``extract_generator``, structured notes route through it automatically.
+    """
+    orch = getattr(session, "_orchestrator", None)
+    extractor = getattr(orch, "extract_generator", None) if orch else None
+    return extractor
 
 
 def _get_generator(session: Session) -> Optional[RAGAnswerGenerator]:
@@ -71,7 +84,9 @@ async def edit_segment(req: EditRequest) -> dict:
 
 
 @router.get("/export")
-async def export_notes(format: str = Query("markdown")) -> Dict[str, Union[str, int, float, List[dict]]]:
+async def export_notes(
+    format: str = Query("markdown"),
+) -> Dict[str, Union[str, int, float, List[dict]]]:
     """Export merged transcript as markdown or structured JSON.
 
     Query params:
@@ -107,6 +122,12 @@ async def generate_notes() -> StructuredNotesResponse:
     session = get_session()
     transcript_md = session.transcript.export_markdown()
     segments = session.transcript.export_json()
+    # F-607: lexical speaker-consistency correction (named hand-off/gratitude cues),
+    # non-destructive — applied to the notes' view of the segments only.
+    if session.meeting_context and session.meeting_context.participants:
+        from lib.attribution import correct_segments
+
+        segments = correct_segments(segments, session.meeting_context.participants)
 
     # Try to use the session's generator if available (may be None after crash)
     generator = _get_generator(session)
@@ -117,6 +138,7 @@ async def generate_notes() -> StructuredNotesResponse:
         segments=segments,
         meeting_context=session.meeting_context,
         trigger_history=session.trigger_history,
+        extractor=_get_extractor(session),
     )
     return StructuredNotesResponse(
         notes=notes,
@@ -197,6 +219,12 @@ async def download_notes() -> PlainTextResponse:
     session = get_session()
     transcript_md = session.transcript.export_markdown()
     segments = session.transcript.export_json()
+    # F-607: lexical speaker-consistency correction (named hand-off/gratitude cues),
+    # non-destructive — applied to the notes' view of the segments only.
+    if session.meeting_context and session.meeting_context.participants:
+        from lib.attribution import correct_segments
+
+        segments = correct_segments(segments, session.meeting_context.participants)
     meeting_title = session.meeting_context.title if session.meeting_context else "Meeting"
 
     # Try to generate structured notes if possible (may be None after crash)
@@ -207,6 +235,7 @@ async def download_notes() -> PlainTextResponse:
         segments=segments,
         meeting_context=session.meeting_context,
         trigger_history=session.trigger_history,
+        extractor=_get_extractor(session),
     )
 
     parts = [

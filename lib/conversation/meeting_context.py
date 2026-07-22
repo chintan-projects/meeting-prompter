@@ -3,6 +3,7 @@
 Loads agenda, watch words, participants, and key topics from a YAML file.
 Used to configure the trigger engine before a meeting starts.
 """
+
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,10 +29,15 @@ watch_words:
   - "timeline"
   - "budget"
 
-# Participants (for context)
+# Participants (for context; also seeds the attribution roster)
 participants:
   - "Alice (PM)"
   - "Bob (Engineering)"
+
+# Conference room: one shared far-field mic with several people. When true,
+# remote-speaker attribution degrades honestly to a flagged "Others (room)"
+# bucket instead of emitting confidently-wrong Speaker N labels (F-606).
+conference_room: false
 
 # Key topics to track
 key_topics:
@@ -54,6 +60,8 @@ class MeetingContext:
     participants: List[str] = field(default_factory=list)
     key_topics: List[str] = field(default_factory=list)
     notes: str = ""
+    # F-606: single far-field mic with many people → degrade attribution honestly.
+    conference_room: bool = False
 
     def summary(self) -> str:
         """Human-readable summary for display."""
@@ -112,6 +120,7 @@ def load_meeting_context(path: Path) -> Optional[MeetingContext]:
         participants=raw.get("participants", []),
         key_topics=raw.get("key_topics", []),
         notes=raw.get("notes", ""),
+        conference_room=bool(raw.get("conference_room", False)),
     )
 
 

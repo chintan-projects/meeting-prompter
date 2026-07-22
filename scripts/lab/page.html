@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Model &amp; Retrieval Lab</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #171a21;
+        --panel2: #1d212b;
+        --line: #2a2f3a;
+        --ink: #e6e9ef;
+        --mut: #9aa4b2;
+        --acc: #6ea8fe;
+        --good: #4ec9a3;
+        --warn: #e0a458;
+        --pick: #7ee0b8;
+        --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; background: var(--bg); color: var(--ink);
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      header { padding: 18px 24px; border-bottom: 1px solid var(--line); }
+      header h1 { margin: 0 0 4px; font-size: 17px; }
+      header .sub { color: var(--mut); font-size: 12.5px; }
+      header .sub b { color: var(--acc); font-weight: 600; }
+      main { padding: 20px 24px 60px; max-width: 1500px; margin: 0 auto; }
+      textarea {
+        width: 100%; min-height: 70px; resize: vertical; padding: 10px 12px;
+        background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+        border-radius: 8px; font: 14px/1.5 inherit;
+      }
+      .controls { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+      button {
+        background: var(--acc); color: #08111f; border: 0; border-radius: 7px;
+        padding: 8px 16px; font-weight: 600; cursor: pointer; font-size: 13.5px;
+      }
+      button.ghost { background: transparent; color: var(--mut); border: 1px solid var(--line); }
+      button:disabled { opacity: .5; cursor: default; }
+      .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+      .chip {
+        font-size: 12px; color: var(--mut); background: var(--panel); border: 1px solid var(--line);
+        border-radius: 999px; padding: 4px 10px; cursor: pointer;
+      }
+      .chip:hover { color: var(--ink); border-color: var(--acc); }
+      label.tok { color: var(--mut); font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+      label.tok input { width: 64px; background: var(--panel); color: var(--ink);
+        border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+
+      section { margin-top: 26px; }
+      section > h2 {
+        font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+        color: var(--mut); margin: 0 0 12px; border-bottom: 1px solid var(--line); padding-bottom: 6px;
+      }
+      .badge { display: inline-block; font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+        border: 1px solid var(--line); color: var(--mut); margin-left: 8px; }
+      .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+      .badge.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+
+      .row4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+      .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+      @media (max-width: 1100px) { .row4 { grid-template-columns: repeat(2, 1fr); } .row3 { grid-template-columns: 1fr; } }
+      .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+      .card h3 { margin: 0 0 8px; font-size: 13px; display: flex; justify-content: space-between; align-items: baseline; }
+      .card h3 .w { color: var(--mut); font-weight: 400; font-size: 11.5px; }
+
+      .hit { padding: 7px 0; border-top: 1px dashed var(--line); }
+      .hit:first-of-type { border-top: 0; }
+      .hit .doc { font-size: 12.5px; font-weight: 600; }
+      .hit .head { font-size: 11.5px; color: var(--mut); }
+      .hit .snip { font-size: 11.5px; color: var(--mut); margin-top: 3px; opacity: .8; }
+      .scores { font-family: var(--mono); font-size: 11px; color: var(--acc); margin-top: 3px; }
+      .scores .z { color: var(--warn); }
+      .rank { color: var(--mut); font-family: var(--mono); font-size: 11px; margin-right: 4px; }
+
+      .cls { display: flex; gap: 28px; flex-wrap: wrap; align-items: center; }
+      .metric .k { font-size: 11.5px; color: var(--mut); text-transform: uppercase; letter-spacing: .06em; }
+      .metric .v { font-size: 20px; font-weight: 700; font-family: var(--mono); }
+      .bar { height: 6px; background: var(--panel2); border-radius: 4px; margin-top: 6px; width: 220px; overflow: hidden; }
+      .bar > i { display: block; height: 100%; background: var(--acc); }
+
+      .ans { display: flex; flex-direction: column; min-height: 150px; }
+      .ans.picked { outline: 2px solid var(--pick); }
+      .ans h3 .lat { color: var(--good); font-family: var(--mono); font-weight: 400; font-size: 11.5px; }
+      .ans .body { flex: 1; font-size: 13.5px; white-space: pre-wrap; margin: 6px 0 10px; }
+      .ans .err { color: var(--warn); font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; }
+      .ans .note { color: var(--mut); font-size: 12px; font-style: italic; }
+      .ans .pickbtn { align-self: flex-start; background: transparent; border: 1px solid var(--line); color: var(--mut); }
+      .ans.picked .pickbtn { color: var(--pick); border-color: var(--pick); }
+
+      .live { border: 1px solid color-mix(in srgb, var(--good) 45%, var(--line));
+        background: color-mix(in srgb, var(--good) 7%, var(--panel)); border-radius: 10px; padding: 14px 16px; }
+      .live .lat { font-family: var(--mono); font-size: 12px; margin-bottom: 6px; }
+      .live .lat b { color: var(--good); }
+      .lcard { padding: 11px 0; border-top: 1px dashed var(--line); }
+      .lcard:first-of-type { border-top: 0; }
+      .lcard .sent { font-size: 15.5px; line-height: 1.5; }
+      .lcard .src { font-size: 12px; color: var(--mut); margin-top: 5px; }
+      .lcard .src b { color: var(--ink); font-weight: 600; }
+      .lcard .exp { color: var(--acc); cursor: pointer; font-size: 12px; margin-top: 5px; display: inline-block; }
+      .lcard .chunk { display: none; font-size: 12.5px; color: var(--mut); margin-top: 7px;
+        padding: 9px 11px; background: var(--panel2); border-radius: 6px; line-height: 1.55; }
+      .lcard.open .chunk { display: block; }
+      .lcard.gap { opacity: .72; }
+      .lcard .gapnote { color: var(--warn); font-size: 12px; margin: 3px 0 2px; }
+      .lcard .rank { color: var(--mut); font-family: var(--mono); font-size: 11px; margin-right: 6px; }
+      .rate { display: flex; gap: 6px; margin-top: 9px; }
+      .rbtn { background: transparent; border: 1px solid var(--line); color: var(--mut); padding: 3px 11px; font-size: 12px; font-weight: 500; border-radius: 6px; }
+      .rbtn:hover { color: var(--ink); }
+      .rbtn.on.r-good { background: var(--good); color: #08160f; border-color: var(--good); }
+      .rbtn.on.r-partial { background: var(--warn); color: #1a1206; border-color: var(--warn); }
+      .rbtn.on.r-wrong, .rbtn.on.r-noise { background: #c56b6b; color: #180808; border-color: #c56b6b; }
+
+      .judgebtn { background: transparent; border: 1px solid var(--acc); color: var(--acc); font-size: 12px; padding: 4px 12px; font-weight: 600; }
+      .judgebtn:disabled { opacity: .4; border-color: var(--line); color: var(--mut); }
+      .jverdict { margin-top: 8px; font-size: 12px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+      .jchip { font-family: var(--mono); font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); }
+      .jchip.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+      .jchip.partial { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+      .jchip.wrong, .jchip.noise { color: #d98b8b; border-color: color-mix(in srgb, #d98b8b 45%, var(--line)); }
+      .jverdict .jreason { color: var(--mut); font-style: italic; }
+      .jverdict .jerr { color: var(--warn); font-family: var(--mono); font-size: 11px; }
+
+      #calibration { margin-top: 22px; }
+      .calbar { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+      .calbar .big { font-size: 22px; font-weight: 700; font-family: var(--mono); }
+      .calbar .big.hi { color: var(--good); } .calbar .big.lo { color: var(--warn); }
+      #calibration table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+      #calibration td, #calibration th { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+      #calibration th { color: var(--mut); font-weight: 600; }
+      tr.mismatch { color: #d98b8b; }
+
+      #coverage { margin-top: 22px; }
+      .covbar { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; margin-bottom: 10px; }
+      .covnum { font-size: 15px; } .covnum b { font-size: 22px; color: var(--good); font-family: var(--mono); }
+      .covchips { display: flex; gap: 8px; }
+      .cc { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); font-family: var(--mono); }
+      .cc.good { color: var(--good); } .cc.partial { color: var(--warn); } .cc.gap { color: #d98b8b; }
+      #coverage table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+      #coverage td, #coverage th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+      #coverage th { color: var(--mut); font-weight: 600; }
+      tr.rr-wrong, tr.rr-noise { color: #d98b8b; } tr.rr-partial { color: var(--warn); }
+
+      #picks { margin-top: 30px; }
+      #picks table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+      #picks td, #picks th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      #picks th { color: var(--mut); font-weight: 600; }
+      .muted { color: var(--mut); }
+      .err-box { color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--panel)); border: 1px solid var(--line); padding: 10px 12px; border-radius: 8px; }
+      .spin { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--line); border-top-color: var(--acc); border-radius: 50%; animation: s .8s linear infinite; vertical-align: -2px; }
+      @keyframes s { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Corpus &amp; Retrieval Lab</h1>
+      <div class="sub">
+        Pick a span → read the borrowable answers → <b>rate each</b>. Coverage tells you if the corpus is fit for purpose.
+        <span id="cfgnote"></span>
+      </div>
+    </header>
+    <main>
+      <textarea id="span" placeholder="Paste or select a transcript span…"></textarea>
+      <div class="controls">
+        <button id="go">Analyze</button>
+        <label class="tok">max tokens <input id="tok" type="number" value="160" min="16" max="400" /></label>
+        <span id="status" class="muted"></span>
+      </div>
+      <div class="chips" id="chips"></div>
+
+      <section id="coverage" style="display:none"></section>
+      <section id="calibration" style="display:none"></section>
+
+      <div id="out"></div>
+
+      <section id="picks" style="display:none">
+        <h2>Your calls <button class="ghost" id="copy" style="float:right;margin-top:-4px">Copy</button></h2>
+        <table><thead><tr><th>Span</th><th>Picked</th></tr></thead><tbody id="pickrows"></tbody></table>
+      </section>
+    </main>
+
+    <script>
+      const $ = (s) => document.querySelector(s);
+      const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
+      const esc = (s) => (s ?? "").replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]));
+      const picks = [];
+
+      fetch("/samples").then((r) => r.json()).then((d) => {
+        const c = $("#chips");
+        (d.samples || []).forEach((s) => {
+          const ch = el("span", "chip", esc(s.length > 70 ? s.slice(0, 70) + "…" : s));
+          ch.title = s;
+          ch.onclick = () => { $("#span").value = s; };
+          c.appendChild(ch);
+        });
+      });
+
+      function hitRow(h, i, kind) {
+        const r = el("div", "hit");
+        const rank = el("span", "rank", "#" + (i + 1));
+        const doc = el("div", "doc");
+        doc.appendChild(rank);
+        doc.appendChild(document.createTextNode(h.doc || "(doc)"));
+        r.appendChild(doc);
+        if (h.heading) r.appendChild(el("div", "head", esc(h.heading)));
+        let sc = "";
+        if (kind === "bm25") sc = `bm25 ${h.score}`;
+        else if (kind === "vector") sc = `cos ${h.score}`;
+        else {
+          const zero = h.bm25 === 0 ? ' <span class="z">bm25 0</span>' : ` bm25 ${h.bm25}`;
+          sc = `fused ${h.fused} · cos ${h.cosine} ·${zero}`;
+        }
+        r.appendChild(el("div", "scores", sc));
+        if (h.snippet) r.appendChild(el("div", "snip", esc(h.snippet.slice(0, 140)) + "…"));
+        return r;
+      }
+
+      function arm(title, weightNote, hits, kind) {
+        const c = el("div", "card");
+        c.appendChild(el("h3", null, `<span>${title}</span><span class="w">${weightNote || ""}</span>`));
+        if (!hits || !hits.length) c.appendChild(el("div", "note", "no hits"));
+        else hits.forEach((h, i) => c.appendChild(hitRow(h, i, kind)));
+        return c;
+      }
+
+      const RATINGS = ["good", "partial", "wrong", "noise"];
+
+      let JUDGE_HINT = null;
+      fetch("/judge_status").then((r) => r.json()).then((d) => { JUDGE_HINT = d.hint; }).catch(() => {});
+
+      function borrowableSection(b, span) {
+        const l = b || {};
+        const s = el("section");
+        const h = el("h2", null, "★ Borrowable answers — rank &amp; rate <span class='muted' style='text-transform:none;letter-spacing:0'>— what you'd read/say verbatim · retrieval " + (l.retrieval_ms ?? "?") + "ms</span>");
+        const jbtn = el("button", "judgebtn", "🤖 Judge (Opus 4.8)");
+        jbtn.style.cssText = "float:right;margin-top:-2px";
+        jbtn.title = JUDGE_HINT || "Auto-rate every card with cloud Opus 4.8";
+        jbtn.onclick = () => judgeSpan(span, jbtn);
+        h.appendChild(jbtn);
+        s.appendChild(h);
+        const box = el("div", "live");
+        (l.cards || []).forEach((c, i) => {
+          const card = el("div", "lcard" + (c.answer_shaped ? "" : " gap"));
+          card.dataset.chunkId = c.chunk_id;
+          card.appendChild(el("div", "src",
+            `<span class="rank">#${i + 1}</span><b>${esc(c.doc)}</b>${c.heading ? " › " + esc(c.heading) : ""} · cos ${c.cosine ?? "—"} · ${c.words} words`));
+          if (c.note) card.appendChild(el("div", "gapnote", "⚠ " + esc(c.note)));
+          card.appendChild(el("div", "sent", esc(c.text)));
+          const rate = el("div", "rate");
+          RATINGS.forEach((r) => {
+            const btn = el("button", "rbtn r-" + r, r);
+            btn.onclick = () => {
+              rate.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
+              btn.classList.add("on");
+              postRating(span, c.chunk_id, c.doc, r);
+            };
+            rate.appendChild(btn);
+          });
+          card.appendChild(rate);
+          box.appendChild(card);
+        });
+        s.appendChild(box);
+        return s;
+      }
+
+      async function postRating(span, chunk_id, doc, rating) {
+        try {
+          const r = await fetch("/rate", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ span, chunk_id, doc, rating }),
+          });
+          if (r.ok) renderCoverage(await r.json());
+        } catch (e) { /* non-fatal */ }
+      }
+
+      function renderCoverage(cov) {
+        const c = cov || {};
+        const wrap = $("#coverage");
+        wrap.style.display = "block";
+        const pct = c.questions ? Math.round((c.good / c.questions) * 100) : 0;
+        let html =
+          `<h2>Corpus coverage <span class='muted' style='text-transform:none;letter-spacing:0'>— fit-for-purpose = has a borrowable answer</span></h2>` +
+          `<div class="covbar"><div class="covnum"><b>${pct}%</b> of ${c.questions} questions have a good answer</div>` +
+          `<div class="covchips"><span class="cc good">${c.good} good</span><span class="cc partial">${c.partial} partial</span><span class="cc gap">${c.gap} gap</span></div></div>`;
+        if ((c.rows || []).length) {
+          html += `<table><thead><tr><th>Question</th><th>Best</th><th>Doc</th></tr></thead><tbody>` +
+            c.rows.map((r) => `<tr class="rr-${r.best}"><td>${esc(r.span)}</td><td><b>${esc(r.best)}</b></td><td class="muted">${esc(r.doc)}</td></tr>`).join("") +
+            `</tbody></table>`;
+        }
+        wrap.innerHTML = html;
+      }
+      fetch("/coverage").then((r) => r.json()).then(renderCoverage).catch(() => {});
+
+      async function judgeSpan(span, btn) {
+        btn.disabled = true;
+        const orig = btn.textContent;
+        btn.textContent = "judging…";
+        try {
+          const r = await fetch("/judge", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ span }),
+          });
+          const d = await r.json();
+          (d.verdicts || []).forEach((v) => attachVerdict(v));
+          if (d.calibration) renderCalibration(d.calibration);
+        } catch (e) {
+          alert("Judge failed: " + e);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = orig;
+        }
+      }
+
+      function attachVerdict(v) {
+        const card = document.querySelector('.lcard[data-chunk-id="' + v.chunk_id + '"]');
+        if (!card) return;
+        card.querySelector(".jverdict")?.remove();
+        const jv = el("div", "jverdict");
+        if (v.error) jv.appendChild(el("span", "jerr", "judge: " + esc(v.error)));
+        else {
+          jv.appendChild(el("span", "jchip " + v.rating, "judge: " + v.rating));
+          jv.appendChild(el("span", "muted", "conf " + v.confidence));
+          if (v.reason) jv.appendChild(el("span", "jreason", esc(v.reason)));
+        }
+        card.appendChild(jv);
+      }
+
+      function renderCalibration(cal) {
+        const c = cal || {};
+        const wrap = $("#calibration");
+        if (!c.pairs) { wrap.style.display = "none"; return; }
+        wrap.style.display = "block";
+        const cls = c.agreement_pct >= 80 ? "hi" : "lo";
+        let html =
+          "<h2>Judge calibration <span class='muted' style='text-transform:none;letter-spacing:0'>— judge vs your ratings; trust the judge only if this is high</span></h2>" +
+          `<div class="calbar"><span class="big ${cls}">${c.agreement_pct}%</span>` +
+          `<span class="muted">agreement over ${c.pairs} card(s) you both rated (${c.agree} match)</span></div>`;
+        html += "<table><thead><tr><th>Question</th><th>You</th><th>Judge</th></tr></thead><tbody>" +
+          c.rows.map((r) => `<tr class="${r.match ? "" : "mismatch"}"><td>${esc(r.span.slice(0, 80))}</td><td><b>${esc(r.human)}</b></td><td><b>${esc(r.judge)}</b></td></tr>`).join("") +
+          "</tbody></table>";
+        wrap.innerHTML = html;
+      }
+      fetch("/calibration").then((r) => r.json()).then(renderCalibration).catch(() => {});
+
+      function render(d) {
+        const out = $("#out");
+        out.innerHTML = "";
+
+        // borrowable answers (retrieval-first) — the primary judging surface
+        out.appendChild(borrowableSection(d.borrowable, d.span));
+
+        // classification
+        const cl = d.classification || {};
+        const s1 = el("section");
+        s1.appendChild(el("h2", null, "1 · Classification <span class='muted' style='text-transform:none;letter-spacing:0'>— what kind of turn is this?</span>"));
+        const box = el("div", "card cls");
+        const conf = cl.router_confidence;
+        const m1 = el("div", "metric");
+        m1.innerHTML = `<div class="k">encoder router</div><div class="v">${cl.router_label || (cl.router_note ? "—" : (cl.router_error ? "err" : "—"))}</div>`;
+        if (conf != null) { const b = el("div", "bar"); b.innerHTML = `<i style="width:${Math.round(conf * 100)}%"></i>`; m1.appendChild(b); m1.appendChild(el("div", "scores", "conf " + conf)); }
+        if (cl.router_note) m1.appendChild(el("div", "note", cl.router_note));
+        if (cl.router_error) m1.appendChild(el("div", "err", cl.router_error));
+        box.appendChild(m1);
+        const m2 = el("div", "metric");
+        m2.innerHTML = `<div class="k">heuristic question score</div><div class="v">${cl.heuristic_question_score ?? "—"}</div>`;
+        box.appendChild(m2);
+        s1.appendChild(box);
+        out.appendChild(s1);
+
+        // retrieval
+        const rt = d.retrieval || {};
+        const s2 = el("section");
+        const badges =
+          (rt.bm25_idle ? '<span class="badge warn">BM25 idle — lexical arm scored 0 on every fused hit</span>' : '<span class="badge good">BM25 contributed</span>') +
+          (rt.rerank_changed_order ? '<span class="badge good">Rerank changed order</span>' : '<span class="badge warn">Rerank inert — order unchanged</span>');
+        s2.appendChild(el("h2", null, "2 · Retrieval stages" + badges));
+        s2.appendChild(el("div", "note muted", `FTS query after stop-word strip: <code>${esc(rt.sanitized_fts_query || "")}</code>`));
+        const g = el("div", "row4");
+        const w = rt.weights || {};
+        g.appendChild(arm("BM25 lexical", `weight ${w.lexical}`, rt.bm25, "bm25"));
+        g.appendChild(arm("Vector semantic", `weight ${w.semantic}`, rt.vector, "vector"));
+        g.appendChild(arm("Fused", "weighted sum → top 5", rt.fused, "fused"));
+        g.appendChild(arm("Reranked", "heuristic", rt.reranked, "fused"));
+        s2.appendChild(g);
+        out.appendChild(s2);
+
+        // answers (only when generation is enabled server-side via LAB_GENERATE=1)
+        if ((d.answers || []).length) {
+          const s3 = el("section");
+          s3.appendChild(el("h2", null, "3 · Answer — same context, 3 models <span class='muted' style='text-transform:none;letter-spacing:0'>— your call</span>"));
+          const g3 = el("div", "row3");
+          d.answers.forEach((a) => g3.appendChild(answerCard(a, d.span)));
+          s3.appendChild(g3);
+          out.appendChild(s3);
+        }
+      }
+
+      function answerCard(a, span) {
+        const c = el("div", "card ans");
+        c.dataset.model = a.model;
+        const lat = a.latency_ms != null ? `<span class="lat">${a.latency_ms} ms</span>` : "";
+        c.appendChild(el("h3", null, `<span>${a.model}</span>${lat}`));
+        if (a.available === false) c.appendChild(el("div", "note", a.note || "unavailable"));
+        else if (a.error) {
+          c.appendChild(el("div", "err", esc(a.error)));
+          if (a.runtime) c.appendChild(el("div", "note", "runtime: " + a.runtime));
+        } else {
+          c.appendChild(el("div", "body", esc(a.text || "(empty)")));
+          const btn = el("button", "pickbtn", "Pick this");
+          btn.onclick = () => {
+            document.querySelectorAll(".ans").forEach((x) => x.classList.remove("picked"));
+            c.classList.add("picked");
+            recordPick(span, a.model);
+          };
+          c.appendChild(btn);
+        }
+        return c;
+      }
+
+      function recordPick(span, model) {
+        picks.push({ span, model });
+        $("#picks").style.display = "block";
+        const tr = el("tr");
+        tr.appendChild(el("td", null, esc(span.length > 90 ? span.slice(0, 90) + "…" : span)));
+        tr.appendChild(el("td", null, "<b>" + esc(model) + "</b>"));
+        $("#pickrows").appendChild(tr);
+      }
+
+      $("#copy").onclick = () => {
+        navigator.clipboard.writeText(picks.map((p) => `- "${p.span}" → ${p.model}`).join("\n"));
+        $("#copy").textContent = "Copied";
+        setTimeout(() => ($("#copy").textContent = "Copy"), 1200);
+      };
+
+      async function analyze() {
+        const span = $("#span").value.trim();
+        if (!span) return;
+        $("#go").disabled = true;
+        $("#status").innerHTML = '<span class="spin"></span> running models…';
+        $("#out").innerHTML = "";
+        try {
+          const r = await fetch("/analyze", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ span, max_tokens: Number($("#tok").value) || 160 }),
+          });
+          const d = await r.json();
+          if (!r.ok) { $("#out").innerHTML = `<div class="err-box">${esc(d.error || "error")}</div>`; }
+          else { $("#cfgnote").innerHTML = ` · answer model in config: <b>${esc(d.answer_model_in_config)}</b> · docs: ${esc(d.docs_dir)}`; render(d); }
+        } catch (e) {
+          $("#out").innerHTML = `<div class="err-box">${esc(String(e))}</div>`;
+        } finally {
+          $("#go").disabled = false;
+          $("#status").textContent = "";
+        }
+      }
+      $("#go").onclick = analyze;
+      $("#span").addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") analyze(); });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,106 @@
+# Hardened RAG retrieval eval — chunk-level discrimination (F-509)
+#
+# Runs over a CONFUSABLE synthetic corpus (tests/eval/fixtures/docs/): three
+# near-identical router model cards and two near-identical deployment tiers.
+# Doc-level Hit@1 saturates on such corpora, so each query also carries
+# `expected_contains` — a distinctive fact that appears ONLY in the correct
+# chunk. Chunk-level Hit@1 requires the top result to contain that fact, which
+# a weaker retriever confuses across the look-alike documents.
+#
+# This is the eval with discriminating power the doc-level harness lacked; use
+# it to compare retrievers (MiniLM vs LFM2.5-Embedding, symmetric vs prompted).
+
+queries:
+  # ─── Router latency (three confusable model cards) ─────────────────
+  - query: "What is the Falcon router's p50 latency?"
+    expected_documents: ["router_falcon.md"]
+    expected_contains: "120 milliseconds"
+    relevance: high
+
+  - query: "What is the Heron router's p50 latency?"
+    expected_documents: ["router_heron.md"]
+    expected_contains: "85 milliseconds"
+    relevance: high
+
+  - query: "What is the Osprey router's p50 latency?"
+    expected_documents: ["router_osprey.md"]
+    expected_contains: "210 milliseconds"
+    relevance: high
+
+  # ─── Router capacity ───────────────────────────────────────────────
+  - query: "How many parameters does the Heron router have?"
+    expected_documents: ["router_heron.md"]
+    expected_contains: "700 million parameters"
+    relevance: high
+
+  - query: "How much resident memory does the Osprey router need?"
+    expected_documents: ["router_osprey.md"]
+    expected_contains: "2800 megabytes"
+    relevance: high
+
+  - query: "What context window does the Falcon router support?"
+    expected_documents: ["router_falcon.md"]
+    expected_contains: "8000 tokens"
+    relevance: high
+
+  # ─── Router pricing ────────────────────────────────────────────────
+  - query: "How much does the Osprey router cost per thousand requests?"
+    expected_documents: ["router_osprey.md"]
+    expected_contains: "6 cents per thousand"
+    relevance: high
+
+  - query: "What is the price of the Falcon router?"
+    expected_documents: ["router_falcon.md"]
+    expected_contains: "2 cents per thousand"
+    relevance: high
+
+  - query: "When do Heron volume discounts start?"
+    expected_documents: ["router_heron.md"]
+    expected_contains: "five million monthly requests"
+    relevance: high
+
+  # ─── Router fallback chain ─────────────────────────────────────────
+  - query: "What does the Falcon router fail over to?"
+    expected_documents: ["router_falcon.md"]
+    expected_contains: "fails over to the Heron"
+    relevance: medium
+
+  # ─── Deployment tiers (two confusable docs) ────────────────────────
+  - query: "What operating system does the edge deployment tier require?"
+    expected_documents: ["deploy_edge.md"]
+    expected_contains: "macOS 13 or later"
+    relevance: high
+
+  - query: "Does the cloud tier need a local GPU?"
+    expected_documents: ["deploy_cloud.md"]
+    expected_contains: "no local GPU"
+    relevance: high
+
+  - query: "How long is audio retained on the cloud deployment tier?"
+    expected_documents: ["deploy_cloud.md"]
+    expected_contains: "twenty-four hours"
+    relevance: high
+
+  - query: "What is the data residency policy for the edge tier?"
+    expected_documents: ["deploy_edge.md"]
+    expected_contains: "stay on the local machine"
+    relevance: high
+
+  - query: "How often do cloud models update?"
+    expected_documents: ["deploy_cloud.md"]
+    expected_contains: "rolling deployment"
+    relevance: medium
+
+  - query: "How often do edge models update?"
+    expected_documents: ["deploy_edge.md"]
+    expected_contains: "every six weeks"
+    relevance: medium
+
+  # ─── Negative queries (no matching document) ───────────────────────
+  - query: "What is the warranty policy for hardware returns?"
+    expected_documents: []
+    relevance: none
+
+  - query: "Who is the vice president of marketing?"
+    expected_documents: []
+    relevance: none

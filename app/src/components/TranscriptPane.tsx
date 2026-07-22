@@ -8,6 +8,8 @@ interface TranscriptPaneProps {
   onEdit: (id: string, text: string) => void;
   onRenameSpeaker: (oldName: string, newName: string) => void;
   width: number;
+  /** Select-to-answer (D-02, spatial): answer the highlighted span on demand. */
+  onAnswerSelection?: (text: string) => void;
 }
 
 // Speaker color palette for system audio speakers (diarized or renamed)
@@ -35,6 +37,7 @@ export function TranscriptPane({
   onEdit,
   onRenameSpeaker,
   width,
+  onAnswerSelection,
 }: TranscriptPaneProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [pinBottom, setPinBottom] = useState(true);
@@ -130,6 +133,35 @@ export function TranscriptPane({
 
   const isMic = (seg: TranscriptSegment): boolean => seg.source === "mic";
 
+  // --- select-to-answer (D-02, spatial) ------------------------------------
+  // Highlight any span and a single button appears at the selection. Deliberately
+  // not automatic on selection: selecting text to re-read it is common, and an
+  // answer that fires on every highlight is the same interruption problem in a
+  // new place.
+  const [selection, setSelection] = useState<{ text: string; x: number; y: number } | null>(
+    null
+  );
+
+  const handleSelection = useCallback(() => {
+    if (!onAnswerSelection) return;
+    const sel = window.getSelection();
+    const text = sel?.toString().trim() ?? "";
+    // Two words is the floor — a single word rarely carries a question, and the
+    // button flickering on stray clicks is worse than not offering it.
+    if (!sel || sel.rangeCount === 0 || text.split(/\s+/).length < 2) {
+      setSelection(null);
+      return;
+    }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    setSelection({ text, x: rect.left + rect.width / 2, y: rect.top });
+  }, [onAnswerSelection]);
+
+  const askSelection = useCallback(() => {
+    if (selection && onAnswerSelection) onAnswerSelection(selection.text);
+    setSelection(null);
+    window.getSelection()?.removeAllRanges();
+  }, [selection, onAnswerSelection]);
+
   if (collapsed) {
     return (
       <div style={styles.collapsed} onClick={onToggle}>
@@ -155,7 +187,17 @@ export function TranscriptPane({
         </label>
       </div>
 
-      <div style={styles.body}>
+      {selection && (
+        <button
+          style={{ ...styles.askBtn, left: selection.x, top: selection.y - 38 }}
+          onMouseDown={(e) => e.preventDefault()} // keep the selection alive
+          onClick={askSelection}
+        >
+          💡 Answer this
+        </button>
+      )}
+
+      <div style={styles.body} onMouseUp={handleSelection}>
         {segments.length === 0 && (
           <div style={styles.empty}>Waiting for transcript...</div>
         )}
@@ -220,6 +262,14 @@ export function TranscriptPane({
                       title={!mic && seg.is_final ? "Click to rename" : undefined}
                     >
                       {seg.speaker || (mic ? "You" : "Others")}
+                    </span>
+                  )}
+                  {seg.low_confidence && (
+                    <span
+                      style={styles.lowConfidenceBadge}
+                      title="Best-effort speaker label — conference-room / low-confidence attribution"
+                    >
+                      ~ best guess
                     </span>
                   )}
                   {!seg.is_final && <span style={styles.liveIndicator} />}
@@ -301,6 +351,23 @@ const styles: Record<string, React.CSSProperties> = {
   },
   empty: { color: "var(--text-muted)", fontStyle: "italic", padding: 16 },
 
+  /* Select-to-answer affordance — fixed so it tracks the viewport selection rect */
+  askBtn: {
+    position: "fixed",
+    transform: "translateX(-50%)",
+    zIndex: 50,
+    padding: "6px 12px",
+    fontSize: 12,
+    fontWeight: 600,
+    borderRadius: 6,
+    border: "none",
+    cursor: "pointer",
+    background: "var(--accent-blue, #4c8bf5)",
+    color: "#fff",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
+    whiteSpace: "nowrap",
+  },
+
   /* --- Turn blocks (chat-bubble layout) --- */
   turnRow: {
     display: "flex",
@@ -346,6 +413,16 @@ const styles: Record<string, React.CSSProperties> = {
   speakerClickable: {
     cursor: "pointer",
     borderBottom: "1px dashed currentColor",
+  },
+  lowConfidenceBadge: {
+    fontSize: 9,
+    fontWeight: 600,
+    color: "var(--text-secondary)",
+    opacity: 0.7,
+    fontStyle: "italic",
+    padding: "0 4px",
+    border: "1px dashed var(--text-secondary)",
+    borderRadius: 3,
   },
   renameInput: {
     fontSize: 11,

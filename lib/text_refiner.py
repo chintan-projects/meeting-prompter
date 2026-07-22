@@ -7,6 +7,7 @@ which acquires the lock atomically.
 The refiner is conservative: it preserves meaning, speaking style,
 and speaker intent. On any failure, it returns the original text.
 """
+
 import logging
 import time
 
@@ -37,6 +38,31 @@ _STOP_TOKENS = [
     "<|im_end|>",
     "<|im_start|>",
 ]
+
+# The refiner shares the answer model (D-07), which is a reasoning model: it
+# narrates the edit ("Fixed version with corrections:") instead of returning
+# only the text, and the length sanity check below waves it through because a
+# preamble roughly doubles a short turn. The transcript is a record the user
+# trusts and exports, so anything that looks like commentary is rejected
+# outright rather than patched — a half-stripped edit is worse than the raw ASR.
+_META_MARKERS = (
+    "fixed version",
+    "corrected version",
+    "cleaned version",
+    "corrections:",
+    "here is the",
+    "here's the",
+    "cleaned up transcript",
+    "the cleaned transcript",
+    "note:",
+    "explanation:",
+)
+
+
+def looks_like_meta(text: str) -> bool:
+    """True when the model narrated the edit instead of returning the text."""
+    head = text.strip().lower()[:200]
+    return any(m in head for m in _META_MARKERS)
 
 
 class TextRefiner:
@@ -90,6 +116,13 @@ class TextRefiner:
 
         if not polished:
             logger.debug("Refiner returned empty — keeping original")
+            return raw_text
+
+        if looks_like_meta(polished):
+            logger.warning(
+                "Refiner narrated the edit instead of returning text — keeping original: %r",
+                polished[:80],
+            )
             return raw_text
 
         # Sanity check: if polished is way shorter or longer, keep original

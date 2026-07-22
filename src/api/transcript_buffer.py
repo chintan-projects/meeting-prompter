@@ -44,6 +44,7 @@ class Turn:
     speaker: str = ""
     source: str = ""  # "mic" or "system" — identifies audio stream origin
     chunk_count: int = 0
+    low_confidence: bool = False  # speaker label is a flagged best-effort guess (F-606)
 
     def to_dict(self) -> dict:
         """Serialize for WebSocket transmission."""
@@ -55,6 +56,7 @@ class Turn:
             "is_final": self.is_final,
             "speaker": self.speaker,
             "source": self.source,
+            "low_confidence": self.low_confidence,
         }
 
 

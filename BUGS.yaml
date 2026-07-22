@@ -33,3 +33,111 @@ bugs:
     title: "Export notes returns empty content after session stop"
     repro: "Record meeting, stop, click Export Notes — shows 'No transcript recorded'"
     fix: "Keep session alive after stop so transcript data is available for export; fresh session created on next start"
+
+  - id: "BUG-004"
+    severity: high
+    component: "lib/system_audio_capture.py, tools/audio-tap/Sources/AudioTapManager.swift"
+    status: investigating
+    reported_in: "2026-07-21"
+    title: "Google Chrome crashes when selected as the per-app audio capture target"
+    repro: "MeetingSetup → Meeting App = Google Chrome (PID) → Start Meeting; Chrome crashed during the session (session-017 live smoke)"
+    root_cause: >
+      CORRECTED 2026-07-21 — the original 'audio-tap attached to Chrome's PID'
+      hypothesis is CONTRADICTED by the evidence. The reported session ran with
+      Screen Recording permission denied (that is BUG-005). In that path,
+      system_audio_capture.start_stream (lines 204-219) sets _capture_error and
+      blocks in a sleep loop WITHOUT ever launching the `--pid` capture
+      subprocess. So the SCStream never attached to Chrome at all — the tap
+      could not have crashed it in that session. Only the brief `--list-apps` /
+      `--check-permission` subprocesses ran (content enumeration, not capture).
+      Combined with the earlier evidence (no jetsam kill, no Chrome Crashpad
+      report, memory not exhausted), there is no evidence audio-tap caused the
+      crash; it is most likely coincidental.
+    notes: >
+      Genuine robustness gap found and fixed while investigating: the SCStream
+      was created with delegate=nil, so stream-level failures (target app
+      quit/crashed, permission revoked mid-session, OS teardown) were invisible
+      and the helper ran blind. AudioTapManager now conforms to SCStreamDelegate
+      and implements stream(_:didStopWithError:) → log + exit(3), so failures
+      surface through the existing capture_error path instead of hanging. Also
+      bumped the minimal video config off sub-minimum 2x2 dims (→ 16x16) which
+      some macOS versions reject. Binary rebuilt. These are hardening, NOT a
+      claimed fix for the crash — the crash remains unreproduced.
+    next: "Now that BUG-005 forces a clear permission grant before per-app capture, the tap will actually attach on the next live run. Capture Chrome with permission granted while watching memory + Console; the new SCStreamDelegate will log any stream teardown. If Chrome is stable, close as not-our-bug (coincidental). If it reproduces, the delegate error is the first real signal to act on."
+
+  - id: "BUG-005"
+    severity: high
+    component: "src/api/routes/session.py, app/src/App.tsx, app/src/components/MeetingSetup.tsx"
+    status: resolved
+    reported_in: "2026-07-21"
+    resolved_in: "2026-07-21"
+    title: "Per-app capture with denied Screen Recording silently runs mic-only (transcript shows one speaker)"
+    repro: "Skip/deny Screen Recording permission for the audio-tap binary, select per-app capture, Start Meeting. Session runs ~23 min mic-only; transcript shows only 'You' (one speaker); no error surfaced to the user."
+    root_cause: "system_audio_capture logs 'Screen Recording permission denied for audio-tap' but the session proceeds with mic-only. The MeetingSetup amber warning is passive/non-blocking, so the user believes dual-stream is active while the 'Others' side never captures."
+    fix: >
+      Authoritative gate on the backend (single source of truth — the frontend's
+      permission snapshot is stale and permission can be revoked mid-flight):
+      /session/start now pre-checks SystemAudioCapture.check_permission() when
+      system_audio_pid > 0 and returns HTTP 412 with a structured
+      {error, message, remedy} instead of starting under a false dual-stream
+      expectation. Explicit mic-only (pid == 0) bypasses the gate. Frontend makes
+      the illegal state unrepresentable: MeetingSetup disables Start/Quick Start
+      when a per-app target is selected but permission is denied, replaces the
+      passive warning with a blocking callout + remedy + an explicit 'Start
+      mic-only instead' button (pid=0). App.tsx surfaces the 412 (previously a
+      silent no-op that left a blank non-running screen) and keeps the setup
+      dialog open with the error. Tests: tests/test_session_start_route.py (412
+      on denied per-app, start on granted, mic-only bypass)."
+
+  - id: "BUG-006"
+    severity: critical
+    component: "lib/rag/embedder.py"
+    status: resolved
+    reported_in: "2026-07-22"
+    resolved_in: "2026-07-22"
+    title: "Embedder model load races on session start — first query crashes the live path"
+    repro: "Construct MeetingOrchestrator with triggers.retrieval_first=true, then fire any trigger. NotImplementedError: 'Cannot copy out of meta tensor; no data!' from SentenceTransformer.__init__ via embed_query."
+    root_cause: >
+      SentenceTransformerEmbedder._load_model() was a check-then-set with no
+      lock. The race was latent while loading only ever happened on one thread
+      (indexing, then queries, all sequential in the pipeline thread). F-705
+      made it live: session start now pre-warms the embedder on a background
+      thread (RAGEngine.warm_up) while the pipeline queries on another, so two
+      threads enter _load_model simultaneously. torch materialises weights from
+      meta device during construction, and the concurrent second construction
+      dies. Severity is critical because it crashes the first retrieval of every
+      session — i.e. the entire live product path.
+    fix: >
+      Double-checked locking in _load_model (threading.Lock), with the model
+      published to self._model only after it is fully constructed so the
+      unlocked fast path can never observe a half-built instance. Steady-state
+      embedding stays lock-free. Regression test
+      tests/test_rag_embedder_concurrency.py drives 8 concurrent embed_query
+      calls against a stub whose construction window is wide enough to lose the
+      race; it fails without the lock. Fixed in c90520d.
+    notes: >
+      Found by driving the live trigger path during WS-14 preflight, not by a
+      test — the whole test suite (800 tests) was green while this was broken,
+      because nothing exercised concurrent load.
+
+  - id: "BUG-007"
+    severity: medium
+    component: "src/api/routes/corpus.py"
+    status: resolved
+    reported_in: "2026-07-22"
+    resolved_in: "2026-07-22"
+    title: "Prepare-corpus wizard reports 'no distilled corpus' when the lab CLI built one"
+    repro: "python -m scripts.lab.distiller --backend cloud (writes data/distilled/ + a per-file .meta.json), then GET /corpus/status → distilled.exists=false despite 88 units on disk."
+    root_cause: >
+      Two paths write the distilled corpus and record provenance differently:
+      the wizard's distill_dir writes one .distill_manifest.json for the whole
+      directory, while the lab CLI writes a per-file .<name>.meta.json sidecar.
+      /corpus/status only read the manifest, so a CLI-built corpus was invisible
+      to the wizard — which gates its own distill / readiness / activate steps on
+      distilled.exists, leaving the user unable to score or activate a corpus
+      that was sitting right there.
+    fix: >
+      _distilled_state() now resolves manifest -> per-file sidecars -> bare
+      *.distilled.md files, and reports which source it used so the ambiguity is
+      visible rather than silent. Tests in tests/test_corpus_routes.py cover all
+      four states (absent, manifest, sidecar, no-provenance). Fixed in 50d8d66.

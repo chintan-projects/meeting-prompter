@@ -3,6 +3,7 @@
 Tests the RAGEngine adapter, RAGPipeline, embedder protocol, PDF parser,
 composite parser, and the end-to-end index→retrieve flow.
 """
+
 import sqlite3
 from pathlib import Path
 
@@ -13,7 +14,6 @@ from lib.rag.parser.composite_parser import CompositeParser
 from lib.rag.parser.pdf_parser import PdfParser
 from lib.rag.parser.text_parser import TextParser
 from lib.rag_engine import RAGEngine, format_confidence
-
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -152,9 +152,7 @@ class TestIndexing:
         rag_engine.rebuild_index()
         assert rag_engine.chunk_count == original_count
 
-    def test_rebuild_changes_with_new_files(
-        self, rag_engine: RAGEngine, docs_dir: Path
-    ) -> None:
+    def test_rebuild_changes_with_new_files(self, rag_engine: RAGEngine, docs_dir: Path) -> None:
         """After adding a file and rebuilding, chunk count increases."""
         original = rag_engine.chunk_count
 
@@ -166,6 +164,53 @@ class TestIndexing:
 
         rag_engine.rebuild_index()
         assert rag_engine.chunk_count > original
+
+    def test_dimension_change_purges_stale_index(self, docs_dir: Path, tmp_path: Path) -> None:
+        """Swapping to a different-dimension embedder clears stale-width vectors."""
+        db_path = tmp_path / "dim_rag.db"
+
+        def build(embedder: object) -> RAGEngine:
+            engine = RAGEngine.__new__(RAGEngine)
+            engine.docs_dir = docs_dir
+            engine._db_path = db_path
+            engine._embedder = embedder  # type: ignore[assignment]
+            engine._config = RAGConfig(max_chunk_tokens=100)
+            engine._conn = sqlite3.connect(str(db_path))
+            engine._conn.execute("PRAGMA journal_mode=WAL")
+            engine._conn.execute("PRAGMA foreign_keys=ON")
+            engine._pipeline = RAGPipeline(
+                conn=engine._conn,
+                embedder=embedder,  # type: ignore[arg-type]
+                config=engine._config,
+                parser=CompositeParser(),
+            )
+            engine._pipeline.setup()
+            engine._purge_stale_dimension()
+            engine._index_documents()
+            engine._chunk_count = engine._get_chunk_count()
+            return engine
+
+        class WideEmbedder(MockEmbedder):
+            @property
+            def dimension(self) -> int:
+                return 16
+
+            def embed(self, text: str) -> list[float]:
+                return super().embed(text) + [0.0] * 8
+
+        first = build(MockEmbedder())  # dim 8
+        assert first.chunk_count > 0
+        first.close()
+
+        # Reopen with a different-dimension embedder — stale chunks must be purged
+        # and re-embedded, not left at the old width.
+        second = build(WideEmbedder())  # dim 16
+        assert second.chunk_count > 0
+        row = second._conn.execute(
+            "SELECT length(embedding) FROM chunks WHERE embedding IS NOT NULL LIMIT 1"
+        ).fetchone()
+        assert row is not None and row[0] == 16 * 4
+        second.close()
 
     def test_missing_docs_dir_safe(self, tmp_path: Path) -> None:
         """Engine handles missing docs_dir gracefully."""
@@ -182,8 +227,10 @@ class TestIndexing:
         engine._conn.execute("PRAGMA journal_mode=WAL")
         engine._conn.execute("PRAGMA foreign_keys=ON")
         engine._pipeline = RAGPipeline(
-            conn=engine._conn, embedder=engine._embedder,
-            config=config, parser=CompositeParser(),
+            conn=engine._conn,
+            embedder=engine._embedder,
+            config=config,
+            parser=CompositeParser(),
         )
         engine._pipeline.setup()
         engine._index_documents()
@@ -358,6 +405,48 @@ class TestRAGConfig:
         config = RAGConfig(lexical_weight=0.3, semantic_weight=0.7)
         assert config.lexical_weight == 0.3
         assert config.semantic_weight == 0.7
+
+    def test_embedding_defaults_liquid(self) -> None:
+        """Default retriever is the Liquid embedding model (F-502 swap)."""
+        config = RAGConfig()
+        assert config.embedding_model == "LFM2.5-Embedding-350M"
+        assert config.embedding_dimension == 1024
+
+
+# ─── Embedder model resolution (F-502) ───────────────────────────────────────
+
+
+class TestEmbedderResolution:
+    """Config-driven embedder selection — no model load required."""
+
+    def test_default_is_liquid_local(self) -> None:
+        """Bare Liquid name resolves to a local registry dir, 1024-dim."""
+        from lib.rag.embedder import SentenceTransformerEmbedder
+
+        emb = SentenceTransformerEmbedder()
+        assert emb.dimension == 1024
+        # Local registry model → trust_remote_code enabled.
+        assert emb._trust_remote_code is True
+        assert emb._model_name.endswith("LFM2.5-Embedding-350M")
+
+    def test_minilm_name_is_hub_384(self) -> None:
+        """A hub id (all-MiniLM-L6-v2) stays remote, 384-dim, no trust_remote_code."""
+        from lib.rag.embedder import SentenceTransformerEmbedder
+
+        emb = SentenceTransformerEmbedder(model_name="all-MiniLM-L6-v2")
+        assert emb.dimension == 384
+        assert emb._trust_remote_code is False
+        assert emb._model_name == "all-MiniLM-L6-v2"
+
+    def test_explicit_overrides_respected(self) -> None:
+        """Explicit dimension / trust_remote_code override the auto-detection."""
+        from lib.rag.embedder import SentenceTransformerEmbedder
+
+        emb = SentenceTransformerEmbedder(
+            model_name="all-MiniLM-L6-v2", dimension=99, trust_remote_code=True
+        )
+        assert emb.dimension == 99
+        assert emb._trust_remote_code is True
 
 
 # ─── Format helpers ──────────────────────────────────────────────────────────

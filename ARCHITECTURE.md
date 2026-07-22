@@ -1,744 +1,494 @@
-# Meeting Intelligence CLI - Architectural Decisions & Learnings
+# Architecture
 
-A comprehensive record of design decisions, trade-offs, and lessons learned building a real-time audio Q&A system with Liquid AI models.
+Why this system is shaped the way it is. Design decisions, the models behind each one,
+what has been measured, and what is still open.
 
----
-
-## Executive Summary
-
-This project evolved through several key architectural pivots:
-
-1. **Keyword → Semantic Search**: Jaccard similarity couldn't handle semantic queries → ColBERT late-interaction model
-2. **Generation → Extraction → Hybrid**: Small LLMs hallucinated → extraction-only → hybrid (extract + generate)
-3. **Chunk-based → Time-based Buffering**: Counting audio chunks was unreliable → real timestamp-based pause detection
-4. **Dense Embedding → Late Interaction**: Single-vector embeddings lost token semantics → ColBERT MaxSim scoring
+- Build and run it → [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md)
+- Corpus distillation in depth → [docs/distillation.md](docs/distillation.md)
+- Live decision register → [docs/architecture/open-decisions-log.md](docs/architecture/open-decisions-log.md)
+- The re-architecture plan → [docs/architecture/liquid-rearchitecture.md](docs/architecture/liquid-rearchitecture.md)
 
 ---
 
-## 1. The Hallucination Problem & Solution Journey
+## 1. The one-line thesis
 
-### Problem: Small LLMs Don't Follow Context Instructions
+**Use the right model for each output shape, and keep every one of them on the device.**
 
-**Discovery**: When we initially tried using LLMs (1-3B parameters) for direct answer generation from retrieved context, they would frequently:
-- Add information not in the context
-- Contradict the source material
-- Generate plausible-sounding but incorrect answers
-
-**Root Cause**: Small models are weak at following "only use this context" instructions. They're trained on broad knowledge and tend to draw from it even when told not to.
-
-### Solution 1: Extraction-Only (No Generation)
-
-**Approach** (`lib/answer_extractor.py`):
-- Score each sentence for relevance to the question
-- Return top-3 sentences as bullet points
-- No LLM involved in answer creation
-
-**Benefits**:
-- Zero hallucination (answers are direct quotes)
-- Traceable to source text
-- Fast (~10ms)
-
-**Drawbacks**:
-- Choppy, unnatural bullet points
-- No synthesis across sentences
-- Sounds robotic
-
-### Solution 2: Hybrid RAG (Final Architecture)
-
-**Discovery**: LFM2-1.2B-RAG is specifically trained on 1M+ multi-document RAG samples to respect context.
-
-**Architecture** (`lib/hybrid_answerer.py`):
-```
-Question → ColBERT (top-3) → Sentence Extraction → LFM2-1.2B-RAG → Fluent Answer
-           Stage 1           Stage 2                Stage 3
-           RETRIEVAL         GROUNDING              GENERATION
-```
-
-**Why This Works**:
-1. **Extraction stage** filters irrelevant text before the LLM sees it
-2. **LFM2-1.2B-RAG** is specifically trained to follow context
-3. **Fallback** to extraction-only if generation fails
-
-**Key Insight**: The extraction stage isn't just for fallback—it's **grounding**. By pre-filtering context, we structurally reduce hallucination risk.
+Both halves are load-bearing. The first is why there are six models instead of one
+general-purpose LLM. The second is why the hard problems — attribution, corpus
+preparation, latency — are solved with architecture rather than by calling a bigger
+model in a datacenter.
 
 ---
 
-## 2. Retrieval: Why ColBERT Over Dense Embeddings
+## 2. Why the Liquid architecture
 
-### Problem: Keyword Search Misses Semantic Matches
+### 2.1 The output-shape audit
 
-| Query | Keyword (Jaccard) | ColBERT |
-|-------|-------------------|---------|
-| "What is Liquid AI?" | Found | Found (77%) |
-| "neural network alternatives" | **MISS** | **Found (74%)** |
-| "compete with OpenAI" | **MISS** | **Found (76%)** |
+The system was originally built as most such systems are: regex heuristics for
+detection, a generic decoder for everything else. That is one hammer applied to tasks
+with very different shapes. The decisive question — *"the output of this step is ___"* —
+picks the right tool almost mechanically:
 
-**Why Keyword Fails**: No word overlap between query and relevant content.
+| Task | Output shape | Right tool | Originally |
+|---|---|---|---|
+| Question detection | 1 label per input | encoder seq-classifier (mean-pooled) | heuristic scoring |
+| Rhetorical / tag / self-answer | K yes-no flags | encoder multi-label | 3 regex layers |
+| Trigger-type routing | 1-of-N | encoder router | priority-sorted heuristics |
+| Evidence / answer grounding | 1 label per token | encoder token-classifier (BIO) | sentence heuristic |
+| Noise / hallucination (fuzzy) | binary | encoder seq-classifier | regex |
+| Literal watch words | O(1) match | **plain Python** | correct already |
+| Context retrieval | vector rank | `LFM2.5-Embedding-350M` | all-MiniLM-L6 (non-Liquid) |
+| Mode-aware prompt | free-form text | `LFM2.5-1.2B-Instruct` / 2.6B | correct already |
+| Structured notes | typed fields | `LFM2.5-350M-Extract` | generic instruct + prompts |
+| Active speaker (remote) | 1 name | Zoom SDK callback | not captured |
+| Remote-speaker separation | label per segment | acoustic diarization (**fallback**) | primary mechanism |
 
-### Decision: ColBERT Late Interaction
+Six heuristic-or-decoder tasks collapse onto **one shared encoder backbone plus tiny
+heads** — roughly 30–75 KB each, about 0.02% of the model. Retrieval stays
+retrieval-shaped. Generation stays generative. Each model does the job its training
+objective was built for.
 
-**Traditional Dense Embeddings**:
-```
-Document → [single 768-dim vector]
-Query    → [single 768-dim vector]
-Score    = cosine_similarity
-```
-Problem: Compressing entire documents into single vectors loses token-level semantics.
+Note row six. **Literal watch words stay plain Python.** The audit is not an argument
+that everything should be a model; it is an argument that each task should use the
+cheapest tool that fits its shape. Anything checkable in O(1) belongs in code.
 
-**ColBERT (Our Choice)**:
-```
-Document → [[vec1], [vec2], [vec3], ...] (128-dim per token)
-Query    → [[vec1], [vec2], [vec3], ...]
-Score    = MaxSim (find best match for EACH query token)
-```
+### 2.2 Encoder and embedding are not interchangeable
 
-**Why MaxSim Works**: "Neural" can match "model", "alternatives" can match "architecture"—even without exact keyword overlap.
+Measured on unrelated text: cosine similarity **0.855** for the encoder versus **0.095**
+for the embedding model. The encoder's space is not metric in the way retrieval needs —
+it packs syntax and task structure, which is exactly what makes it a good classifier
+backbone and a bad retriever. Encoder → heads. Embedding → retrieval. Never swapped.
 
-### Implementation Details (`lib/colbert/`)
+### 2.3 Small and local, as an architectural stance
 
-| Component | Purpose |
-|-----------|---------|
-| `retriever.py` | LFM2-ColBERT-350M model + PLAID index |
-| `chunker.py` | Section-aware Markdown chunking |
-| `index_manager.py` | Persistent index caching |
-| `normalizer.py` | Sigmoid normalization for MaxSim scores |
+Every model here is between 350M and 2.6B parameters, and all of them run on the laptop.
+This buys four things a cloud call cannot:
 
-**Fallback Strategy**: If ColBERT fails to load (memory pressure, missing dependencies), system automatically falls back to Jaccard similarity.
+- **Latency budgets that permit per-turn work.** The encoder is ~14 ms mean-pooled per
+  turn. That is cheap enough to run on *every* turn, which in turn is what makes
+  route-first hot/cold dispatch possible at all.
+- **Privacy that is structural rather than promised.** Meeting audio and the user's
+  private corpus never leave the machine. The only network egress in the system is a
+  consent-gated Notion export the user triggers by hand.
+- **A competitive edge that is real.** Granola diarizes in the cloud; Recall.ai uses
+  server-side bots for separated streams; botless desktop tools share our acoustic
+  ceiling. A fully local pipeline is not a compromise against that field.
+- **Cost that does not scale with use.** Re-distilling a corpus is free, so it can be
+  re-run whenever documents change.
 
----
+The trade is honest: small models are worse at open-ended generation. The architecture
+responds by **not asking them to do open-ended generation on the critical path** — see
+retrieval-first below.
 
-## 3. Section-Aware Chunking
+### 2.4 Non-negotiable rules of the stack
 
-### Problem: Random Chunking Loses Document Structure
+Learned the hard way; violating any of them fails silently rather than loudly.
 
-When documents are chunked at arbitrary 400-character boundaries:
-- Chunks lose section context
-- "What is LEAP?" might retrieve text from adjacent sections
-- Answer quality degrades
-
-### Solution: Markdown Header Awareness
-
-**Implementation** (`lib/colbert/chunker.py`):
-```python
-1. Split document on ## and ### headers first
-2. Chunk each section separately (400 tokens max)
-3. Prepend section header to each chunk
-4. 50-token overlap preserves context at boundaries
-```
-
-**Result**: When you ask "What is LEAP?", you get chunks from the LEAP section, not random nearby text.
-
-### Configuration Values
-
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| `target_tokens` | 400 | ColBERT max is 512; leave room for special tokens |
-| `overlap_tokens` | 50 | ~5% overlap preserves context at boundaries |
-| `min_tokens` | 30 | Filter noise (fewer than ~6 words) |
-
----
-
-## 4. Multi-Chunk Retrieval
-
-### Problem: Single Best Match Misses Information
-
-Answers often span multiple chunks. Returning only the top-1 result misses context.
-
-### Solution: Top-3 with Confidence Filtering
-
-**Implementation** (`lib/rag_engine.py`):
-```python
-results = colbert.query(text, k=3)  # Get top 3
-
-# Combine chunks within 80% of top confidence
-for chunk_text, confidence, source in results:
-    if confidence >= top_confidence * 0.8:
-        combined_chunks.append(chunk_text)
-```
-
-**Why 80% Threshold**: Include supplementary context only if it's nearly as relevant as the best match.
+- **Mean-pool, never last-token.** The final encoder layer is a 3-token convolution, so
+  the last token sees almost nothing.
+- **Never co-train the span head with sequence heads.** Doing so collapsed PII span F1
+  to 9.9%. The span head gets its own LoRA.
+- **Use LFM2.5 module names in LoRA** (`w1/w2/w3`, `out_proj`, `in_proj`). LLaMA names
+  match nothing and train nothing, without an error.
+- **The VLM is prompt-sensitive.** Extract needs a YAML field schema in the *system*
+  prompt, an image-only user turn, and enum choices. Free-form prompts fail.
+- **Manage model contention.** Four-plus resident models on a laptop during a live call
+  requires deciding which are warm when. `lib/warm_runtime.py` is the single owner.
 
 ---
 
-## 5. Audio Transcription Hallucinations
+## 3. The model map
 
-### Problem: LFM2-Audio Hallucinates on Noise
+| Role | Model | Size | Latency | Status |
+|---|---|---|---|---|
+| ASR | LFM2.5-Audio-1.5B (+ 600M-mini fallback) | 1.2 GB | ~300 ms / chunk | shipped |
+| Retrieval | LFM2.5-Embedding-350M (1024-dim) | ~350 MB | ~50 ms | shipped |
+| Intelligence backbone | LFM2.5-Encoder-350M (frozen, bidirectional) | ~350 MB | ~14 ms / turn | shipped |
+| Trigger router head | LFM2.5-TriggerRouter-350M (forge LoRA) | ~75 KB adapter | negligible | shipped, **unproven live** |
+| Generation | LFM2.5-2.6B-Q4_K_M (1.2B-Instruct fallback) | ~1.6 GB | ~1.5–3.5 s | on-demand only |
+| Structured notes | LFM2.5-350M-Extract | ~350 MB | — | in progress (F-507) |
+| Corpus distillation | LFM2.5-2.6B, prompted | ~1.6 GB | offline | shipped default, specialist pending (F-702) |
+| Acoustic diarization | ECAPA-TDNN (speechbrain) | ~100 MB | — | optional, off by default |
+| Visual context | LFM2.5-VL-450M-Extract | ~450 MB | — | not built, gated (F-603) |
 
-When given silence, background noise, or unclear audio, LFM2-Audio produces predictable patterns:
-- "I don't know what's going to..."
-- "She chose the one that was..."
-- "Can you explain to me?"
+Roughly 4.5 GB resident during a call. Every model is selected in `config.yaml`; there
+are no hardcoded model paths in `lib/`.
 
-These get processed as real questions and trigger RAG queries.
-
-### Solution: Pattern-Based Hallucination Filter
-
-**Implementation** (`coach.py:_is_hallucination`):
-
-**3 Pattern Categories**:
-1. **Vague Starters** (32 patterns): "i don't know what", "i think it's"
-2. **Third-Person Statements** (5 patterns): "she ", "he ", "there was "
-3. **Repetitive Phrases**: Detected via 3-word sequence repetition
-
-**Key Insight**: Hallucinations are content-agnostic and follow predictable patterns. Pattern matching is more reliable than trying to detect "invalid" content semantically.
-
-### Noise vs. Hallucination Pipeline
-
-```
-Transcription → Hallucination Filter → Noise Filter → Question Detector
-                (pattern match)        (filler words)   (confidence score)
-```
-
-**Why Two Stages**:
-- Hallucinations are dangerous (trigger false answers)
-- Noise is benign (just ignored)
+**Why the 2.6B for generation.** On identical retrieved context, the 1.2B answered
+correctly and then appended *"I don't have that information in my documents"* anyway —
+refusal boilerplate leaking into good answers — and it proved brittle to prompt
+rewrites. The 2.6B gave a graceful, honest partial answer: it acknowledged what the
+context covered, flagged what it did not, and still extracted the useful points. That is
+5× the latency and the right trade **once generation is user-gated** rather than on the
+critical path.
 
 ---
 
-## 6. Time-Based Question Buffering
+## 4. The live pipeline
 
-### Problem: "Second Question Triggers First"
-
-**Naive Approach**: Count audio chunks, flush after N chunks of silence.
-
-**Why It Failed**: Audio chunks don't correspond to real pauses. A 4-second chunk might contain silence at the start, middle, or end unpredictably.
-
-### Solution: Real Timestamp-Based Pause Detection
-
-**Implementation** (`lib/question_buffer.py`):
-```python
-class BufferConfig:
-    pause_threshold: float = 1.5   # Seconds of silence to flush
-    max_buffer_time: float = 8.0   # Maximum before forced flush
-    min_words: int = 4             # Minimum for valid question
-    confidence_threshold: float = 0.3
+```
+┌──────────────────────────── AWARENESS ────────────────────────────┐
+│  Microphone ────────►  AudioCapture  ──► LFM2.5-Audio ──► filters │
+│  System audio ──────►  (per-app via ScreenCaptureKit, or          │
+│                         BlackHole loopback)                       │
+└───────────────────────────────┬───────────────────────────────────┘
+                                │  source = ground-truth me/not-me
+                 ┌──────────────┴──────────────┐
+                 ▼                             ▼
+        TranscriptBuffer                ConversationBuffer
+        (turn accumulation,             (rolling 90 s window,
+         2 s pause boundary)             trigger routing)
+                 │                             │
+                 ▼                    ┌─────── INTELLIGENCE ───────┐
+        TranscriptStore               │  LFM2.5-Encoder-350M       │
+        (upsert + edit overlay)       │  one mean-pooled forward   │
+                 │                    │  ├─ trigger router head    │
+                 ▼                    │  ├─ quality / rhetoric gate│
+        WebSocket /ws/transcript      │  └─ evidence-span head     │
+                 │                    └──────────────┬─────────────┘
+                 ▼                        route-first │ hot / cold
+          TranscriptPane                              ▼
+                                      Hybrid RAG  (FTS5 5% + vector 95%)
+                                                      │
+                                        ┌─────────────┴────────────┐
+                                        ▼                          ▼
+                             borrowable unit (default)    generation (on demand)
+                             ~16–190 ms, no LLM           LFM2.5-2.6B, user-gated
+                                        └─────────────┬────────────┘
+                                                      ▼
+                                        WebSocket /ws/prompts → PromptsPane
 ```
 
-**Key Behaviors**:
-1. **Pause Detection**: Flush when `time_since_last_speech >= 1.5s`
-2. **Max Buffer**: Force flush at 8 seconds (prevents indefinite buffering)
-3. **Peek-Ahead**: When flushing, check if next chunk is a question start
+### 4.1 Dual-stream capture and attribution
 
-### Thread Safety
+Two independent audio threads feed one thread-safe buffer. Source is ground truth:
+`mic → "You"`, `system → "Others"`. That is Tier 1 and it is deterministic.
 
-The buffer uses `threading.Lock()` because audio capture runs in a separate thread from processing.
+Attribution beyond that follows a hierarchy of decreasing fidelity — always use the
+strongest signal available, and degrade **honestly**:
+
+| Layer | Signal | Fidelity | Wins when |
+|---|---|---|---|
+| L1 channel source | mic vs system | ground truth (me / others) | always |
+| L2 Zoom Meeting SDK | `onUserActiveAudioChange` + per-participant PCM, local | ground truth per speaker | Zoom, host/co-host (F-608, not built) |
+| L3 acoustic | speaker-change segmentation → embed → cluster | estimate | no SDK — Teams, Meet, phone |
+| L4 a11y roster + voice enrollment | AX participant names; profiles for known colleagues | names the clusters | native rosters, recurring colleagues |
+
+Accessibility APIs are **L4, not L2**: research found no documented "is speaking"
+attribute on Zoom, Teams, or Meet. They give names and your own mute state. Vision was
+investigated for active-speaker detection and failed; its plausible role is slides →
+RAG and roster extraction, and even that is gated on a real-image test.
+
+**Conference rooms are unsolvable in software.** Many people, one far-field microphone —
+L2 and L3 both collapse to a single room identity. The correct response is to say so:
+degrade to one `Others (room)` bucket, or clearly flagged best-effort `Speaker N` with a
+`low_confidence` marker the UI renders as a "~ best guess" badge. Never emit a
+confidently wrong name into a record the user will trust and export.
+
+**Echo suppression.** Without headphones, both streams transcribe the same speech.
+`StreamDeduplicator` catches near-duplicates via `SequenceMatcher` in an 8 s window.
+Suppressed chunks still signal silence, so turn boundaries stay correct.
+
+### 4.2 Turn-based transcript
+
+Raw ASR chunks are ~4 seconds — displaying them directly produces a fragmented,
+unreadable transcript. Turns are accumulated on the **backend**, where the pipeline has
+the timing information, then streamed as `transcript_update` (partial) /
+`transcript_final` (complete) with upsert-by-ID semantics that preserve user edits.
+
+A frontend fix by time-gap grouping was tried and was insufficient: the groupings were
+not semantically meaningful, and groups shifted as new chunks arrived.
+
+**Two independent buffers consume the same chunk stream.** `TranscriptBuffer` optimizes
+for display (simple pause boundaries); `ConversationBuffer` optimizes for intelligence
+(rolling window, trigger evaluation). They share no state, and that separation is what
+keeps each one simple.
+
+### 4.3 Hybrid retrieval
+
+| Signal | Method | Weight | Catches |
+|---|---|---|---|
+| Lexical | FTS5 BM25 | 5% | exact terms, proper nouns, acronyms |
+| Semantic | LFM2.5-Embedding-350M cosine | 95% | conceptual similarity across vocabulary |
+
+Section-aware chunking (split on markdown headers, 400 tokens, 50 overlap, header
+prepended), fused by weighted sum, then heuristically re-ranked. Semantic scores use
+**raw cosine, not min-max normalization** — min-max destroys the confidence
+discrimination the silence threshold depends on.
+
+Benchmark (21 queries, `tests/eval/`): **Hit@1 94.4%, MRR 0.972.**
+
+Two components are measurably idle on typical queries: BM25 scores 0.000 on every hit
+at 5% weight, and the heuristic re-ranker frequently leaves order unchanged. Both are
+known and tracked rather than quietly assumed to be working.
+
+### 4.4 Retrieval-first: the central decision (D-08)
+
+**The default live path contains no LLM.** A trigger fires, retrieval runs, and the card
+shows a borrowable span of the corpus verbatim — 16–190 ms warm — with its heading as
+provenance and expand-to-source for the full unit. Generation is demoted to an explicit
+user action (the ✨ button, `POST /prompts/generate`).
+
+The reasoning, from the lab (E-02): the 1.2B was fluent but unverifiable, the 2.6B was
+slow and truncated, Extract is a field extractor rather than an answerer — while
+retrieval ranked the right documents 94% of the time. Mid-meeting, a grounded sentence
+you can read aloud in 50 ms beats a plausible paragraph in 3 seconds that you have to
+audit before you dare say it.
+
+The cost is stated plainly in [docs/distillation.md](docs/distillation.md): corpus
+quality becomes a hard ceiling on output quality, because there is no model in the path
+to compensate for a weak source. That is what the entire corpus-preparation flow exists
+to address.
+
+### 4.5 Four intelligence modes
+
+| Mode | Label | Voice | Max tokens | Persistence |
+|---|---|---|---|---|
+| ALERT | HEADS UP | direct — what you need to know now | 100 | persistent |
+| QUESTION | ANSWER | concise answer + optional coaching suffix | 200 | persistent |
+| TOPIC_MATCH | FYI | a **new** fact from the docs, not an echo | 100 | ephemeral (45 s) |
+| FOLLOW_UP | SUGGEST | coaching nudge — "Ask about…", "Mention that…" | 75 | standard (90 s) |
+
+Two suppression layers keep the panel quiet. **Rhetorical suppression** (F-201) filters
+tag questions, self-answering questions, and rhetorical forms before scoring.
+**Dead-end suppression** (F-202) drops empty, low-confidence, or too-short results at
+both the generator and session layers, so the user never sees "I don't have that
+information."
+
+A prompt-spammy session is a failed session even when every individual card is correct.
+Silence is a feature with a maintenance cost.
+
+### 4.6 Quiet by default: the listen gate (D-02)
+
+The suppression layers above filter *bad* cards. They do nothing about the deeper
+problem, which the first live call surfaced immediately: **a correctly-detected
+question is not the same as a question you want answered on screen**, and in a real
+meeting most of them aren't. A perfect trigger router still interrupts on every true
+positive. Prompt spam is a **permission problem, not a classification problem.**
+
+So the default is quiet, and the user opens the tap two ways:
+
+| Channel | Control | Behaviour |
+|---|---|---|
+| **Temporal** | ⌘L / `POST /prompts/listen` | Arms the listen window; automatic cards flow until toggled off. |
+| **Spatial** | select transcript text → 💡 Answer this | Answers that exact span on demand, gate-exempt, even while quiet. |
+| **Always-on** | `triggers.gating.always_on` | Watch-word ALERTs only — the user pre-authorized them by naming the terms. |
+
+Three implementation properties matter:
+
+- **One choke point.** The gate sits in `MeetingOrchestrator._process_trigger`, which
+  both capture pipelines already call. Gating there covers every automatic path by
+  construction rather than by remembering to check in two places.
+- **Short-circuit, not filter.** A suppressed trigger returns before retrieval runs.
+  Triggers fire on most turns, so filtering after the work would pay the full cost of
+  a feature whose entire point is doing less.
+- **Explicit requests bypass it entirely.** `retrieve_for_text` (select-to-answer) and
+  `generate_for_text` (the ✨ button) never consult the gate. The user asking *is* the
+  permission, and routing consent through a gate the user just opened by hand would be
+  asking twice.
+
+**Silence has two audiences.** F-202 suppresses automatic dead ends, and that stays
+right — an unprompted "I couldn't help" is worse than nothing. But the first D-02 test
+showed the rule had been over-applied: a *user-initiated* request that returned nothing
+also rendered nothing, so select-to-answer was indistinguishable from a broken button.
+The split is now explicit — automatic dead ends stay silent; explicit requests always
+resolve to something visible (pending → answer, no-match, or error). Separately,
+triggers that pass the gate and find nothing emit `trigger_miss`, surfaced as a count
+rather than a card, so "the corpus doesn't cover this" can be told apart from "the
+pipeline is dead" without reintroducing spam.
+
+The window has **no timer** (`max_listen_seconds: 0`) — it stays open until toggled
+off. That is a deliberate product call, and its known failure mode is a forgotten
+window quietly restoring the old always-on behaviour. Two mitigations: the status bar
+carries an unmissable green **◉ LISTENING** state, and the safety cap exists as an
+opt-in for anyone who wants it. `triggers.gating.enabled: false` restores always-on
+push wholesale.
 
 ---
 
-## 7. Question Detection Without Punctuation
+## 5. Corpus preparation (D-09, ADR-001)
 
-### Problem: Transcription Omits Question Marks
+Because retrieval-first makes the corpus the ceiling, corpus preparation is a **product
+step**, not a script: bring your documents → distill into grounded, provenance-tagged
+answer-units → readiness score with a gap list → activate for live calls.
 
-ASR models often don't produce punctuation. Relying on `?` detection misses most questions.
+Full methodology, measurements, and open limits: **[docs/distillation.md](docs/distillation.md)**.
 
-### Solution: Multi-Factor Scoring
-
-**Implementation** (`lib/question_detector.py`):
-```python
-score = 0.0
-+ 0.5  (if has '?')
-+ 0.3  (if matches question patterns like "what is", "how does")
-+ 0.3  (keyword overlap: pricing, api, integrate, etc.)
-+ 0.2  (question word at sentence start)
-+ 0.1  (if >= 7 words)
-```
-
-**7 Pattern Categories**:
-1. Direct question words: "what", "how", "why"
-2. Verb patterns: "what is", "how does"
-3. Yes/No starters: "is this", "can you"
-4. Common phrases: "tell me", "explain"
-5. Exploration: "what about", "how about"
-6. Technical: "how does X work"
-7. Definition: "what's the", "what is the"
-
-**Key Insight**: Single signals are unreliable. Additive multi-factor scoring combines weak signals into strong confidence.
+The short version: source documents are *explainers*, meetings need an *answer bank*,
+and the distiller reshapes one into the other offline. Measured lift on a 21-question
+held-out set is **76% → 90–95%** using the cloud path. ADR-001 forbids shipping that
+path — the user's private corpus must not leave the device — so the shipped default is
+an on-device model, and forging a local specialist to close the gap is the critical
+path (F-702).
 
 ---
 
-## 8. KV Cache Corruption Fix
+## 6. Fallback chains
 
-### Problem: `llama_decode returned -1` Error
+Every stage degrades to something usable rather than erroring. Named, tested, and
+logged with context — never silent.
 
-On subsequent generation calls, llama.cpp threw errors indicating KV cache corruption.
-
-### Root Cause
-
-The KV cache (key-value cache for attention) becomes corrupted between calls when the model state isn't properly reset.
-
-### Solution: Reset Before Each Generation
-
-**Before** (broken):
-```python
-def _reset_if_needed(self):
-    self._call_count += 1
-    if self._call_count >= 10:  # Reset every 10 calls
-        self.llm.reset()
 ```
-
-**After** (working):
-```python
-def _reset_state(self):
-    if self.llm is not None:
-        try:
-            self.llm.reset()
-        except Exception:
-            self.llm = None  # Reload on failure
-            self.load()
+Retrieval        low confidence  →  silence (better than a wrong card)
+Generation       failure         →  extraction bullets  →  silence
+Distiller        contract reject →  heuristic floor (grounded, verbatim)
+ASR              2.5 unavailable →  LFM2 legacy
+Encoder heads    model absent    →  heuristic heads
+Trigger router   adapter absent  →  heuristics
+Embedding        Liquid absent   →  all-MiniLM-L6-v2 (384-dim)
+Attribution      no SDK          →  acoustic  →  flagged "Others (room)"
+Per-app capture  no permission   →  mic-only, surfaced in the UI
 ```
-
-**Trade-off**: Per-call reset is slightly slower but prevents all KV cache issues.
 
 ---
 
-## 9. ChatML Format for RAG Generation
+## 7. Concurrency
 
-### Why ChatML
+The pipeline is genuinely multi-threaded — two capture threads, an asyncio event loop,
+and background model warm-up — so thread safety is explicit rather than assumed.
 
-LFM2-1.2B-RAG was trained on 1M+ samples using ChatML format:
-```
-<|im_start|>user
-[context and question]
-<|im_end|>
-<|im_start|>assistant
-```
+| Mechanism | Where | Guards |
+|---|---|---|
+| `threading.Lock` | TranscriptBuffer, ConversationBuffer, RAGAnswerGenerator | all public mutations |
+| Double-checked locking | `lib/rag/embedder.py`, `lib/intelligence/encoder.py` | lazy model load |
+| `loop.call_soon_threadsafe` | `src/api/session.py` | capture thread → asyncio queue |
+| `deque(maxlen=1000)` | trigger history | unbounded growth in long sessions |
+| try/finally | both capture threads | every setup has a teardown |
 
-### Prompt Template
+The double-checked locking is worth spelling out, because it was a real bug (BUG-006).
+Lazy model loading was a plain check-then-set. It was latent for months and went live
+the moment session start began pre-warming the embedder on a background thread while
+the pipeline queried on another: torch materializes weights from the meta device during
+construction, and a concurrent second construction dies with *"Cannot copy out of meta
+tensor; no data!"* — on the first query of every session.
 
-```python
-RAG_PROMPT_TEMPLATE = """<|im_start|>user
-Use the following context to answer the question. Be concise and direct.
-Only use information from the provided context.
+**800 tests were green while this was broken.** A test suite proves the paths it
+exercises; concurrency bugs live in the paths it does not.
 
-CONTEXT:
-{context}
-
-QUESTION: {question}<|im_end|>
-<|im_start|>assistant
-"""
-```
-
-### Generation Settings
-
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| `temperature` | 0 | Greedy decoding for factual responses |
-| `max_tokens` | 200 | Concise answers |
-| `n_ctx` | 2048 | Context window |
-| `max_context_chars` | 1500 | Leave room for prompt + generation |
-
-### Stop Tokens
-
-```python
-stop=["<|im_end|>", "<|im_start|>", "\n\nQUESTION:", "\n\nCONTEXT:", "---"]
-```
-
-These prevent the model from trying to continue the conversation or generate new context.
+The fix publishes to `self._model` only after construction completes, so the unlocked
+fast path can never observe a half-built model, and steady-state embedding stays
+lock-free.
 
 ---
 
-## 10. Confidence Score Normalization
+## 8. Interface contracts
 
-### Problem: Raw ColBERT Scores Are Unbounded
+### WebSocket
 
-ColBERT MaxSim scores range from ~10 to ~50 depending on query/document. Hard to interpret.
+`/ws/transcript` — `transcript_update` (partial turn), `transcript_final` (complete),
+`transcript_relabeled` (attribution changed); client sends `edit`.
 
-### Solution: Sigmoid Normalization
+`/ws/prompts` — one `prompt` message per card, carrying `trigger_type`, `answer`,
+`confidence`, `method`, `latency_ms`, `source`, `heading`, `source_text`, `persistence`,
+`dismiss_ms`, and display metadata. In the default retrieval-first path `method` is
+`"retrieval"`, `answer` is the glanceable sentence, and `source_text` is the full unit
+for expand-to-source.
 
-**Implementation** (`lib/colbert/normalizer.py`):
-```python
-normalized = 1 / (1 + exp(-(raw_score - center) / scale))
-center = 25.0  # Moderate match = 0.5
-scale = 5.0    # Controls steepness
-```
-
-**Score Interpretation**:
-| Raw Score | Normalized | Meaning |
-|-----------|------------|---------|
-| < 15 | < 0.15 | Poor match |
-| 15-25 | 0.15-0.50 | Moderate match |
-| 25-35 | 0.50-0.85 | Good match |
-| > 35 | > 0.85 | Excellent match |
-
-### Confidence Thresholds
-
-| Threshold | Value | Used For |
-|-----------|-------|----------|
-| `MIN_CONFIDENCE` | 0.30 | Below this, return "no match" |
-| `HIGH_CONFIDENCE` | 0.70 | UI indicator for strong matches |
-| `EXTRACTION_MIN` | 0.25 | Minimum to proceed to generation |
-
----
-
-## 11. Audio Capture Architecture
+The authoritative shapes live in [CLAUDE.md](CLAUDE.md#websocket-protocol) — both sides
+read that section, and changing a message without updating it is how the frontend and
+backend drift apart silently.
 
 ### Configuration
 
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| `chunk_duration` | 4.0s | Long enough for complete phrases |
-| `overlap` | 0.5s | Preserves context between chunks |
-| `sample_rate` | 16000 | Required by LFM2-Audio |
-| `blocksize` | 100ms | Balance between latency and efficiency |
-
-### Dual-Threshold Silence Detection
-
-```python
-is_speech = (rms > 0.005) and (peak > 0.02)
-```
-
-**Why Both Thresholds**:
-- RMS alone: Misses short noise spikes
-- Peak alone: Triggers on low background
-- Both: Robust silence detection
-
-### Silence Callback
-
-When silence is detected, the audio capture notifies the question buffer rather than silently discarding. This enables the buffer's pause-based flush logic.
+Every threshold, weight, timeout, and model choice is in `config.yaml`, loaded through
+typed dataclasses in `lib/config.py`. No magic numbers in code, no hardcoded model
+paths, `MODELS_DIR` for the registry. This is what makes tuning a config diff rather
+than a code change, and what lets the same code run with a different model set.
 
 ---
 
-## 12. Extraction Scoring Algorithm
+## 9. Open decisions
 
-### Multi-Factor Sentence Scoring
+Tracked live in
+[docs/architecture/open-decisions-log.md](docs/architecture/open-decisions-log.md).
+The consequential ones:
 
-**Implementation** (`lib/answer_extractor.py`):
-```python
-score = 0.0
-+ (keyword_overlap / question_words) * 0.5  # Primary signal
-+ 0.2 (if definition pattern found)         # "is defined as", "stands for"
-+ position_bonus * 0.2                       # Earlier = likely definition
-- 0.2 (if > 50 words)                       # Length penalty
-+ 0.1 * exact_term_matches                  # Bonus for key terms
-```
+| ID | Question | Status |
+|---|---|---|
+| **D-01** | AEC mic capture (macOS Voice-Processing I/O) — cancel speaker→mic echo *at capture* so attribution is correct by construction, independent of headphones | open, high priority, foundational |
+| **D-02** | User-gated interaction — default quiet, user opens the tap via armed listen-window or select-to-answer; ALERTs stay the only always-on channel | **decided and built** — see §4.6 |
+| **D-03** | Answer model — 2.6B is wired with 1.2B fallback | leaning 2.6B, operator to confirm |
+| **D-07** | The transcript refiner currently shares the answer-model instance; with a 2.6B reasoning model, per-turn refinement is slow | open |
+| **D-11** | Readiness rater is miscalibrated (57% judge agreement, harsh in 36% of cells) | decided in principle, rater blocked on recalibration |
 
-### Position Bonus
-
-```python
-position_score = 1.0 - (position / total_sentences) * 0.3
-```
-
-**Rationale**: Definitions typically appear early in documents.
-
-### Document Order Restoration
-
-After selecting top sentences by score, re-sort by original position:
-```python
-top_sentences.sort(key=lambda x: x.position)
-```
-
-This ensures answers read naturally (chronological flow).
+D-02 is the one that matters most to the product's character. The always-on push model
+produced a stream of irrelevant prompts, which is the failure mode of this entire
+product category. Whether the answer is temporal (an armed window) or spatial
+(select-to-answer) is what the first live calls are meant to settle.
 
 ---
 
-## 13. LLM Model Choices & Trade-offs
+## 10. Future scope
 
-### Three-Model Architecture
+Ordered by what unblocks what, not by appeal.
 
-| Model | Size | Purpose | Latency |
-|-------|------|---------|---------|
-| LFM2-Audio-1.5B | 1.2 GB | Speech-to-text | ~300ms |
-| LFM2-ColBERT-350M | 1.4 GB | Semantic retrieval | ~100ms |
-| LFM2-1.2B-RAG | 700 MB | Answer generation | ~500ms |
+**Near — proving what is already built.** The learned trigger router (F-503) is on and
+unvalidated in a real call; it beat the heuristic offline by a wide margin (hybrid
+macro-F1 0.846 vs 0.55 probe vs 0.26 heuristic) but offline transcripts are not a
+meeting. Structured notes via Extract (F-507) and the persistent warm-model runtime
+(F-508) are path-built and awaiting the same validation. AEC at capture (D-01) is
+foundational: it improves attribution, ASR quality, and prompt trust simultaneously.
 
-### Why Separate Models?
+**Next — the corpus loop.** Forge the local distiller specialist (F-702), recalibrate
+the readiness rater (F-707), and validate the whole flow on a *messy* corpus (F-708).
+F-708 gates F-702: the case for a specialist model rests on corpora that are not already
+well-structured explainers, and that case is currently an assumption rather than a
+measurement.
 
-1. **LFM2-Audio**: Multimodal model that directly processes audio waveforms
-2. **LFM2-ColBERT**: Late-interaction retrieval (not a generative model)
-3. **LFM2-1.2B-RAG**: Trained specifically for RAG tasks
+**Then — attribution fidelity.** Zoom Meeting SDK integration (F-608) is the real
+ground-truth path: `onUserActiveAudioChange` plus per-participant PCM, locally, with
+host or co-host permission and no cloud. It would make named remote speakers exact on
+Zoom, while Teams and Meet continue to fall back to acoustic clustering.
 
-Using specialized models for each stage outperforms a single general-purpose model.
+**Exploratory — visual context.** `LFM2.5-VL-Extract` reading shared slides into RAG and
+extracting the roster (F-603). Explicitly gated on a real-image test with genuine
+speaker-view and shared-slide captures. The Stage-0 probe was inconclusive on synthetic
+images, and vision is **not** the answer to active-speaker detection.
 
-### Quantization Choice
-
-Chose **Q4_K_M** (4-bit quantization) for LFM2-1.2B-RAG:
-- 731 MB vs 2.4 GB for FP16
-- Minimal quality loss for RAG tasks
-- Fits in memory alongside other models
-
----
-
-## 14. Fallback Chains
-
-### RAG Engine Fallback
-
-```
-ColBERT → Jaccard Keyword Search
-  ↓           ↓
-(semantic)  (fallback if ColBERT fails)
-```
-
-**Env Variable**: `RAG_USE_FALLBACK=1` forces keyword search (for low-memory environments).
-
-### Answer Generation Fallback
-
-```
-LFM2-1.2B-RAG → Extraction Bullets
-  ↓                  ↓
-(fluent answer)    (fallback if generation fails)
-```
-
-### Extraction Fallback
-
-```
-High-Confidence Sentences → "I don't have information on that"
-  ↓                              ↓
-(if score >= 0.25)            (if score < 0.25)
-```
+**Continuous — the encoder heads.** The evidence-span head (F-504) and quality gate
+(F-505) complete the migration of heuristics onto the shared backbone. The discipline
+that keeps this from becoming a mess is *delete-as-you-replace*: when a head ships, the
+heuristic it supersedes is deleted, not left running beside it. Two parallel
+implementations of the same decision is the real refactor trap.
 
 ---
 
-## 15. Known Constraints & Workarounds
-
-| Constraint | Workaround |
-|------------|------------|
-| KV cache corruption | Reset before each generation |
-| llama.cpp verbose logging | 20+ skip patterns in output filter |
-| Transcription missing punctuation | Confidence scoring + word count |
-| Small model context following | Structural extraction + specialized RAG model |
-| Audio device name variation | Substring matching against available devices |
-
----
-
-## 16. Performance Characteristics
-
-### Latency Breakdown
-
-| Stage | Latency |
-|-------|---------|
-| Audio capture | Real-time (4s chunks) |
-| Transcription (LFM2-Audio) | ~300ms |
-| Retrieval (ColBERT) | ~100ms |
-| Extraction | ~10ms |
-| Generation (LFM2-1.2B-RAG) | ~500ms |
-| **Total** | **~900ms** |
-
-### Memory Usage
-
-| Component | Memory |
-|-----------|--------|
-| LFM2-Audio-1.5B | ~2 GB |
-| LFM2-ColBERT-350M | ~1.5 GB |
-| LFM2-1.2B-RAG | ~1 GB |
-| **Total** | **~4.5 GB** |
-
-Requires 16GB+ RAM Mac (M1/M2/M3/M4).
-
----
-
-## 17. Key Learnings
-
-### 1. Extraction Before Generation Prevents Hallucination
-
-Don't feed raw retrieved chunks to an LLM. Extract relevant sentences first—this structurally prevents the model from seeing (and hallucinating from) irrelevant context.
-
-### 2. Specialized Models Outperform General-Purpose
-
-LFM2-1.2B-RAG (trained on 1M+ RAG samples) follows context far better than a general 1.2B model. Model training data matters more than size for specific tasks.
-
-### 3. Time-Based > Count-Based for Real-Time
-
-Audio chunk counts don't correspond to real pauses. Real timestamps are the only reliable way to detect speech boundaries.
-
-### 4. Pattern Matching Beats Semantic Detection for Artifacts
-
-Hallucinations, noise, and filler words follow predictable patterns. Pattern matching is more reliable and faster than trying to semantically classify "valid" content.
-
-### 5. Fallback Chains Enable Graceful Degradation
-
-Every stage should have a fallback: ColBERT→Jaccard, Generation→Extraction, Extraction→"No match". Users get an answer (even if degraded) rather than an error.
-
-### 6. Late Interaction Captures Token Semantics
-
-ColBERT's per-token embeddings with MaxSim scoring catch semantic relationships that single-vector embeddings miss. Worth the extra memory for quality retrieval.
-
-### 7. Reset LLM State Between Calls
-
-llama.cpp's KV cache can become corrupted between generation calls. Always reset model state before each generation to prevent `llama_decode` errors.
-
-### 8. Section Headers Improve Retrieval Quality
-
-Prepending section headers to chunks dramatically improves retrieval for "What is X?" questions. The model learns that chunks with matching headers are more relevant.
-
----
-
-## 18. Turn-Based Transcript Architecture (v2)
-
-### Problem: Raw ASR Chunks Create Unreadable Transcripts
-
-LFM2.5-Audio processes audio in ~4-second chunks. Storing and displaying each chunk individually produces a fragmented, choppy transcript — each line is a partial phrase rather than a coherent thought.
-
-A naive frontend fix (grouping by time gaps) was insufficient because:
-- It didn't produce semantically meaningful groupings
-- The frontend had no knowledge of speech patterns
-- It couldn't handle real-time updates cleanly (groups would shift as new chunks arrived)
-
-### Solution: Backend Turn Accumulation
-
-Speech turns are accumulated on the **backend**, where the ASR pipeline has timing information and can detect pauses. The architecture introduces a new `TranscriptBuffer` layer between the ASR output and the transcript store.
-
-```
-Audio Chunk → LFM2.5-Audio → text
-                                │
-                    ┌───────────┴───────────┐
-                    │                       │
-            TranscriptBuffer         ConversationBuffer
-            (for display)            (for trigger detection)
-                    │                       │
-              on_update / on_final    Trigger Engine
-                    │
-            TranscriptStore.upsert()
-                    │
-            WebSocket push
-            (transcript_update / transcript_final)
-                    │
-            useTranscript.upsertSegment()
-                    │
-            TranscriptPane (paragraph blocks)
-```
-
-### Key Components
-
-| Component | File | Role |
-|-----------|------|------|
-| `TranscriptBuffer` | `src/api/transcript_buffer.py` | Accumulates raw chunks into turns. Detects boundaries via pause (2s) or max duration (30s). Fires `on_update` and `on_final` callbacks. |
-| `TranscriptStore.upsert()` | `src/api/transcript_store.py` | Creates or updates a segment by ID. Turns are upserted on each update (text grows), then marked final. Edit overlay preserved. |
-| `Session._on_turn_*` | `src/api/session.py` | Bridges buffer callbacks → asyncio queue → WebSocket via `loop.call_soon_threadsafe`. |
-| WebSocket protocol | `src/api/routes/transcript.py` | `transcript_update` (partial turn) and `transcript_final` (completed turn). Late-connecting clients receive existing turns on connect. |
-| `useTranscript` | `app/src/hooks/useTranscript.ts` | React hook with upsert semantics — finds by turn ID and updates, or creates new. Preserves user edits. |
-| `TranscriptPane` | `app/src/components/TranscriptPane.tsx` | Renders turns as timestamped paragraphs. Active turns show pulsing blue indicator. Finalized turns are clean static text. Double-click to edit. |
-
-### Turn Lifecycle
-
-```
-Chunk 1 arrives → TranscriptBuffer creates turn-1 (active)
-    → on_update callback → Store.upsert(turn-1, "Hello") → WS: transcript_update
-
-Chunk 2 arrives (within 2s) → extends turn-1
-    → on_update callback → Store.upsert(turn-1, "Hello world") → WS: transcript_update
-
-2s silence detected → turn-1 finalized
-    → on_final callback → Store.upsert(turn-1, "Hello world", is_final=True) → WS: transcript_final
-
-Chunk 3 arrives → new turn-2 created
-```
-
-### Dual Buffer Design
-
-Two independent buffers receive the same raw chunks for different purposes:
-- **TranscriptBuffer**: Optimized for display (simple pause-based turn boundaries)
-- **ConversationBuffer**: Optimized for intelligence (question scoring, trigger evaluation, rolling 90s window)
-
-They don't share state. This separation keeps each focused on its purpose.
-
-### Speaker Identification (Planned)
-
-The `speaker` field exists on `Turn`, `TranscriptSegment`, and in the WebSocket protocol, but is currently unused. When speaker diarization is added, it will populate this field and the UI will render speaker labels above turn blocks.
-
----
-
-## 19. File Reference
-
-### Core Pipeline (lib/)
-
-| File | Purpose |
-|------|---------|
-| `coach.py` | CLI entry point, args, startup |
-| `lib/orchestrator.py` | MeetingOrchestrator — central pipeline coordinator |
-| `lib/config.py` | Typed dataclass config loader |
-| `lib/filters.py` | Hallucination/noise/normalization filters |
-| `lib/audio_capture.py` | Microphone streaming, silence detection |
-| `lib/lfm2_wrapper.py` | LFM2.5-Audio subprocess management |
-| `lib/answer_extractor.py` | Sentence extraction for grounding |
-| `lib/rag_generator.py` | LFM2.5-1.2B-Instruct wrapper with ChatML |
-| `lib/rag_engine.py` | ColBERT + Jaccard fallback |
-| `lib/dashboard.py` | CLI dashboard with trigger-type coloring |
-| `lib/colbert/retriever.py` | ColBERT model + PLAID index |
-| `lib/colbert/chunker.py` | Section-aware document chunking |
-| `lib/colbert/normalizer.py` | Sigmoid score normalization |
-
-### Trigger Engine (lib/triggers/)
-
-| File | Purpose |
-|------|---------|
-| `lib/triggers/types.py` | TriggerType enum, Trigger dataclass |
-| `lib/triggers/engine.py` | Orchestrator: runs all triggers, priority sort |
-| `lib/triggers/question_trigger.py` | Question detection (patterns + keywords) |
-| `lib/triggers/alert_trigger.py` | Watch word scanning with cooldown |
-| `lib/triggers/topic_trigger.py` | ColBERT-backed topic detection |
-| `lib/triggers/followup_trigger.py` | Pause-based follow-up suggestions |
-
-### Conversation Intelligence (lib/conversation/)
-
-| File | Purpose |
-|------|---------|
-| `lib/conversation/buffer.py` | Rolling 90s transcript + trigger routing |
-| `lib/conversation/meeting_context.py` | YAML meeting context loader |
-
-### Mode-Aware Generation (lib/generation/)
-
-| File | Purpose |
-|------|---------|
-| `lib/generation/prompts.py` | ChatML prompt templates per trigger type |
-| `lib/generation/generator.py` | ModeAwareGenerator — trigger-routed generation |
-| `lib/generation/types.py` | GenerationResult dataclass |
-
-### FastAPI Backend (src/api/)
-
-| File | Purpose |
-|------|---------|
-| `src/api/main.py` | FastAPI server + WebSocket endpoints |
-| `src/api/session.py` | Session manager (bridges audio pipeline → WebSocket) |
-| `src/api/transcript_buffer.py` | Turn-based ASR chunk accumulator |
-| `src/api/transcript_store.py` | Append-only transcript with edit overlay + upsert |
-| `src/api/notes_generator.py` | Structured meeting notes via LLM |
-| `src/api/routes/session.py` | Session start/stop/status/reindex endpoints |
-| `src/api/routes/transcript.py` | WebSocket transcript stream (turn updates + edits) |
-| `src/api/routes/prompts.py` | WebSocket trigger results stream |
-| `src/api/routes/notes.py` | Notes generate/export/save/download |
-| `src/api/routes/context.py` | Meeting context upload |
-
-### Tauri + React Frontend (app/)
-
-| File | Purpose |
-|------|---------|
-| `app/src-tauri/src/lib.rs` | Rust shell: spawns Python backend, manages lifecycle |
-| `app/src/App.tsx` | Root component, layout, WebSocket connections |
-| `app/src/components/TranscriptPane.tsx` | Left pane: turn-based editable transcript |
-| `app/src/components/PromptsPane.tsx` | Right pane: live trigger results |
-| `app/src/components/StatusBar.tsx` | Session controls, audio health |
-| `app/src/components/MeetingSetup.tsx` | Pre-meeting context config dialog |
-| `app/src/components/NoteEditor.tsx` | Post-meeting structured notes editor |
-| `app/src/hooks/useWebSocket.ts` | WebSocket connection + reconnect hook |
-| `app/src/hooks/useTranscript.ts` | Transcript state with turn-based upsert |
-
----
-
-## 20. Evolution Timeline
-
-```
-Phase 1: Basic Pipeline
-├── Keyword search (Jaccard) → Missed semantic queries
-├── Direct LLM generation → Hallucinated answers
-└── Chunk-count buffering → "Second question triggers first" bug
-
-Phase 2: Improved Retrieval
-├── Added ColBERT for semantic search → 74-77% matches on semantic queries
-├── Section-aware chunking → Better context for "What is X?" questions
-└── Multi-chunk retrieval (top-3) → Richer context
-
-Phase 3: Extraction-Only
-├── Removed LLM generation → Zero hallucination
-├── Sentence scoring → Grounded answers
-└── Bullet point formatting → Accurate but choppy
-
-Phase 4: Hybrid RAG (Current)
-├── Added LFM2-1.2B-RAG → Fluent answers
-├── Extraction as grounding stage → Structural hallucination prevention
-├── Time-based buffering → Reliable pause detection
-└── KV cache reset → No more llama_decode errors
-```
-
----
-
-*Document generated from codebase analysis and development history.*
+## 11. How we got here
+
+The system has been rebuilt more than once. The pivots that stuck, and what each taught:
+
+**Keyword → ColBERT → hybrid FTS5 + vector.** Jaccard similarity missed every semantic
+query ("neural network alternatives" found nothing). ColBERT late-interaction fixed
+that, but cost 1.5 GB resident and a PLAID index to maintain. Hybrid FTS5 + a 350M
+embedding model matches its quality on the benchmark at a fraction of the footprint,
+with SQLite doing the storage. *Late interaction was the right idea at the wrong price.*
+
+**Generation → extraction → hybrid → retrieval-first.** Small models hallucinated when
+asked to answer from context, so generation was removed entirely in favor of sentence
+extraction — accurate, but choppy and robotic. Hybrid RAG restored fluency by using
+extraction as a *grounding* stage that pre-filters what the model can see. Then the lab
+showed retrieval alone was good enough for the live path, and generation moved
+off it entirely. *Four positions in one direction: less model on the critical path.*
+
+**Chunk-count → timestamp buffering.** Counting audio chunks to detect pauses caused the
+"second question triggers the first" bug, because a 4-second chunk's silence can fall at
+its start, middle, or end. Real timestamps were the only reliable boundary.
+
+**Heuristics → encoder heads.** The current re-architecture, done as a strangler-fig
+inside the existing repo rather than a green-field rewrite. The skeleton — dual-buffer
+fork, turn accumulation, per-source silence, thread safety, WebSocket contract, Tauri
+UI — is sound and model-agnostic, so organs are swapped one at a time behind existing
+seams, each gated by the test suite, always in a working state. A new project would only
+be right if the skeleton were wrong.
+
+Some things did not survive contact and are worth recording as dead ends:
+
+- **Accessibility APIs for active-speaker detection** — no such attribute exists on any
+  major platform.
+- **Vision for active-speaker detection** — failed on gallery view and on speaker view.
+- **Prompt engineering as a correctness control for the local distiller** — hardening
+  the prompt produced *different* narration rather than none. Structural contract checks
+  are what work.
+- **Conference-room speaker separation** — genuinely unsolvable with one far-field
+  microphone. Honest degradation is the answer, not a better clusterer.

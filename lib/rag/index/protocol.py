@@ -28,3 +28,7 @@ class Embedder(Protocol):
     def dimension(self) -> int:
         """Return the embedding dimension."""
         ...
+
+    # Optional: embedders may add ``embed_query(text) -> list[float]`` for
+    # asymmetric query/passage prompts. Retrieval falls back to ``embed`` when
+    # it is absent, so implementing it is not required by this protocol.

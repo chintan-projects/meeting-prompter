@@ -283,6 +283,34 @@ workstreams:
         files:
           - lib/triggers/engine.py
 
+      - id: F-208
+        name: "User-gated interaction — quiet by default (D-02)"
+        status: done  # 2026-07-22: ListenGate at _process_trigger; Cmd+L window + select-to-answer
+        effort: M
+        description: >
+          The first live call produced prompt spam: a correctly-detected
+          question is not a question the user wants answered on screen, and
+          most are not. A perfect trigger router still interrupts on every
+          true positive — this is a permission problem, not a classification
+          problem. Default is now quiet. Two user-opened channels: TEMPORAL
+          (Cmd+L arms the listen window; automatic cards flow until toggled
+          off) and SPATIAL (select transcript text -> "Answer this", gate-exempt,
+          works while quiet). Watch-word ALERTs stay always-on — the user
+          pre-authorized them by naming the terms. Gate lives at the single
+          choke point both capture pipelines share, and short-circuits BEFORE
+          retrieval. Explicit requests (retrieve_for_text, generate_for_text)
+          never consult it. Set triggers.gating.enabled=false to restore push.
+          OPEN: the window has no timer by product choice; a forgotten window
+          restores always-on behaviour. Mitigated by a loud LISTENING state and
+          an opt-in max_listen_seconds cap. Validate on the next live call.
+        depends_on: [F-705]
+        files:
+          - lib/gating.py
+          - lib/orchestrator.py
+          - src/api/routes/prompts.py
+          - app/src/components/StatusBar.tsx
+          - app/src/components/TranscriptPane.tsx
+
   # ─── WORKSTREAM 3: Speaker Attribution ───────────────────────────
   # Priority: V1.5+ — Tier 1 (You/Others) is done. Tier 2/3 are
   # enhancements that depend on packaging decisions.
@@ -420,7 +448,7 @@ workstreams:
 
       - id: F-509
         name: "Harden the retrieval eval (discriminating power)"
-        status: backlog
+        status: done
         effort: M
         description: >
           Current eval saturates (doc-level, ~3 distinct docs) — it can't tell
@@ -435,7 +463,7 @@ workstreams:
 
       - id: F-510
         name: "Frozen-encoder linear-probe heads (v1, no GPU/forge)"
-        status: backlog
+        status: done
         effort: M
         description: >
           The v1 encoder head that needs NO training of the model: mean-pool the
@@ -454,7 +482,7 @@ workstreams:
 
       - id: F-501
         name: "EncoderIntelligenceLayer interface + typed turn-state"
-        status: backlog
+        status: done
         effort: L
         description: >
           Introduce the EncoderIntelligenceLayer abstraction and a typed
@@ -471,7 +499,7 @@ workstreams:
 
       - id: F-502
         name: "Retrieval swap — MiniLM → LFM2.5 retriever"
-        status: backlog
+        status: done
         effort: M
         description: >
           Replace all-MiniLM-L6-v2 with LFM2.5-Embedding-350M (or ColBERT-350M
@@ -485,18 +513,25 @@ workstreams:
 
       - id: F-503
         name: "Trigger router head (forge-LoRA, v2 over F-510 probe)"
-        status: backlog
+        status: done
         effort: L
         description: >
-          The v2 upgrade over the F-510 frozen probe: an ENCODER-backed sequence
-          classifier (mean-pool) LoRA-trained via forge (synthetic-first data).
-          Encoder only — NEVER causal. GATED on the forge bidirectional-encoder
-          change landing + verifying first (forge maps sequence_classifier to causal
-          by default). Ship only when it beats the F-510 probe / heuristic on a
-          frozen held-out eval.
+          DONE (session-018). Encoder-backed sequence classifier (mean-pool, CE)
+          LoRA-trained via forge on a SHAPE-FIRST corpus (~30 unrelated domains so
+          only pragmatic shape predicts the label). Bidirectional encoder variant
+          (sequence_classifier_encoder) — never causal; forge encoder-classifier
+          change landed 2026-07-20. Gated on REAL meeting-transcript turns, not just
+          synthetic: hybrid (F-503 + heuristic question-rescue) macro-F1 0.846 vs
+          probe 0.55 vs heuristic 0.26. Wired config-gated (f503_router_enabled),
+          default OFF; promotion to live default gated on the WS-14 live call.
+          Artifact: LFM2.5-TriggerRouter-350M in the model registry. See
+          forge/f503-trigger-router/RESULTS.md.
         depends_on: [F-501, F-510]
         files:
           - new: lib/intelligence/heads/trigger_router.py
+          - lib/triggers/engine.py
+          - new: tests/test_trigger_router.py
+          - new: tests/eval/f503_gate.py
 
       - id: F-504
         name: "Evidence span head (token-classifier)"
@@ -526,7 +561,7 @@ workstreams:
 
       - id: F-506
         name: "Route-first hot/cold execution + shared-state"
-        status: backlog
+        status: done
         effort: M
         description: >
           Wire the heads as a route-first gate: hot path answers/suppresses from
@@ -540,7 +575,7 @@ workstreams:
 
       - id: F-507
         name: "Structured notes via LFM2.5-350M-Extract"
-        status: backlog
+        status: in_progress
         effort: M
         description: >
           Point notes_generator at LFM2.5-350M-Extract (structured extraction)
@@ -551,7 +586,7 @@ workstreams:
 
       - id: F-508
         name: "Persistent warm-model runtime + contention mgmt"
-        status: backlog
+        status: in_progress
         effort: L
         description: >
           Replace subprocess.run()-per-call inference with a persistent runtime
@@ -580,7 +615,7 @@ workstreams:
     features:
       - id: F-601
         name: "AttributionResolver — hierarchy + regime detection"
-        status: backlog
+        status: done
         effort: M
         description: >
           Pluggable resolver that composes the attribution layers by confidence,
@@ -623,7 +658,7 @@ workstreams:
 
       - id: F-604
         name: "Acoustic diarization fix — segment + roster-bound"
-        status: backlog
+        status: done
         effort: L
         description: >
           Rework Tier-2 (F-301): segment at speaker-change points (not silence
@@ -635,7 +670,7 @@ workstreams:
 
       - id: F-605
         name: "Voice enrollment for known colleagues"
-        status: backlog
+        status: done
         effort: L
         description: >
           Rework of F-302: pre-register frequent colleagues' voice profiles so
@@ -648,7 +683,7 @@ workstreams:
 
       - id: F-606
         name: "Conference-room regime — honest degradation"
-        status: backlog
+        status: done
         effort: S
         description: >
           Detect the shared-far-field-mic regime and degrade to a single
@@ -661,7 +696,7 @@ workstreams:
 
       - id: F-607
         name: "Lexical speaker-consistency pass (LFM)"
-        status: backlog
+        status: done
         effort: M
         description: >
           Cheap post-hoc LFM pass over (attribution hypothesis + transcript) to
@@ -685,3 +720,124 @@ workstreams:
         depends_on: [F-601]
         files:
           - new: lib/attribution/zoom_sdk.py
+
+  # ─── WORKSTREAM 8: Corpus Preparation ────────────────────────────
+  # Priority: V1.5 — productizes the lab work. Retrieval-first means the
+  # corpus IS the product (ADR: D-08); this makes any user's content
+  # meeting-ready and tells them, honestly, if it can answer their meetings.
+  # Prototyped end-to-end in scripts/lab/. See docs/architecture/
+  # corpus-prep-onboarding-spec.md and ADR-001-local-corpus-distiller.md.
+
+  corpus_prep:
+    name: "Corpus Preparation (Prepare-corpus flow)"
+    phase: V1.5
+    description: >
+      Bring-your-own-knowledge → distill into borrowable answer-units →
+      readiness score → ready for calls. One-time, on-device prep. The
+      distiller and coverage/judge instrument are prototyped in scripts/lab/.
+
+    features:
+      - id: F-701
+        name: "Corpus distiller (reshape docs → grounded answer-units)"
+        status: done  # 2026-07-22: lib/corpus/{text,distiller,cloud}.py; local model backend tracked as F-702
+        effort: L
+        description: >
+          Walk a source doc section-by-section and emit self-contained, grounded
+          answer-units with a provenance pointer. Consolidated mode (one complete
+          answer per section) + reads tables. Prototyped in scripts/lab/distiller.py
+          (cloud + heuristic); productize into lib/corpus/ with a local backend.
+        depends_on: []
+        files:
+          - scripts/lab/distiller.py
+          - new: lib/corpus/distiller.py
+      - id: F-702
+        name: "Local distiller model (on-device, no cloud egress)"
+        status: in_progress  # 2026-07-22: PRIORITY — cloud distiller proven at 76%->95% judge-scored (n=21), and ADR-001 requires on-device, so the forge is the only path to shipping that. v1 prompted LFM2.5-2.6B is contract-valid on only ~30% of sections (rest fall back to the heuristic floor), so prompt-only cannot reach the target. Forge a specialist on cloud-distilled section->unit pairs; target 95%.
+        effort: XL
+        description: >
+          Forge a local small model for the section → grounded-answer-unit task
+          (incl. table reading), bootstrapped from cloud-distilled training data.
+          Ships as the default distiller; cloud stays offline-validation only.
+          See ADR-001.
+        depends_on: [F-701]
+        files:
+          - new: lib/corpus/distiller.py
+      - id: F-703
+        name: "Corpus readiness score (fit-for-purpose gate)"
+        status: in_progress  # 2026-07-22: lib/corpus/readiness.py + POST /corpus/readiness shipped, BUT the local rater is miscalibrated (57% agreement with judge; harsh in 36% of cells, understates a good corpus by 38pp). Recalibrate on a SEPARATE dev question set (21-q set stays held out) before showing the score as a user-facing verdict.
+        effort: M
+        description: >
+          Run likely questions through the corpus, score each retrieved answer
+          (borrowable/partial/gap), show a fit-for-purpose % + gap list before the
+          user relies on it live. Prototyped: scripts/lab/pipeline.py coverage +
+          judge.py + calibration. Productize (local judge or heuristic proxy).
+        depends_on: [F-701]
+        files:
+          - scripts/lab/pipeline.py
+          - scripts/lab/judge.py
+          - new: lib/corpus/readiness.py
+      - id: F-704
+        name: "'Prepare corpus' onboarding wizard (Tauri)"
+        status: done  # 2026-07-22: CorpusPrep.tsx (sources/upload → distill w/ progress → readiness+gaps → activate); routes/corpus.py; active-corpus state honored by orchestrator
+        effort: L
+        description: >
+          Add sources (folder/upload/Notion) → distill (progress) → readiness
+          score + gap list → ready. Extends MeetingSetup / a Corpus manager screen.
+        depends_on: [F-701, F-703]
+        files:
+          - new: app/src/components/CorpusPrep.tsx
+          - src/api/routes/context.py
+      - id: F-705
+        name: "Retrieval-first live borrowable view"
+        status: done  # 2026-07-22: triggers.retrieval_first=true — live = borrowable unit + expand-to-source, no LLM; generation demoted to POST /prompts/generate; embedder pre-warmed on session start
+        effort: M
+        description: >
+          Live: retrieve the borrowable answer-unit + source, glanceable,
+          user-gated (D-02). No live generation. ~120-190ms. Prototyped as the
+          lab borrowable cards.
+        depends_on: [F-701]
+        files:
+          - app/src/components/PromptsPane.tsx
+          - lib/answer_extractor.py
+      - id: F-706
+        name: "Incremental re-distill on doc change"
+        status: done  # 2026-07-22: lib/corpus/incremental.py distill_dir — content-hash manifest, only changed docs re-distill, orphan outputs removed
+        effort: S
+        description: >
+          Re-distill only changed documents when the corpus updates, keeping the
+          answer-unit index fresh without a full rebuild.
+        depends_on: [F-701]
+        files:
+          - new: lib/corpus/distiller.py
+      - id: F-707
+        name: "Recalibrate the readiness rater against the judge"
+        status: backlog
+        effort: M
+        description: >
+          The shipped local rater agrees with the cloud judge on only 57% of cells
+          and is systematically harsh (36% harsher vs 7% softer), understating a
+          good corpus by 38 points — it would tell users a fit corpus is unfit.
+          Likely cause: the double gate (cosine >= 0.60 AND term overlap >= 0.50)
+          rejects correct answers that word things differently from the question.
+          Author a SEPARATE dev question set, judge it, tune thresholds (or replace
+          the overlap arm with a semantic measure) against that set only, then
+          verify on the held-out 21 — never tune against the acceptance set.
+        depends_on: [F-703]
+        files:
+          - lib/corpus/readiness.py
+          - new: tests/eval/corpus_questions_dev.yaml
+      - id: F-708
+        name: "Validate corpus-prep on a messy corpus"
+        status: backlog
+        effort: M
+        description: >
+          Judge-scored, distillation is worth +5pp on a written-through explainer
+          (76% -> 81%) because the raw corpus was already fit. The open question is
+          whether it earns its place on what users actually bring — Notion exports,
+          raw meeting notes, slide dumps, PDFs. Run the same before/after judge
+          comparison on such a corpus. This is the decisive test for D-09 (is
+          corpus prep a product step?) and the gate for the F-702 v2 forge.
+        depends_on: [F-701, F-703]
+        files:
+          - scripts/lab/compare_corpus.py
+          - new: tests/eval/

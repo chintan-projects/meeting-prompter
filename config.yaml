@@ -17,6 +17,10 @@ models:
     system_prompt: "Perform ASR."
     timeout: 30
   generation:
+    # Answer model (D-03): 2.6B degrades gracefully where the 1.2B flat-refuses.
+    # Falls back to LFM2.5-1.2B-Instruct-Q4_K_M.gguf if this file is absent.
+    # Note: the transcript refiner currently shares this instance — see D-07.
+    model_file: "LFM2.5-2.6B-Q4_K_M.gguf"
     n_ctx: 4096              # context window (LFM2.5 supports 32K, 4K is conservative)
     max_tokens: 200
     temperature: 0.0
@@ -50,6 +54,8 @@ rag:
   lexical_top_k: 20          # candidates from FTS5 before fusion
   semantic_top_k: 20         # candidates from vector search before fusion
   db_path: "data/rag.db"     # SQLite database for index storage
+  embedding_model: "LFM2.5-Embedding-350M"  # Liquid retriever (F-502); local via trust_remote_code
+  embedding_dimension: 1024  # LFM2.5-Embedding-350M is 1024-dim (all-MiniLM-L6-v2 was 384)
 
 triggers:
   question_score_threshold: 0.25
@@ -58,13 +64,42 @@ triggers:
   followup_pause_threshold: 3.0
   followup_rag_threshold: 0.40
   watch_words: []            # populated per-meeting via meeting_context.yaml
+  cold_path_min_words: 3     # F-506: min words before RAG-backed (topic) heads run
+  # F-503 forge-LoRA encoder router (LFM2.5-TriggerRouter-350M). Proven offline
+  # (real-transcript hybrid macro-F1 0.846 > probe 0.55 > heuristic 0.26).
+  # Currently ON so the live call (WS-14) actually exercises it — it supersedes
+  # the heuristic question head (question-rescue subsumes it) and adds shape
+  # alert/topic/followup; needs the adapter in MODELS_DIR (falls back to
+  # heuristics if absent). Set false to fall back to pure heuristics if triggers
+  # misfire during the call — that isolates "router is wrong" from "product is
+  # wrong". Still unvalidated live: that is what WS-14 decides.
+  f503_router_enabled: true
+  f503_router_min_confidence: 0.0
   min_answer_length: 10      # suppress answers shorter than this (F-202)
+  duplicate_card_seconds: 120  # don't re-show the same source unit within this window (0 = off)
+  # D-02: default quiet — the user opens the tap instead of being pushed at.
+  # Automatic cards fire only while the listen window is armed (Cmd+L, or
+  # POST /prompts/listen); select-to-answer and the on-demand generate button
+  # bypass the gate entirely. Set enabled=false to restore always-on push.
+  gating:
+    enabled: true
+    always_on: ["alert"]     # watch words are pre-authorized; nothing else is
+    max_listen_seconds: 0    # 0 = the armed window stays open until toggled off
+  # F-705 / D-08: retrieval-first live loop — show the borrowable unit (no LLM,
+  # ~120-190ms warm); generation is demoted to on-demand (POST /prompts/generate).
+  retrieval_first: true
   dismiss_persistent_ms: 0   # 0 = no auto-dismiss (Answer, Heads Up)
   dismiss_standard_ms: 90000 # Suggest cards auto-dismiss (ms)
   dismiss_ephemeral_ms: 45000 # FYI cards auto-dismiss (ms)
 
 refiner:
-  enabled: true
+  # OFF by default (D-07). It shares the 2.6B answer model, which is a reasoning
+  # model: it narrated its edits into the transcript ("Fixed version with
+  # corrections:") during the 2026-07-22 live test, and per-turn refinement on a
+  # 1.5-3.5s model is too slow for live use anyway. The transcript is a record
+  # the user exports — raw ASR beats corrupted prose. Re-enable once the refiner
+  # runs on its own fast small model.
+  enabled: false
   min_words_to_refine: 5    # skip LFM cleanup for very short turns
   max_tokens_ratio: 1.5     # max output tokens = input words * ratio
 
@@ -77,10 +112,15 @@ dual_stream:
 
 diarization:
   enabled: false              # Tier 2: neural speaker diarization on system audio
-  max_speakers: 6             # maximum distinct speakers to track
+  max_speakers: 6             # maximum distinct speakers to track (roster size overrides when known)
   similarity_threshold: 0.65  # cosine similarity for same-speaker match
   min_audio_duration: 1.0     # skip turns shorter than this (seconds)
   embedding_model: "speechbrain/spkrec-ecapa-voxceleb"
+  window_seconds: 1.5         # F-604: embedding window for intra-turn speaker-change segmentation
+  window_hop_seconds: 0.75    # hop between windows
+  change_threshold: 0.55      # cosine sim below this between adjacent windows = speaker change
+  enrollment_path: ""         # F-605: local JSON of name->voice profile (empty = disabled)
+  enrollment_threshold: 0.70  # cosine sim to match an enrolled colleague's voice
 
 notion:
   enabled: false                   # set true + NOTION_API_TOKEN env var to activate
@@ -95,6 +135,11 @@ notion:
   max_block_depth: 10              # max recursion depth for nested block fetching
 
 paths:
-  docs_dir: "context"
+  # RAG document library. Relative → under project root; absolute → used as-is.
+  # Single-doc corpus for the fit-for-purpose loop (D-08): on-device-capability-
+  # playbook.md only. Delete data/rag.db after changing this to force a clean
+  # rebuild. Revert to "Finetuning-Strategy-rag" (18-file set) or "context" for
+  # the broader libraries.
+  docs_dir: "/Users/chintan/Projects/Finetuning-Strategy-playbook"
   output_dir: "output"
   index_dir: "data"

@@ -12,7 +12,14 @@ from typing import Final
 
 # Default file types for indexing
 DEFAULT_FILE_TYPES: Final[list[str]] = [
-    ".txt", ".md", ".py", ".ts", ".js", ".html", ".css", ".json",
+    ".txt",
+    ".md",
+    ".py",
+    ".ts",
+    ".js",
+    ".html",
+    ".css",
+    ".json",
 ]
 
 
@@ -30,6 +37,10 @@ class RAGConfig:
     lexical_top_k: int = 20
     semantic_top_k: int = 20
 
+    # ─── Embedding model (F-502: Liquid retriever by default) ─────────────
+    embedding_model: str = "LFM2.5-Embedding-350M"
+    embedding_dimension: int = 1024
+
     # ─── FTS5 field boosts (bm25 column weights) ─────────────────────────
     boost_content: float = 1.0
     boost_title: float = 10.0
@@ -42,6 +53,4 @@ class RAGConfig:
     locality_boost: float = 0.05
 
     # ─── Indexing ─────────────────────────────────────────────────────────
-    file_types: tuple[str, ...] = field(
-        default_factory=lambda: tuple(DEFAULT_FILE_TYPES)
-    )
+    file_types: tuple[str, ...] = field(default_factory=lambda: tuple(DEFAULT_FILE_TYPES))

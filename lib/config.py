@@ -29,6 +29,9 @@ class AudioModelConfig:
 
 @dataclass
 class GenerationModelConfig:
+    # Answer model (GGUF under MODELS_DIR). Default 2.6B per D-03 (degrades
+    # gracefully where the 1.2B flat-refuses); resolver falls back to 1.2B if absent.
+    model_file: str = "LFM2.5-2.6B-Q4_K_M.gguf"
     n_ctx: int = 4096
     max_tokens: int = 200
     temperature: float = 0.0
@@ -80,6 +83,8 @@ class RAGPipelineConfig:
     lexical_top_k: int = 20
     semantic_top_k: int = 20
     db_path: str = "data/rag.db"
+    embedding_model: str = "LFM2.5-Embedding-350M"
+    embedding_dimension: int = 1024
 
 
 @dataclass
@@ -91,9 +96,37 @@ class TriggerConfig:
     followup_rag_threshold: float = 0.40
     watch_words: List[str] = field(default_factory=list)
     min_answer_length: int = 10  # suppress answers shorter than this (F-202)
+    # Seconds before the same source unit may be shown again. Several triggers
+    # fire on one turn and retrieve the same best unit; without this the panel
+    # stacks an ANSWER and an FYI with identical text. 0 disables.
+    duplicate_card_seconds: float = 120.0
+    retrieval_first: bool = True  # F-705/D-08: live = borrowable unit, no LLM; generation on demand
     dismiss_persistent_ms: int = 0  # 0 = no auto-dismiss (Answer, Heads Up)
     dismiss_standard_ms: int = 90_000  # Suggest cards auto-dismiss (ms)
     dismiss_ephemeral_ms: int = 45_000  # FYI cards auto-dismiss (ms)
+    cold_path_min_words: int = 3  # F-506: min words before RAG-backed heads run
+    # F-503 forge-LoRA encoder router: proven offline (real-transcript hybrid
+    # macro-F1 0.846), default OFF pending live validation (WS-14). When enabled
+    # and the adapter is present, it supersedes the heuristic question head (its
+    # question-rescue subsumes it); the deterministic watch-word alert head stays.
+    f503_router_enabled: bool = False
+    f503_router_min_confidence: float = 0.0
+    gating: "GatingConfig" = field(default_factory=lambda: GatingConfig())
+
+
+@dataclass
+class GatingConfig:
+    """D-02 listen gating — default quiet, the user opens the tap.
+
+    ``enabled=False`` restores the pre-D-02 always-on push. ``always_on`` lists
+    the trigger types that fire regardless (watch-word alerts are the only
+    channel the user pre-authorised). ``max_listen_seconds=0`` keeps an armed
+    window open until it is explicitly toggled off.
+    """
+
+    enabled: bool = True
+    always_on: List[str] = field(default_factory=lambda: ["alert"])
+    max_listen_seconds: float = 0.0
 
 
 @dataclass
@@ -118,6 +151,13 @@ class DiarizationConfig:
     similarity_threshold: float = 0.65
     min_audio_duration: float = 1.0
     embedding_model: str = "speechbrain/spkrec-ecapa-voxceleb"
+    # F-604 speaker-change segmentation within a turn
+    window_seconds: float = 1.5  # embedding window length for intra-turn segmentation
+    window_hop_seconds: float = 0.75  # hop between windows (overlap = window - hop)
+    change_threshold: float = 0.55  # cosine sim below this between windows = speaker change
+    # F-605 voice enrollment: local JSON of name→profile; names matching clusters.
+    enrollment_path: str = ""  # empty = disabled
+    enrollment_threshold: float = 0.70  # cosine sim to match an enrolled profile
 
 
 @dataclass
@@ -212,6 +252,14 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         logger.warning("Failed to load config.yaml: %s, using defaults", e)
         return AppConfig()
 
+    # triggers.gating is nested: the generic builder would leave it a raw dict,
+    # so attribute access (config.triggers.gating.enabled) would fail at runtime.
+    triggers_raw = dict(raw.get("triggers") or {})
+    gating = _build_dataclass(GatingConfig, triggers_raw.pop("gating", None))
+    triggers = _build_dataclass(TriggerConfig, triggers_raw)
+    assert isinstance(triggers, TriggerConfig) and isinstance(gating, GatingConfig)
+    triggers.gating = gating
+
     models_raw = raw.get("models", {})
     models = ModelsConfig(
         audio=_build_dataclass(AudioModelConfig, models_raw.get("audio")),
@@ -225,7 +273,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         buffer=_build_dataclass(BufferConfig, raw.get("buffer")),
         detection=_build_dataclass(DetectionConfig, raw.get("detection")),
         rag=_build_dataclass(RAGPipelineConfig, raw.get("rag")),
-        triggers=_build_dataclass(TriggerConfig, raw.get("triggers")),
+        triggers=triggers,
         refiner=_build_dataclass(RefinerConfig, raw.get("refiner")),
         diarization=_build_dataclass(DiarizationConfig, raw.get("diarization")),
         dual_stream=_build_dataclass(DualStreamConfig, raw.get("dual_stream")),

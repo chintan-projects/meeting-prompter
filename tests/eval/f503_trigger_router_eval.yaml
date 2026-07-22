@@ -1,0 +1,84 @@
+# F-503 trigger-router — frozen held-out gate eval (SHAPE generalization)
+#
+# The SHIP GATE for F-503. All three routers — the trained F-503 encoder head, the
+# F-510 frozen linear probe, and the heuristic router — are evaluated COLD on this set
+# (per-class + macro-F1). F-503 ships as the default Head only if it beats the
+# probe/heuristic macro-F1 AND does not regress `question` — the F-510 gate rule.
+#
+# FIRST PRINCIPLE (mirrors the genspec): this tests SHAPE, not content. Every row is
+# set in a domain DELIBERATELY HELD OUT of the 30 training families (dental clinic,
+# shipping port, ranger station, newsroom, ski resort, machine shop, daycare, golf
+# grounds crew, community theater, public library). A head that only learned Liquid-AI
+# content — or only the 30 training domains — will fail here. Passing means the head
+# generalized the speech-act shape across a domain gap.
+#
+# Weighted toward the boundary-confusable pairs (question|none, alert|topic,
+# question|followup, topic|followup) — where a bidirectional read should beat surface
+# heuristics. Register is voice-transcript (ASR): lowercase, disfluent, unpunctuated.
+#
+# HONEST CAVEAT: still synthetic/hand-authored → DIRECTIONAL. The real out-of-domain
+# gate is the user's own meeting transcripts (labeled locally, never sent to a teacher),
+# added alongside this set at gate time.
+
+labels: [question, alert, topic, followup, none]
+
+examples:
+  # ── question (info-seeking act, across held-out domains) ───────────────
+  - { text: "what's the turnaround time on the crowns coming back from the lab", label: question }        # dental clinic
+  - { text: "how many reefer containers are still sitting on berth four", label: question }                # shipping port
+  - { text: "do we know which trailhead the lost hiker was last seen at", label: question }                # ranger station
+  - { text: "who's got the front page slot for the sunday edition", label: question }                       # newsroom
+  - { text: "is lift seven cleared to reopen after they fixed the cable", label: question }                 # ski resort
+  - { text: "what tolerance are we holding on the batch of spindles", label: question }                     # machine shop
+  - { text: "did the new family in the toddler room finish their paperwork", label: question }              # daycare
+  - { text: "when did we last aerate the greens on the back nine", label: question }                        # golf grounds
+  - { text: "how many tickets have we actually sold for opening night", label: question }                   # community theater
+  - { text: "which shelves did the water leak hit in the archive room", label: question }                   # public library
+
+  # ── alert (warning/heads-up/risk act) ──────────────────────────────────
+  - { text: "heads up the autoclave is down so we can't sterilize until it's fixed", label: alert }        # dental clinic
+  - { text: "careful crane two is red-tagged do not load it this shift", label: alert }                      # shipping port
+  - { text: "that bear sighting was right on the campground loop so flag it now", label: alert }            # ranger station
+  - { text: "wait we can't run that quote legal hasn't cleared the source yet", label: alert }              # newsroom
+  - { text: "the avalanche risk just got bumped to high on the north face", label: alert }                  # ski resort
+  - { text: "that reading contradicts what the gauge showed an hour ago", label: alert }                     # machine shop
+  - { text: "we're one staff short of ratio in the infant room right now", label: alert }                    # daycare
+  - { text: "storm's rolling in we need carts off the course in ten minutes", label: alert }                # golf grounds
+  - { text: "the lead actor just called in sick for tonight's show", label: alert }                          # community theater
+  - { text: "reminder the returns cart is blocking the fire exit again", label: alert }                      # public library
+
+  # ── topic (neutral declarative assertion of a fact) ────────────────────
+  - { text: "so the new composite crowns set in about twenty minutes", label: topic }                       # dental clinic
+  - { text: "the east gantry moves about thirty boxes an hour when it's running", label: topic }            # shipping port
+  - { text: "the river's running high after all the snowmelt this week", label: topic }                      # ranger station
+  - { text: "our saturday print run is around forty thousand copies", label: topic }                         # newsroom
+  - { text: "the beginner slope stays open latest because it's floodlit", label: topic }                     # ski resort
+  - { text: "the old lathe runs quieter since we replaced the belt", label: topic }                          # machine shop
+  - { text: "nap time in the toddler room is right after lunch", label: topic }                              # daycare
+  - { text: "the seventh green drains slower than the rest of the course", label: topic }                    # golf grounds
+  - { text: "the second act runs about forty minutes with the set change", label: topic }                    # community theater
+  - { text: "the quiet study floor is the third one up by the stairs", label: topic }                        # public library
+
+  # ── followup (deontic suggestion for later) ────────────────────────────
+  - { text: "we should probably reorder the fluoride trays before next week", label: followup }             # dental clinic
+  - { text: "let's make sure to reweigh those pallets after the break", label: followup }                    # shipping port
+  - { text: "might be worth posting a fresh trail-closure notice tomorrow", label: followup }                # ranger station
+  - { text: "we ought to circle back with that source before we publish", label: followup }                  # newsroom
+  - { text: "let's revisit the grooming schedule once the storm passes", label: followup }                   # ski resort
+  - { text: "remind me to order more coolant at the end of the run", label: followup }                       # machine shop
+  - { text: "we should follow up with the pediatrician about the allergy form", label: followup }            # daycare
+  - { text: "let's plan to overseed the fairway after the tournament", label: followup }                     # golf grounds
+  - { text: "worth scheduling an extra dress rehearsal later this week", label: followup }                   # community theater
+  - { text: "we could put together a display for banned books week down the line", label: followup }         # public library
+
+  # ── none (phatic / backchannel / logistics — abstain) ──────────────────
+  - { text: "yeah no for sure", label: none }                                                                # dental clinic
+  - { text: "okay cool that works", label: none }                                                            # shipping port
+  - { text: "sorry say that again you cut out", label: none }                                                # ranger station
+  - { text: "right right yeah exactly", label: none }                                                        # newsroom
+  - { text: "hang on let me pull it up", label: none }                                                       # ski resort
+  - { text: "um yeah so anyway", label: none }                                                               # machine shop
+  - { text: "haha oh no totally", label: none }                                                              # daycare
+  - { text: "give me a sec my radio's buzzing", label: none }                                                # golf grounds
+  - { text: "great thanks everyone good work tonight", label: none }                                         # community theater
+  - { text: "yep sounds good talk later", label: none }                                                      # public library

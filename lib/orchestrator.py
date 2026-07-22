@@ -12,13 +12,14 @@ without monkey-patching process_chunk.
 """
 
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, List, Optional
 
 from lib.audio_capture import AudioCapture
 from lib.config import AppConfig
-from lib.paths import get_docs_dir, get_models_dir, get_output_dir, get_runner_dir
+from lib.paths import get_models_dir, get_output_dir, get_runner_dir
 
 if TYPE_CHECKING:
     from lib.audio_protocol import AudioCaptureProtocol
@@ -48,13 +49,25 @@ TriggerResultCallback = Callable[[Trigger, GenerationResult], None]
 
 
 def _resolve_rag_model(config: AppConfig) -> Path:
-    """Resolve RAG model path with LFM2.5 → LFM2 fallback."""
-    model = MODELS_DIR / "LFM2.5-1.2B-Instruct-Q4_K_M.gguf"
-    if not model.exists():
-        legacy = MODELS_DIR / "LFM2-1.2B-RAG-Q4_K_M.gguf"
-        if legacy.exists():
-            model = legacy
-    return model
+    """Resolve the answer model path from config, with fallbacks.
+
+    Primary comes from ``models.generation.model_file`` (D-03: default 2.6B).
+    If it is missing on disk, fall back to the 1.2B instruct model, then the
+    legacy LFM2 RAG model, so a fresh checkout still runs.
+    """
+    primary = MODELS_DIR / config.models.generation.model_file
+    if primary.exists():
+        return primary
+    for fallback in ("LFM2.5-1.2B-Instruct-Q4_K_M.gguf", "LFM2-1.2B-RAG-Q4_K_M.gguf"):
+        candidate = MODELS_DIR / fallback
+        if candidate.exists():
+            logger.warning(
+                "Answer model %s not found — falling back to %s",
+                config.models.generation.model_file,
+                fallback,
+            )
+            return candidate
+    return primary
 
 
 class MeetingOrchestrator:
@@ -88,6 +101,23 @@ class MeetingOrchestrator:
         self.on_transcription: Optional[TranscriptionCallback] = None
         self.on_silence_detected: Optional[SilenceCallback] = None
         self.on_trigger_result: Optional[TriggerResultCallback] = None
+        # Fired when a trigger passes the listen gate but yields no card.
+        self.on_trigger_miss: Optional[Callable[[Trigger], None]] = None
+
+        # Recently surfaced units, for cross-trigger duplicate suppression.
+        # Touched from both capture threads, so it takes its own lock.
+        self._recent_cards: dict[tuple[str, str, str], float] = {}
+        self._card_lock = threading.Lock()
+
+        # D-02: default quiet. Automatic cards are suppressed until the user
+        # arms the listen window; watch-word ALERTs stay always-on.
+        from lib.gating import ListenGate
+
+        self.listen_gate = ListenGate(
+            enabled=config.triggers.gating.enabled,
+            always_on=config.triggers.gating.always_on,
+            max_listen_seconds=config.triggers.gating.max_listen_seconds,
+        )
 
         # Load meeting context if provided
         self.meeting_context: Optional[MeetingContext] = None
@@ -106,9 +136,12 @@ class MeetingOrchestrator:
             self.lfm2 = LFM2Wrapper(MODELS_DIR, RUNNER_DIR, model_version="2.0")
             self._status("LFM2-Audio ready (legacy)")
 
-        # RAG retrieval (hybrid FTS5 + vector)
-        docs_dir = get_docs_dir(config.paths.docs_dir)
-        db_path = Path(config.rag.db_path)
+        # RAG retrieval (hybrid FTS5 + vector). The docs dir honors an activated
+        # prepared corpus (F-704: data/corpus_active.json, own DB) and otherwise
+        # falls back to the configured pair.
+        from lib.corpus.active import resolve_corpus
+
+        docs_dir, db_path = resolve_corpus(config.paths.docs_dir, config.rag.db_path)
         self._status("Loading RAG engine...")
         from lib.rag import RAGConfig as _RAGConfig
 
@@ -119,15 +152,31 @@ class MeetingOrchestrator:
             semantic_weight=config.rag.semantic_weight,
             lexical_top_k=config.rag.lexical_top_k,
             semantic_top_k=config.rag.semantic_top_k,
+            embedding_model=config.rag.embedding_model,
+            embedding_dimension=config.rag.embedding_dimension,
         )
         self.rag = RAGEngine(docs_dir, db_path=db_path, config=rag_config)
         self._status("RAG engine ready")
+        if config.triggers.retrieval_first:
+            # F-705: the live path is retrieval-only, so the embedder must be
+            # warm before the first trigger (cold load ~1.6s vs ~150ms budget).
+            # Embedder-only — no SQLite access — so a background thread is safe.
+            threading.Thread(target=self.rag.warm_up, daemon=True).start()
 
-        # Trigger engine
+        # Persistent warm-model runtime (F-508): single owner of the load-once
+        # models. The encoder it hands out stays lazy (no weights until embed()),
+        # so the probe head is wired-but-off at zero startup cost.
+        from lib.warm_runtime import WarmModelRuntime
+
+        self.runtime = WarmModelRuntime()
+        self.runtime.register("embedder", getattr(self.rag, "_embedder", None))
+
         trigger_config = config.triggers
         if self.meeting_context:
             trigger_config.watch_words = self.meeting_context.watch_words
-        self.trigger_engine = TriggerEngine(trigger_config, self.rag)
+
+        self.encoder = self.runtime.encoder()
+        self.trigger_engine = TriggerEngine(trigger_config, self.rag, encoder=self.encoder)
 
         # Conversation buffer (rolling transcript + trigger routing)
         self.buffer = ConversationBuffer(
@@ -144,6 +193,7 @@ class MeetingOrchestrator:
             min_extraction_confidence=config.detection.extraction_confidence_minimum,
             min_answer_length=config.triggers.min_answer_length,
         )
+        self.runtime.register("instruct", self.generator)
         self._status("Generation ready")
 
         # Audio capture: use provided capture (e.g. SystemAudioCapture) or default
@@ -258,7 +308,145 @@ class MeetingOrchestrator:
                 self._log_result(trigger, result)
 
     def _process_trigger(self, trigger: Trigger) -> Optional[GenerationResult]:
-        """Run RAG retrieval and generation for a single trigger."""
+        """Route an AUTOMATICALLY fired trigger, subject to the listen gate (D-02).
+
+        This is the single choke point both capture pipelines share (the
+        orchestrator's own ``_handle_triggers`` and the session's mic handler),
+        so gating here covers every automatic path by construction. Explicit
+        user requests — ``retrieve_for_text`` (select-to-answer) and
+        ``generate_for_text`` (the ✨ button) — deliberately do not pass through
+        it: the user asking *is* the permission.
+        """
+        if not self.listen_gate.allows(trigger.type.value):
+            logger.debug(
+                "listen gate: suppressed %s (disarmed) — %r",
+                trigger.type.value,
+                trigger.text[:60],
+            )
+            return None
+        if self.config.triggers.retrieval_first:
+            result = self._process_trigger_retrieval(trigger)
+        else:
+            result = self._process_trigger_generated(trigger)
+        if result is not None and self._is_duplicate_card(result):
+            logger.debug(
+                "duplicate card suppressed for %s (%s)", trigger.type.value, result.heading
+            )
+            return None
+        if result is None and self.on_trigger_miss:
+            # Heard, but nothing borrowable. Staying silent is right (F-202) —
+            # but with no signal at all, "the corpus can't answer this" is
+            # indistinguishable from "the pipeline is dead". Consumers surface
+            # this as a count, never as a card.
+            self.on_trigger_miss(trigger)
+        return result
+
+    def _is_duplicate_card(self, result: GenerationResult) -> bool:
+        """True when this exact unit was already shown recently (then records it).
+
+        Several triggers legitimately fire on one turn — a question about a topic
+        is also a topic match — and each independently retrieves the *same* best
+        unit. Without this the panel stacks an ANSWER and an FYI carrying
+        identical text, then repeats the pair as the speaker keeps talking.
+
+        Keyed on the source unit, not the trigger, so the highest-priority
+        trigger wins (ALERT > QUESTION > TOPIC > FOLLOW_UP, already sorted by the
+        engine) and the redundant restatements are dropped. User-initiated
+        answers never reach here — they bypass ``_process_trigger`` entirely, so
+        asking the same thing twice always answers twice.
+        """
+        window = self.config.triggers.duplicate_card_seconds
+        if window <= 0:
+            return False
+        key = (result.source, result.heading, result.answer[:120])
+        now = time.time()
+        with self._card_lock:
+            last = self._recent_cards.get(key)
+            if last is not None and (now - last) < window:
+                return True
+            self._recent_cards[key] = now
+            if len(self._recent_cards) > 200:  # bound for long sessions
+                cutoff = now - window
+                self._recent_cards = {k: t for k, t in self._recent_cards.items() if t >= cutoff}
+        return False
+
+    def retrieve_for_text(
+        self, text: str, trigger_type_value: str = "question"
+    ) -> Optional[GenerationResult]:
+        """Answer an explicitly selected span — select-to-answer (D-02, spatial).
+
+        Retrieval-first like the live path (no LLM, ~16-190ms), but gate-exempt
+        and independent of trigger detection: whatever the user highlighted is
+        the query, whether or not it looks like a question.
+        """
+        try:
+            ttype = TriggerType(trigger_type_value)
+        except ValueError:
+            ttype = TriggerType.QUESTION
+        trigger = Trigger(
+            type=ttype,
+            text=text,
+            confidence=1.0,
+            source_context=self.buffer.get_recent_context(),
+            timestamp=time.time(),
+        )
+        return self._process_trigger_retrieval(trigger)
+
+    def _process_trigger_retrieval(self, trigger: Trigger) -> Optional[GenerationResult]:
+        """Retrieval-first live path: show the best borrowable unit, no LLM.
+
+        ~120-190ms warm (retrieval only). Silence beats noise: nothing
+        answer-shaped over the confidence floor → no card. Generation remains
+        available on demand via generate_for_text (POST /prompts/generate).
+        """
+        from lib.corpus.readiness import live_borrowable
+
+        t0 = time.time()
+        query_text = normalize_text(trigger.text)
+        results = self.rag.retrieve(query_text, top_k=5)
+        card = live_borrowable(
+            results,
+            query_text,
+            min_confidence=self.config.detection.rag_confidence_minimum,
+            min_answer_length=self.config.triggers.min_answer_length,
+        )
+        if card is None:
+            logger.debug("retrieval-first: no borrowable unit for %s", trigger.type.value)
+            return None
+        return GenerationResult(
+            answer=str(card["answer"]),
+            trigger_type=trigger.type,
+            confidence=float(card["confidence"]),
+            method="retrieval",
+            latency_ms=(time.time() - t0) * 1000,
+            source=str(card["doc"]),
+            heading=str(card["heading"]),
+            source_text=str(card["full_text"]),
+        )
+
+    def generate_for_text(
+        self, text: str, trigger_type_value: str = "question"
+    ) -> Optional[GenerationResult]:
+        """On-demand generation (user-gated, D-02): the demoted LLM path.
+
+        Used by POST /prompts/generate when the user explicitly asks for a
+        generated answer on top of the borrowable unit.
+        """
+        try:
+            ttype = TriggerType(trigger_type_value)
+        except ValueError:
+            ttype = TriggerType.QUESTION
+        trigger = Trigger(
+            type=ttype,
+            text=text,
+            confidence=1.0,
+            source_context=self.buffer.get_recent_context(),
+            timestamp=time.time(),
+        )
+        return self._process_trigger_generated(trigger)
+
+    def _process_trigger_generated(self, trigger: Trigger) -> Optional[GenerationResult]:
+        """Generation path: RAG context → mode-aware LLM answer."""
         query_text = normalize_text(trigger.text)
 
         rag_context, confidence, source_file = self.rag.query(query_text)

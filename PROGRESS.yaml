@@ -8,7 +8,7 @@ active_work:
   - id: "WS-14"
     name: "Live dual-stream test (mic + per-app capture)"
     status: pending
-    notes: "Live Zoom/Teams call — validates F-604 segmentation, F-601/F-606 attribution, F-607 corrections; promotes F-507 (Extract) + F-508 (persistent ASR); and flips f503_router_enabled=true if F-503 holds live."
+    notes: "Live Zoom/Teams call — validates F-604 segmentation, F-601/F-606 attribution, F-607 corrections; promotes F-507 (Extract) + F-508 (persistent ASR); confirms or reverts f503_router_enabled (currently ON, unproven live). PREFLIGHT DONE 2026-07-22 (docs/ws14-live-call-checklist.md): models/runners/audio devices/backend/WS/cargo all verified; live retrieval path exercised end-to-end at 16-174ms. ONLY BLOCKER: Screen Recording permission (user action, else per-app capture silently degrades to mic-only)."
 
 blockers: []
 

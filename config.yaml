@@ -66,10 +66,13 @@ triggers:
   watch_words: []            # populated per-meeting via meeting_context.yaml
   cold_path_min_words: 3     # F-506: min words before RAG-backed (topic) heads run
   # F-503 forge-LoRA encoder router (LFM2.5-TriggerRouter-350M). Proven offline
-  # (real-transcript hybrid macro-F1 0.846 > probe 0.55 > heuristic 0.26); default
-  # OFF pending a live call (WS-14). true → supersedes the heuristic question head
-  # (question-rescue subsumes it) + adds shape alert/topic/followup; needs the
-  # adapter in MODELS_DIR (falls back to heuristics if absent).
+  # (real-transcript hybrid macro-F1 0.846 > probe 0.55 > heuristic 0.26).
+  # Currently ON so the live call (WS-14) actually exercises it — it supersedes
+  # the heuristic question head (question-rescue subsumes it) and adds shape
+  # alert/topic/followup; needs the adapter in MODELS_DIR (falls back to
+  # heuristics if absent). Set false to fall back to pure heuristics if triggers
+  # misfire during the call — that isolates "router is wrong" from "product is
+  # wrong". Still unvalidated live: that is what WS-14 decides.
   f503_router_enabled: true
   f503_router_min_confidence: 0.0
   min_answer_length: 10      # suppress answers shorter than this (F-202)

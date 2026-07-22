@@ -76,6 +76,7 @@ triggers:
   f503_router_enabled: true
   f503_router_min_confidence: 0.0
   min_answer_length: 10      # suppress answers shorter than this (F-202)
+  duplicate_card_seconds: 120  # don't re-show the same source unit within this window (0 = off)
   # D-02: default quiet — the user opens the tap instead of being pushed at.
   # Automatic cards fire only while the listen window is armed (Cmd+L, or
   # POST /prompts/listen); select-to-answer and the on-demand generate button
@@ -92,7 +93,13 @@ triggers:
   dismiss_ephemeral_ms: 45000 # FYI cards auto-dismiss (ms)
 
 refiner:
-  enabled: true
+  # OFF by default (D-07). It shares the 2.6B answer model, which is a reasoning
+  # model: it narrated its edits into the transcript ("Fixed version with
+  # corrections:") during the 2026-07-22 live test, and per-turn refinement on a
+  # 1.5-3.5s model is too slow for live use anyway. The transcript is a record
+  # the user exports — raw ASR beats corrupted prose. Re-enable once the refiner
+  # runs on its own fast small model.
+  enabled: false
   min_words_to_refine: 5    # skip LFM cleanup for very short turns
   max_tokens_ratio: 1.5     # max output tokens = input words * ratio
 

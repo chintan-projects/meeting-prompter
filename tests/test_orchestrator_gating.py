@@ -11,6 +11,7 @@ production code path rather than a reimplementation of it.
 
 from __future__ import annotations
 
+import threading
 import time
 from types import MethodType, SimpleNamespace
 from typing import Any, List, Optional
@@ -44,8 +45,13 @@ class _FakeOrchestrator:
         self.misses: List[str] = []
         self._finds = finds
         self.on_trigger_miss = lambda t: self.misses.append(t.text)
+        # Duplicate-card suppression state, mirroring the real __init__.
+        self.config.triggers.duplicate_card_seconds = 0.0  # off unless a test wants it
+        self._recent_cards: dict[tuple[str, str, str], float] = {}
+        self._card_lock = threading.Lock()
         self._process_trigger = MethodType(MeetingOrchestrator._process_trigger, self)
         self.retrieve_for_text = MethodType(MeetingOrchestrator.retrieve_for_text, self)
+        self._is_duplicate_card = MethodType(MeetingOrchestrator._is_duplicate_card, self)
 
     def _process_trigger_retrieval(self, trigger: Trigger) -> Optional[GenerationResult]:
         self.retrieval_calls.append(trigger.text)
@@ -177,3 +183,55 @@ class TestSelectToAnswerBypassesGate:
     def test_unknown_trigger_type_falls_back_to_question(self) -> None:
         orch: Any = _FakeOrchestrator(ListenGate())
         assert orch.retrieve_for_text("text", "nonsense") is not None
+
+
+class TestDuplicateCardSuppression:
+    """One turn legitimately fires several triggers — a question about a topic is
+    also a topic match — and each retrieves the SAME best unit. Live, that stacked
+    an ANSWER and an FYI with identical text, then repeated the pair.
+    """
+
+    def _orch(self, window: float = 120.0) -> Any:
+        gate = ListenGate()
+        gate.arm()
+        o = _FakeOrchestrator(gate)
+        o.config.triggers.duplicate_card_seconds = window
+        return o
+
+    def test_same_unit_from_a_second_trigger_is_dropped(self) -> None:
+        o = self._orch()
+        assert o._process_trigger(_trigger(TriggerType.QUESTION, "how does X work")) is not None
+        assert o._process_trigger(_trigger(TriggerType.TOPIC_MATCH, "X")) is None
+
+    def test_the_higher_priority_trigger_keeps_its_card(self) -> None:
+        """Engine sorts ALERT > QUESTION > TOPIC, so the ANSWER is emitted first
+        and the redundant FYI is the one dropped — not the other way round."""
+        o = self._orch()
+        first = o._process_trigger(_trigger(TriggerType.QUESTION, "how does X work"))
+        assert first is not None and first.trigger_type is TriggerType.QUESTION
+
+    def test_a_dropped_duplicate_is_not_counted_as_a_miss(self) -> None:
+        """A miss means the corpus failed; a duplicate means it succeeded twice."""
+        o = self._orch()
+        o._process_trigger(_trigger(TriggerType.QUESTION, "q"))
+        o._process_trigger(_trigger(TriggerType.TOPIC_MATCH, "t"))
+        assert o.misses == []
+
+    def test_window_of_zero_disables_suppression(self) -> None:
+        o = self._orch(window=0)
+        assert o._process_trigger(_trigger(TriggerType.QUESTION, "a")) is not None
+        assert o._process_trigger(_trigger(TriggerType.TOPIC_MATCH, "b")) is not None
+
+    def test_distinct_units_both_surface(self) -> None:
+        o = self._orch()
+        o._process_trigger(_trigger(TriggerType.QUESTION, "first"))
+        # A different source unit → different key → allowed through.
+        o._process_trigger_retrieval = lambda tr: GenerationResult(
+            answer="a different borrowable sentence",
+            trigger_type=tr.type,
+            confidence=0.8,
+            method="retrieval",
+            latency_ms=9.0,
+            source="other.md",
+        )
+        assert o._process_trigger(_trigger(TriggerType.TOPIC_MATCH, "second")) is not None

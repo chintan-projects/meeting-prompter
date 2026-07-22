@@ -85,19 +85,41 @@ def aggregate_coverage(records: list[dict[str, Any]], source: str = "human") -> 
     }
 
 
+def is_heading_only(text: str, heading: str = "") -> bool:
+    """True when a unit is a section title rather than an answer.
+
+    Sectioning leaves title-only chunks in the index ("Part 1 — Quantization:
+    Fewer Bits Per Weight"). A long title clears a word-count floor, so word
+    count alone cannot reject it — and it then wins retrieval on exactly the
+    queries it names, putting a card on screen that repeats the question back
+    as a heading. Structure is the discriminator: an answer is prose, so it
+    ends a sentence somewhere.
+    """
+    body = text.strip()
+    if not body:
+        return True
+    # A single line with no sentence-ending punctuation is a title, not prose.
+    if "\n" not in body and not re.search(r"[.!?](\s|$)", body):
+        return True
+    # Or the unit is literally (a prefix of) its own heading.
+    h = heading.split(" > ")[-1].strip().lower()
+    return bool(h) and body.lower().rstrip(".") == h.rstrip(".")
+
+
 def borrowable_card(result: RetrievalResult) -> dict[str, Any]:
     """One retrieval hit as a borrowable card: cleaned prose + provenance + scores."""
     cleaned = clean_markdown(result.chunk_text)
     words = len(cleaned.split())
+    heading = result.heading_path or result.section_heading or ""
     return {
         "chunk_id": result.chunk_id,
         "doc": Path(result.document_path).name,
-        "heading": result.heading_path or result.section_heading or "",
+        "heading": heading,
         "cosine": round(result.semantic_score, 4),
         "fused": round(result.score, 4),
         "text": cleaned,
         "words": words,
-        "answer_shaped": words >= BORROWABLE_MIN_WORDS,
+        "answer_shaped": words >= BORROWABLE_MIN_WORDS and not is_heading_only(cleaned, heading),
     }
 
 
@@ -312,9 +334,14 @@ def live_borrowable(
     if confidence < min_confidence:
         return None
     full = str(best["text"])
+    heading = str(best["heading"])
     glance, _ = extract_answer(full, query, max_sentences=2)
     answer = (glance or full).strip()
-    if len(answer) < min_answer_length:
+    # The unit is prose, but the most query-relevant line inside it can still be
+    # a sub-heading — which reads as the card repeating the question back.
+    if is_heading_only(answer, heading):
+        answer = full.strip()
+    if len(answer) < min_answer_length or is_heading_only(answer, heading):
         return None
     return {
         "answer": answer,

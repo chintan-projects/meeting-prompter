@@ -96,6 +96,10 @@ class TriggerConfig:
     followup_rag_threshold: float = 0.40
     watch_words: List[str] = field(default_factory=list)
     min_answer_length: int = 10  # suppress answers shorter than this (F-202)
+    # Seconds before the same source unit may be shown again. Several triggers
+    # fire on one turn and retrieve the same best unit; without this the panel
+    # stacks an ANSWER and an FYI with identical text. 0 disables.
+    duplicate_card_seconds: float = 120.0
     retrieval_first: bool = True  # F-705/D-08: live = borrowable unit, no LLM; generation on demand
     dismiss_persistent_ms: int = 0  # 0 = no auto-dismiss (Answer, Heads Up)
     dismiss_standard_ms: int = 90_000  # Suggest cards auto-dismiss (ms)

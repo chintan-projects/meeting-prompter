@@ -128,3 +128,51 @@ class TestRefinePromptFormat:
         """Stop tokens should prevent runaway generation."""
         assert "<|im_end|>" in _STOP_TOKENS
         assert "<|im_start|>" in _STOP_TOKENS
+
+
+class TestMetaNarrationGuard:
+    """The refiner shares the 2.6B reasoning model (D-07), which narrates its
+    edits ("Fixed version with corrections:") straight into the transcript —
+    observed live 2026-07-22. The transcript is a record the user exports, so
+    raw ASR beats corrupted prose.
+    """
+
+    def test_detects_fixed_version_preamble(self) -> None:
+        from lib.text_refiner import looks_like_meta
+
+        assert looks_like_meta('Fixed version with corrections:\n"The first test was."') is True
+
+    def test_detects_here_is_the_preamble(self) -> None:
+        from lib.text_refiner import looks_like_meta
+
+        assert looks_like_meta("Here's the cleaned transcript: we shipped it.") is True
+
+    def test_clean_output_passes(self) -> None:
+        from lib.text_refiner import looks_like_meta
+
+        assert looks_like_meta("The first test on what can be on display is this one.") is False
+
+    def test_refine_keeps_raw_text_when_model_narrates(self) -> None:
+        from lib.text_refiner import TextRefiner
+
+        raw = "the first test on what can be on display is this one it's sweet"
+
+        class _Narrating:
+            def generate_text(self, *a: object, **k: object) -> str:
+                return f'Fixed version with corrections:\n"{raw.capitalize()}."'
+
+        refiner = TextRefiner(_Narrating())  # type: ignore[arg-type]
+        assert refiner.refine(raw) == raw
+
+    def test_refine_still_accepts_a_clean_edit(self) -> None:
+        from lib.text_refiner import TextRefiner
+
+        raw = "the first test on what can be on display is this one it's sweet"
+        polished = "The first test on what can be on display is this one. It's sweet."
+
+        class _Clean:
+            def generate_text(self, *a: object, **k: object) -> str:
+                return polished
+
+        refiner = TextRefiner(_Clean())  # type: ignore[arg-type]
+        assert refiner.refine(raw) == polished

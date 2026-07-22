@@ -259,3 +259,69 @@ def test_min_words_constant_matches_lab() -> None:
     from scripts.lab.pipeline import BORROWABLE_MIN_WORDS as lab_min
 
     assert lab_min == BORROWABLE_MIN_WORDS
+
+
+class TestHeadingOnlyRejection:
+    """Section titles are not answers (2026-07-22 live test).
+
+    Sectioning leaves title-only chunks in the index. A long title clears the
+    word-count floor, then wins retrieval on exactly the query it names — so the
+    card repeats the question back as a heading. Word count cannot catch this;
+    structure can.
+    """
+
+    def test_bare_heading_is_rejected(self) -> None:
+        from lib.corpus.readiness import is_heading_only
+
+        assert is_heading_only("Part 1 — Quantization: Fewer Bits Per Weight") is True
+
+    def test_prose_is_accepted(self) -> None:
+        from lib.corpus.readiness import is_heading_only
+
+        assert (
+            is_heading_only(
+                "Quantization rounds weights to a tiny codebook plus a group scale."
+            )
+            is False
+        )
+
+    def test_unit_equal_to_its_own_heading_is_rejected(self) -> None:
+        from lib.corpus.readiness import is_heading_only
+
+        assert is_heading_only("Deployment Timeline.", "Part 2 > Deployment Timeline") is True
+
+    def test_empty_is_rejected(self) -> None:
+        from lib.corpus.readiness import is_heading_only
+
+        assert is_heading_only("   ") is True
+
+    def test_multiline_prose_without_final_period_is_kept(self) -> None:
+        """Real units wrap across lines; only single-line no-punctuation is a title."""
+        from lib.corpus.readiness import is_heading_only
+
+        assert is_heading_only("First the model rounds weights.\nThen it rescales") is False
+
+    def test_borrowable_card_marks_heading_not_answer_shaped(self) -> None:
+        from lib.corpus.readiness import borrowable_card
+
+        card = borrowable_card(_result("Part 1 — Quantization: Fewer Bits Per Weight", 0.9))
+        assert card["words"] >= 8, "must clear the word floor — that's why it slipped through"
+        assert card["answer_shaped"] is False
+
+    def test_live_borrowable_returns_none_when_only_heading_matches(self) -> None:
+        """End to end: the screenshot case — a card whose whole answer is a title."""
+        from lib.corpus.readiness import live_borrowable
+
+        hits = [_result("Part 1 — Quantization: Fewer Bits Per Weight", 0.9)]
+        assert live_borrowable(hits, "how does quantization work", min_confidence=0.35) is None
+
+    def test_live_borrowable_prefers_the_prose_hit(self) -> None:
+        from lib.corpus.readiness import live_borrowable
+
+        hits = [
+            _result("Part 1 — Quantization: Fewer Bits Per Weight", 0.9, chunk_id=1),
+            _result(PROSE, 0.8, chunk_id=2),
+        ]
+        card = live_borrowable(hits, "how much does INT4 cost", min_confidence=0.35)
+        assert card is not None
+        assert "Part 1 —" not in str(card["answer"])

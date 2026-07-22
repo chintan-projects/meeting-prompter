@@ -104,6 +104,11 @@ class MeetingOrchestrator:
         # Fired when a trigger passes the listen gate but yields no card.
         self.on_trigger_miss: Optional[Callable[[Trigger], None]] = None
 
+        # Recently surfaced units, for cross-trigger duplicate suppression.
+        # Touched from both capture threads, so it takes its own lock.
+        self._recent_cards: dict[tuple[str, str, str], float] = {}
+        self._card_lock = threading.Lock()
+
         # D-02: default quiet. Automatic cards are suppressed until the user
         # arms the listen window; watch-word ALERTs stay always-on.
         from lib.gating import ListenGate
@@ -323,6 +328,11 @@ class MeetingOrchestrator:
             result = self._process_trigger_retrieval(trigger)
         else:
             result = self._process_trigger_generated(trigger)
+        if result is not None and self._is_duplicate_card(result):
+            logger.debug(
+                "duplicate card suppressed for %s (%s)", trigger.type.value, result.heading
+            )
+            return None
         if result is None and self.on_trigger_miss:
             # Heard, but nothing borrowable. Staying silent is right (F-202) —
             # but with no signal at all, "the corpus can't answer this" is
@@ -330,6 +340,35 @@ class MeetingOrchestrator:
             # this as a count, never as a card.
             self.on_trigger_miss(trigger)
         return result
+
+    def _is_duplicate_card(self, result: GenerationResult) -> bool:
+        """True when this exact unit was already shown recently (then records it).
+
+        Several triggers legitimately fire on one turn — a question about a topic
+        is also a topic match — and each independently retrieves the *same* best
+        unit. Without this the panel stacks an ANSWER and an FYI carrying
+        identical text, then repeats the pair as the speaker keeps talking.
+
+        Keyed on the source unit, not the trigger, so the highest-priority
+        trigger wins (ALERT > QUESTION > TOPIC > FOLLOW_UP, already sorted by the
+        engine) and the redundant restatements are dropped. User-initiated
+        answers never reach here — they bypass ``_process_trigger`` entirely, so
+        asking the same thing twice always answers twice.
+        """
+        window = self.config.triggers.duplicate_card_seconds
+        if window <= 0:
+            return False
+        key = (result.source, result.heading, result.answer[:120])
+        now = time.time()
+        with self._card_lock:
+            last = self._recent_cards.get(key)
+            if last is not None and (now - last) < window:
+                return True
+            self._recent_cards[key] = now
+            if len(self._recent_cards) > 200:  # bound for long sessions
+                cutoff = now - window
+                self._recent_cards = {k: t for k, t in self._recent_cards.items() if t >= cutoff}
+        return False
 
     def retrieve_for_text(
         self, text: str, trigger_type_value: str = "question"

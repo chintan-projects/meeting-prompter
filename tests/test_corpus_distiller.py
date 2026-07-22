@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from lib.corpus import distiller
+from lib.corpus import distiller, local
 from lib.corpus.text import clean_markdown
 
 
@@ -88,6 +88,58 @@ def test_distill_writes_markdown_with_provenance(tmp_path: Path) -> None:
     body = out.read_text(encoding="utf-8")
     assert "_Source: doc.md ›" in body  # provenance pointer present
     assert "## Section A" in body
+
+
+# --- local backend (F-702 v1) ----------------------------------------------
+class _StubGenerator:
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
+        self.prompts: list[str] = []
+
+    def generate_text(self, prompt: str, max_tokens: int = 0) -> str:
+        self.prompts.append(prompt)
+        return self.reply
+
+
+def _local_with(reply: str) -> "local.LocalDistiller":
+    d = local.LocalDistiller.__new__(local.LocalDistiller)
+    d.model_path = Path("/nonexistent.gguf")
+    d._generator = _StubGenerator(reply)  # type: ignore[assignment]
+    return d
+
+
+SECTION = (
+    "| Level | Strength |\n|---|---|\n| Logit | Strongest |\n| Text | Universal |\n\n"
+    "The tokenizer constraint is the practical fork: different vocabularies make "
+    "logit-level transfer impossible, so cross-family distillation is text-level."
+)
+
+
+def test_local_distill_returns_model_answer() -> None:
+    d = _local_with("There are two levels: logit-level (strongest) and text-level (universal).")
+    units = d.distill_section("2.4 Three Levels", SECTION)
+    assert units == ["There are two levels: logit-level (strongest) and text-level (universal)."]
+    # the model saw the RAW section — table intact
+    assert "| Logit | Strongest |" in d._generator.prompts[0]  # type: ignore[attr-defined]
+
+
+def test_local_distill_skips_thin_sections_without_calling_model() -> None:
+    d = _local_with("should never be called")
+    assert d.distill_section("Nav", "too short") == []
+    assert d._generator.prompts == []  # type: ignore[attr-defined]
+
+
+def test_local_distill_falls_back_to_heuristic_on_refusal() -> None:
+    d = _local_with("NONE")
+    units = d.distill_section("2.4 Three Levels", SECTION)
+    # section has real prose → heuristic floor, not empty
+    assert units and "tokenizer constraint" in units[0]
+
+
+def test_local_backend_unavailable_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(local, "_instance", _local_with("x"))
+    with pytest.raises(RuntimeError, match="local backend needs the generation model"):
+        distiller.distill(Path("/x.md"), Path("/y.md"), backend="local")
 
 
 # --- backend guard rails ---------------------------------------------------

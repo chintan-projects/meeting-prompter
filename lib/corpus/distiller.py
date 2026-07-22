@@ -12,7 +12,9 @@ Backends (ADR-001):
   - cloud: Claude extracts crisp, self-contained statements from each section,
     grounded ONLY in the section text. OFFLINE validation / training-data only —
     never the shipped default (see lib.corpus.cloud).
-  - local (planned, F-702): a forged on-device small model becomes the default.
+  - local (F-702 v1): on-device prompted model (lib.corpus.local) — the shipped
+    default per ADR-001; the forged fine-tuned specialist replaces the prompt
+    behind the same interface. Per-section heuristic fallback = quality floor.
 
 Modes:
   - atomic: 1-5 short facts per section (glanceable, but fragments compound answers).
@@ -41,7 +43,7 @@ MAX_UNIT_WORDS = 60  # keep atomic units glanceable
 MAX_SECTION_CHARS = 6000  # cap section text sent to the cloud extractor (token budget)
 MAX_TOPIC_CHARS = 12000  # cap the concatenated Part text for a topic-level unit
 
-BACKENDS = ("heuristic", "cloud")
+BACKENDS = ("heuristic", "local", "cloud")
 
 _CLOUD_SYSTEM = """You extract BORROWABLE answer-statements from a documentation section \
 for a meeting-assistant corpus. A borrowable statement is one a speaker could read aloud \
@@ -169,6 +171,17 @@ def _emit(lines: list[str], src_name: str, heading: str, unit: str, prov: str) -
     lines.extend([f"## {heading}", "", unit, "", f"_Source: {src_name} › {prov}_", ""])
 
 
+def _distill_local(heading: str, text: str, mode: str = "consolidated") -> list[str]:
+    """Local on-device backend (F-702): the shipped default per ADR-001.
+
+    Always consolidated (one complete answer per section) — the product mode;
+    the ``mode`` parameter is accepted for interface parity and ignored.
+    """
+    from lib.corpus.local import get_local_distiller
+
+    return get_local_distiller().distill_section(heading, text)
+
+
 def _backend_fn(backend: str) -> Callable[[str, str, str], list[str]]:
     """Resolve a backend name to its section→units function (fail fast on typos)."""
     if backend == "cloud":
@@ -177,6 +190,16 @@ def _backend_fn(backend: str) -> Callable[[str, str, str], list[str]]:
             # Fail fast rather than making 80 doomed API calls that each return [].
             raise RuntimeError(f"cloud backend needs a credential: {hint}")
         return _distill_cloud
+    if backend == "local":
+        from lib.corpus.local import get_local_distiller
+
+        if not get_local_distiller().available():
+            raise RuntimeError(
+                f"local backend needs the generation model on disk "
+                f"(missing: {get_local_distiller().model_path}); "
+                "set MODELS_DIR/CORPUS_LOCAL_MODEL or use backend='heuristic'"
+            )
+        return _distill_local
     if backend == "heuristic":
         return _distill_heuristic
     raise ValueError(f"unknown distiller backend {backend!r} (choose from {BACKENDS})")

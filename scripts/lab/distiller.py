@@ -46,7 +46,13 @@ def main() -> None:
         description="Distill an explainer doc into borrowable answer-units."
     )
     ap.add_argument("src", nargs="?", help="source .md (default: the configured corpus doc)")
-    ap.add_argument("--backend", choices=["heuristic", "cloud"], default="heuristic")
+    ap.add_argument(
+        "--backend",
+        choices=["heuristic", "local", "cloud"],
+        default="local",
+        help="local = on-device model (shipped default, ADR-001); "
+        "heuristic = no-model floor; cloud = offline validation only",
+    )
     ap.add_argument(
         "--mode",
         choices=["atomic", "consolidated"],

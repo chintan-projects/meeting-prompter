@@ -215,11 +215,13 @@ corpus (`on-device-capability-playbook.md`) as an *explainer, not an answer bank
 The distiller reshapes it into grounded answer-units; the judge/coverage loop is the
 acceptance test. Findings, in order:
 
-1. **Reshaping works, measured.** Cloud distill (atomic) lifted borrowable-answer
-   **coverage 25% → 50%** on a 4-question probe. Retrieval and models unchanged — only
-   the corpus *shape* changed. Even the *free heuristic* pass fixed a retrieval miss
-   (speculative-decoding stopped retrieving §9.3 training, found §5.5 "Provably
-   Lossless") and raised distillation cosine 0.537 → 0.656.
+1. **Reshaping works, measured.** Cloud distill lifted borrowable-answer coverage
+   **25% → 50%** (atomic) → **75%** (consolidated + table-reading fix), on a 4-question
+   probe. Retrieval and models unchanged — only the corpus *shape* changed. Even the
+   *free heuristic* pass fixed a retrieval miss (speculative-decoding stopped
+   retrieving §9.3 training, found §5.5 "Provably Lossless") and raised distillation
+   cosine 0.537 → 0.656. The **prediction held**: distillation `partial → good` once
+   the three-levels table was read; INT4 stayed `partial` (see #4).
 
 2. **Atomic extraction fragments compound answers.** "The three levels AND when to use
    each" got split across units → `partial`. Fix: **consolidated mode** (now default) —

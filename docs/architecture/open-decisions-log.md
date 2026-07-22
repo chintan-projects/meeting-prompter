@@ -297,3 +297,39 @@ finding #4) needs an operator run with ANTHROPIC_API_KEY:
 **Remaining caveat:** the local rater is uncalibrated against the judge at n=21;
 its `good` gate is conservative (double gate: cosine + term coverage), so 71% is
 more likely an under- than over-statement — but the judge run is the trust gate.
+
+### T5–T8 landed (2026-07-22): local distiller, wizard, retrieval-first live, incremental
+
+- **F-702 v1 (T5)** — `backend="local"`: the config-driven generation model
+  (LFM2.5-2.6B, D-03) prompted for section → answer-unit, via RAGAnswerGenerator
+  (Metal, thread-safe), raw sections in (tables intact), `clean_markdown` on the
+  way out, per-section heuristic fallback as the quality floor. **No egress**
+  (verified: no credential in env). Full playbook: 88 units (77 sections + 11
+  topic units), 0 empty, ~5s/section. It prose-ifies the "three levels" table
+  completely — the thing the heuristic provably cannot do. **Coverage (21-q,
+  local rater): 67% good, 0 gaps** vs heuristic's 71% — equal within noise
+  (±1 question) on this rater, which under-credits reshaping (term overlap
+  favors verbatim text). The judge run will quantify the local backend's real
+  edge. The **forge fine-tune** (cloud-distilled training pairs → specialist)
+  remains open as F-702 v2; the prompted v1 is the shipped default meanwhile
+  (CLI + API default `local`; library default stays `heuristic` for tests).
+- **F-706 (T8)** — `distill_dir`: content-hash manifest, only changed docs
+  re-distill, deleted sources' outputs removed, backend/mode change invalidates
+  all (no mixed-provenance corpora).
+- **F-704 (T6)** — Prepare-corpus wizard (`CorpusPrep.tsx` from Meeting Setup):
+  sources list + upload → distill (background job + progress) → readiness score
+  + gap list (provenance, merged badge) → activate. Activation writes
+  `data/corpus_active.json` (own index DB `data/rag_active.db`); the
+  orchestrator resolves it at session construction — applies next session start.
+- **F-705 (T7)** — retrieval-first live loop ON by default
+  (`triggers.retrieval_first: true`): trigger → `RAGEngine.retrieve` →
+  `live_borrowable` (best answer-shaped card, glanceable sentences via
+  answer_extractor, full unit + heading as expand-to-source) → `/ws/prompts`
+  with `method="retrieval"`, `heading`, `source_text`. No LLM in the path;
+  embedder pre-warmed on session start (cold ~1.6s → warm path). Generation
+  demoted to user-gated `POST /prompts/generate` (D-02). Flip
+  `retrieval_first: false` to restore the old path.
+
+**Operator follow-ups:** (1) judge run for calibration + INT4 confirmation
+(`--rater judge`, needs key); (2) live call (WS-14) to validate the borrowable
+view UX + latency budget; (3) F-702 v2 forge fine-tune decision after (1).

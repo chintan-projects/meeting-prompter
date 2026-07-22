@@ -79,6 +79,22 @@ class RAGEngine:
             self.docs_dir,
         )
 
+    def warm_up(self) -> None:
+        """Pre-load the embedding model so the first live query is warm.
+
+        The cold first embed costs ~1.6s (model load); steady-state is fast.
+        Call on session start (F-705) — safe from a background thread: touches
+        only the embedder, never the SQLite connection.
+        """
+        try:
+            embed_query = getattr(self._embedder, "embed_query", None)
+            if callable(embed_query):
+                embed_query("warm up")
+            else:
+                self._embedder.embed("warm up")
+        except Exception as e:
+            logger.debug("RAG warm-up failed (non-fatal): %s", e)
+
     def retrieve(self, text: str, top_k: int = 5) -> "list[RetrievalResult]":
         """Full hybrid retrieval with per-result scores and citations.
 

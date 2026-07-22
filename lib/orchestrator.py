@@ -12,13 +12,14 @@ without monkey-patching process_chunk.
 """
 
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, List, Optional
 
 from lib.audio_capture import AudioCapture
 from lib.config import AppConfig
-from lib.paths import get_docs_dir, get_models_dir, get_output_dir, get_runner_dir
+from lib.paths import get_models_dir, get_output_dir, get_runner_dir
 
 if TYPE_CHECKING:
     from lib.audio_protocol import AudioCaptureProtocol
@@ -118,9 +119,12 @@ class MeetingOrchestrator:
             self.lfm2 = LFM2Wrapper(MODELS_DIR, RUNNER_DIR, model_version="2.0")
             self._status("LFM2-Audio ready (legacy)")
 
-        # RAG retrieval (hybrid FTS5 + vector)
-        docs_dir = get_docs_dir(config.paths.docs_dir)
-        db_path = Path(config.rag.db_path)
+        # RAG retrieval (hybrid FTS5 + vector). The docs dir honors an activated
+        # prepared corpus (F-704: data/corpus_active.json, own DB) and otherwise
+        # falls back to the configured pair.
+        from lib.corpus.active import resolve_corpus
+
+        docs_dir, db_path = resolve_corpus(config.paths.docs_dir, config.rag.db_path)
         self._status("Loading RAG engine...")
         from lib.rag import RAGConfig as _RAGConfig
 
@@ -136,6 +140,11 @@ class MeetingOrchestrator:
         )
         self.rag = RAGEngine(docs_dir, db_path=db_path, config=rag_config)
         self._status("RAG engine ready")
+        if config.triggers.retrieval_first:
+            # F-705: the live path is retrieval-only, so the embedder must be
+            # warm before the first trigger (cold load ~1.6s vs ~150ms budget).
+            # Embedder-only — no SQLite access — so a background thread is safe.
+            threading.Thread(target=self.rag.warm_up, daemon=True).start()
 
         # Persistent warm-model runtime (F-508): single owner of the load-once
         # models. The encoder it hands out stays lazy (no weights until embed()),
@@ -282,7 +291,66 @@ class MeetingOrchestrator:
                 self._log_result(trigger, result)
 
     def _process_trigger(self, trigger: Trigger) -> Optional[GenerationResult]:
-        """Run RAG retrieval and generation for a single trigger."""
+        """Route a trigger: retrieval-first (default, F-705/D-08) or generation."""
+        if self.config.triggers.retrieval_first:
+            return self._process_trigger_retrieval(trigger)
+        return self._process_trigger_generated(trigger)
+
+    def _process_trigger_retrieval(self, trigger: Trigger) -> Optional[GenerationResult]:
+        """Retrieval-first live path: show the best borrowable unit, no LLM.
+
+        ~120-190ms warm (retrieval only). Silence beats noise: nothing
+        answer-shaped over the confidence floor → no card. Generation remains
+        available on demand via generate_for_text (POST /prompts/generate).
+        """
+        from lib.corpus.readiness import live_borrowable
+
+        t0 = time.time()
+        query_text = normalize_text(trigger.text)
+        results = self.rag.retrieve(query_text, top_k=5)
+        card = live_borrowable(
+            results,
+            query_text,
+            min_confidence=self.config.detection.rag_confidence_minimum,
+            min_answer_length=self.config.triggers.min_answer_length,
+        )
+        if card is None:
+            logger.debug("retrieval-first: no borrowable unit for %s", trigger.type.value)
+            return None
+        return GenerationResult(
+            answer=str(card["answer"]),
+            trigger_type=trigger.type,
+            confidence=float(card["confidence"]),
+            method="retrieval",
+            latency_ms=(time.time() - t0) * 1000,
+            source=str(card["doc"]),
+            heading=str(card["heading"]),
+            source_text=str(card["full_text"]),
+        )
+
+    def generate_for_text(
+        self, text: str, trigger_type_value: str = "question"
+    ) -> Optional[GenerationResult]:
+        """On-demand generation (user-gated, D-02): the demoted LLM path.
+
+        Used by POST /prompts/generate when the user explicitly asks for a
+        generated answer on top of the borrowable unit.
+        """
+        try:
+            ttype = TriggerType(trigger_type_value)
+        except ValueError:
+            ttype = TriggerType.QUESTION
+        trigger = Trigger(
+            type=ttype,
+            text=text,
+            confidence=1.0,
+            source_context=self.buffer.get_recent_context(),
+            timestamp=time.time(),
+        )
+        return self._process_trigger_generated(trigger)
+
+    def _process_trigger_generated(self, trigger: Trigger) -> Optional[GenerationResult]:
+        """Generation path: RAG context → mode-aware LLM answer."""
         query_text = normalize_text(trigger.text)
 
         rag_context, confidence, source_file = self.rag.query(query_text)

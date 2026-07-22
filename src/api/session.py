@@ -416,6 +416,8 @@ class Session:
                 "method": result.method,
                 "latency_ms": result.latency_ms,
                 "source": result.source,
+                "heading": result.heading,
+                "source_text": result.source_text,
                 "persistence": persistence,
                 "dismiss_ms": dismiss_ms,
                 "display_label": trigger.type.label,

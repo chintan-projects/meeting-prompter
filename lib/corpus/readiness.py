@@ -289,6 +289,42 @@ def readiness(
     }
 
 
+def live_borrowable(
+    results: Sequence[RetrievalResult],
+    query: str,
+    min_confidence: float,
+    min_answer_length: int = 10,
+) -> Union[dict[str, Any], None]:
+    """The retrieval-first live answer (F-705/D-08): the best borrowable unit
+    for a live trigger, glanceable, with expand-to-source provenance. No LLM.
+
+    Returns ``{answer, full_text, doc, heading, confidence}`` or None when
+    nothing answer-shaped clears the confidence floor — silence beats noise.
+    ``answer`` is the most question-relevant sentence(s) of the unit
+    (glanceable); ``full_text`` is the whole cleaned unit for expansion.
+    """
+    from lib.answer_extractor import extract_answer
+
+    best = next((c for c in map(borrowable_card, results) if c["answer_shaped"]), None)
+    if best is None:
+        return None
+    confidence = float(best.get("fused") or best.get("cosine") or 0.0)
+    if confidence < min_confidence:
+        return None
+    full = str(best["text"])
+    glance, _ = extract_answer(full, query, max_sentences=2)
+    answer = (glance or full).strip()
+    if len(answer) < min_answer_length:
+        return None
+    return {
+        "answer": answer,
+        "full_text": full,
+        "doc": str(best["doc"]),
+        "heading": str(best["heading"]),
+        "confidence": confidence,
+    }
+
+
 def _build_engine(docs_dir: Path, db_path: Union[Path, None]) -> Any:
     """Index a docs directory into a throwaway readiness DB and return the engine."""
     from lib.config import load_config

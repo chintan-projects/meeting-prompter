@@ -73,6 +73,9 @@ triggers:
   f503_router_enabled: true
   f503_router_min_confidence: 0.0
   min_answer_length: 10      # suppress answers shorter than this (F-202)
+  # F-705 / D-08: retrieval-first live loop — show the borrowable unit (no LLM,
+  # ~120-190ms warm); generation is demoted to on-demand (POST /prompts/generate).
+  retrieval_first: true
   dismiss_persistent_ms: 0   # 0 = no auto-dismiss (Answer, Heads Up)
   dismiss_standard_ms: 90000 # Suggest cards auto-dismiss (ms)
   dismiss_ephemeral_ms: 45000 # FYI cards auto-dismiss (ms)

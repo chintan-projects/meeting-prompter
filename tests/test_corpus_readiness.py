@@ -215,6 +215,45 @@ def test_readiness_empty_questions_scores_zero() -> None:
     assert out["score_pct"] == 0 and out["questions"] == 0
 
 
+# --- live_borrowable (F-705 retrieval-first) --------------------------------
+def test_live_borrowable_returns_glanceable_answer_with_provenance() -> None:
+    from lib.corpus.readiness import live_borrowable
+
+    results = [_result(PROSE, 0.8, doc="playbook.md")]
+    card = live_borrowable(results, "How much does INT4 quantization hurt accuracy?", 0.35)
+    assert card is not None
+    assert card["doc"] == "playbook.md" and card["heading"] == "Part > Section"
+    assert card["full_text"] == clean_or(PROSE)
+    assert card["answer"] and len(card["answer"]) <= len(card["full_text"])
+
+
+def clean_or(text: str) -> str:
+    from lib.corpus.text import clean_markdown
+
+    return clean_markdown(text)
+
+
+def test_live_borrowable_silent_below_confidence_floor() -> None:
+    from lib.corpus.readiness import live_borrowable
+
+    assert live_borrowable([_result(PROSE, 0.2)], "any question", 0.35) is None
+
+
+def test_live_borrowable_skips_non_answer_shaped() -> None:
+    from lib.corpus.readiness import live_borrowable
+
+    table_only = _result("| a | b |\n|---|---|\n| 1 | 2 |", 0.9, doc="t.md", chunk_id=1)
+    prose = _result(PROSE, 0.7, doc="p.md", chunk_id=2)
+    card = live_borrowable([table_only, prose], "INT4 accuracy?", 0.35)
+    assert card is not None and card["doc"] == "p.md"
+
+
+def test_live_borrowable_empty_retrieval_is_silent() -> None:
+    from lib.corpus.readiness import live_borrowable
+
+    assert live_borrowable([], "question", 0.35) is None
+
+
 def test_min_words_constant_matches_lab() -> None:
     # The lab re-exports these — keep one source of truth.
     from scripts.lab.pipeline import BORROWABLE_MIN_WORDS as lab_min

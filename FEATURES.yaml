@@ -724,7 +724,7 @@ workstreams:
           - new: lib/corpus/distiller.py
       - id: F-702
         name: "Local distiller model (on-device, no cloud egress)"
-        status: backlog
+        status: in_progress  # 2026-07-22: v1 shipped — prompted LFM2.5-2.6B backend (backend="local", default in CLI/API), 88 units on playbook, 0 gaps, tables prose-ified; forge fine-tune (train specialist on cloud-distilled pairs) still open
         effort: XL
         description: >
           Forge a local small model for the section → grounded-answer-unit task
@@ -750,7 +750,7 @@ workstreams:
           - new: lib/corpus/readiness.py
       - id: F-704
         name: "'Prepare corpus' onboarding wizard (Tauri)"
-        status: backlog
+        status: done  # 2026-07-22: CorpusPrep.tsx (sources/upload → distill w/ progress → readiness+gaps → activate); routes/corpus.py; active-corpus state honored by orchestrator
         effort: L
         description: >
           Add sources (folder/upload/Notion) → distill (progress) → readiness
@@ -761,7 +761,7 @@ workstreams:
           - src/api/routes/context.py
       - id: F-705
         name: "Retrieval-first live borrowable view"
-        status: backlog
+        status: done  # 2026-07-22: triggers.retrieval_first=true — live = borrowable unit + expand-to-source, no LLM; generation demoted to POST /prompts/generate; embedder pre-warmed on session start
         effort: M
         description: >
           Live: retrieve the borrowable answer-unit + source, glanceable,
@@ -773,7 +773,7 @@ workstreams:
           - lib/answer_extractor.py
       - id: F-706
         name: "Incremental re-distill on doc change"
-        status: backlog
+        status: done  # 2026-07-22: lib/corpus/incremental.py distill_dir — content-hash manifest, only changed docs re-distill, orphan outputs removed
         effort: S
         description: >
           Re-distill only changed documents when the corpus updates, keeping the

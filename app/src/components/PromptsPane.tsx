@@ -1,4 +1,6 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
+
+const API_BASE = "http://127.0.0.1:8420";
 
 interface PromptResult {
   id: number;
@@ -9,6 +11,8 @@ interface PromptResult {
   method: string;
   latency_ms: number;
   source: string;
+  heading?: string;
+  source_text?: string;
   receivedAt: number;
   persistence: "persistent" | "standard" | "ephemeral";
   dismiss_ms: number;
@@ -175,6 +179,32 @@ function PromptCard({
   const emoji = getEmoji(result);
   const persistence = getPersistence(result);
   const isCoaching = result.trigger_type === "follow_up";
+  // Retrieval-first (F-705): borrowable unit with expand-to-source; generation
+  // is user-gated (D-02) via the on-demand button.
+  const isBorrowable = result.method === "retrieval";
+  const [showSource, setShowSource] = useState(false);
+  const [genAnswer, setGenAnswer] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const hasExpandableSource =
+    !!result.source_text && result.source_text.trim() !== result.answer.trim();
+
+  const generateOnDemand = () => {
+    setGenerating(true);
+    fetch(`${API_BASE}/prompts/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        trigger_text: result.trigger_text,
+        trigger_type: result.trigger_type,
+      }),
+    })
+      .then((r) => r.json())
+      .then((data: { answer?: string; note?: string }) => {
+        setGenAnswer(data.answer || data.note || "no grounded answer available");
+      })
+      .catch(() => setGenAnswer("generation failed"))
+      .finally(() => setGenerating(false));
+  };
 
   return (
     <div
@@ -238,11 +268,45 @@ function PromptCard({
         {result.answer}
       </div>
 
-      {/* Source — always visible */}
-      {result.source && (
-        <div style={styles.source}>
-          {"\ud83d\udcce"} {result.source}
+      {/* On-demand generated answer (user-gated, D-02) */}
+      {genAnswer && (
+        <div style={styles.genAnswer}>
+          <span style={styles.genLabel}>GENERATED</span> {genAnswer}
         </div>
+      )}
+
+      {/* Source: always visible; borrowable units expand to their source unit */}
+      {result.source && (
+        <div style={styles.sourceRow}>
+          <span
+            style={{
+              ...styles.source,
+              ...(hasExpandableSource ? styles.sourceClickable : {}),
+            }}
+            onClick={() => hasExpandableSource && setShowSource((v) => !v)}
+            title={hasExpandableSource ? "Expand source" : undefined}
+          >
+            {"\ud83d\udcce"} {result.source}
+            {result.heading ? ` \u203a ${result.heading}` : ""}
+            {hasExpandableSource ? (showSource ? " \u25be" : " \u25b8") : ""}
+          </span>
+          {isBorrowable && (
+            <button
+              style={styles.genBtn}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!generating && !genAnswer) generateOnDemand();
+              }}
+              disabled={generating || !!genAnswer}
+              title="Generate an answer with the on-device model"
+            >
+              {generating ? "generating\u2026" : "\u2728 generate"}
+            </button>
+          )}
+        </div>
+      )}
+      {showSource && hasExpandableSource && (
+        <div style={styles.sourceExpand}>{result.source_text}</div>
       )}
     </div>
   );
@@ -346,9 +410,56 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-primary)",
   },
   source: {
-    marginTop: 6,
     fontSize: 11,
     color: "var(--text-muted)",
     fontFamily: "var(--font-mono)",
+  },
+  sourceRow: {
+    marginTop: 6,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  sourceClickable: {
+    cursor: "pointer",
+    textDecoration: "underline dotted",
+  },
+  sourceExpand: {
+    marginTop: 6,
+    padding: "8px 10px",
+    background: "var(--bg-primary)",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    fontSize: 12,
+    lineHeight: 1.5,
+    color: "var(--text-secondary)",
+    whiteSpace: "pre-wrap" as const,
+  },
+  genBtn: {
+    flexShrink: 0,
+    background: "transparent",
+    border: "1px solid var(--border)",
+    borderRadius: 5,
+    color: "var(--text-secondary)",
+    fontSize: 10,
+    padding: "2px 8px",
+    cursor: "pointer",
+  },
+  genAnswer: {
+    marginTop: 6,
+    padding: "8px 10px",
+    background: "var(--bg-primary)",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    fontSize: 13,
+    lineHeight: 1.5,
+  },
+  genLabel: {
+    fontSize: 9,
+    fontWeight: 700,
+    letterSpacing: 1,
+    color: "var(--text-muted)",
+    marginRight: 4,
   },
 };

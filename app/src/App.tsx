@@ -25,6 +25,8 @@ interface PromptResult {
   method: string;
   latency_ms: number;
   source: string;
+  heading?: string;
+  source_text?: string;
   receivedAt: number;
   persistence: "persistent" | "standard" | "ephemeral";
   dismiss_ms: number;

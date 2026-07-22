@@ -1,13 +1,48 @@
-"""Prompts WebSocket — real-time trigger result streaming."""
+"""Prompts WebSocket + on-demand generation.
+
+The live path is retrieval-first (F-705/D-08): /ws/prompts streams borrowable
+units (method="retrieval", with heading + source_text for expand-to-source).
+POST /prompts/generate is the demoted, user-gated LLM path (D-02).
+"""
+
 import asyncio
 import logging
+from typing import Any, Dict
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
 from src.api.routes.session import get_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["prompts"])
+
+
+class GenerateRequest(BaseModel):
+    trigger_text: str
+    trigger_type: str = "question"
+
+
+@router.post("/prompts/generate")
+def generate_on_demand(req: GenerateRequest) -> Dict[str, Any]:
+    """User-gated LLM answer for a trigger (sync — runs in the threadpool)."""
+    text = req.trigger_text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="trigger_text must be non-empty")
+    session = get_session()
+    orchestrator = getattr(session, "_orchestrator", None)
+    if orchestrator is None:
+        raise HTTPException(status_code=409, detail="no active session — start a meeting first")
+    result = orchestrator.generate_for_text(text, req.trigger_type)
+    if result is None or not result.answer or result.answer.startswith("["):
+        return {"answer": "", "note": "no grounded answer available"}
+    return {
+        "answer": result.answer,
+        "confidence": result.confidence,
+        "method": result.method,
+        "latency_ms": result.latency_ms,
+        "source": result.source,
+    }
 
 
 @router.websocket("/ws/prompts")
@@ -57,7 +92,8 @@ async def prompts_ws(ws: WebSocket) -> None:
 
     try:
         done, pending = await asyncio.wait(
-            [sender, receiver], return_when=asyncio.FIRST_COMPLETED,
+            [sender, receiver],
+            return_when=asyncio.FIRST_COMPLETED,
         )
         for task in pending:
             task.cancel()

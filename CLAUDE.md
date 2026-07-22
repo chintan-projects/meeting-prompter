@@ -37,6 +37,8 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │   │   ├── prompts.py             # ChatML prompt templates per trigger type
 │   │   ├── generator.py           # ModeAwareGenerator — trigger-routed generation
 │   │   └── types.py               # GenerationResult dataclass
+│   ├── corpus/                    # Corpus prep (D-09/ADR-001): distiller (heuristic/local/cloud),
+│   │                              #   readiness score, incremental re-distill, active-corpus state
 │   ├── notion/                    # Notion integration (export + RAG ingest)
 │   │   ├── client.py              # Notion API client (retry/backoff, rate-limit safe)
 │   │   ├── exporter.py            # Meeting notes/transcript → Notion page
@@ -64,6 +66,7 @@ Real-time meeting intelligence system. Listens to audio, transcribes via LFM2.5-
 │       ├── prompts.py             # WebSocket /ws/prompts (trigger results)
 │       ├── notes.py               # Notes generate/export/save/download endpoints
 │       ├── notion.py              # GET /notion/status, POST /notion (export + RAG sync)
+│       ├── corpus.py              # Prepare-corpus flow: status/upload/distill/readiness/activate
 │       └── context.py             # Meeting context upload
 ├── app/                           # Tauri + React frontend
 │   ├── src-tauri/src/lib.rs       # Rust shell: spawns Python backend, manages lifecycle
@@ -234,6 +237,21 @@ Disabled by default; enable in `config.yaml` (`notion.enabled`) + `NOTION_API_TO
 env var. Rate limits (429) handled via `max_retries` / `initial_backoff_s`. Use the
 `notion-sync` skill for setup and operation.
 
+### Prepare Corpus (F-701..F-706, D-08/D-09, ADR-001)
+
+Retrieval-first product: live answers are borrowable spans of the user's corpus, so
+corpus quality is the ceiling. The "Prepare corpus" flow (`CorpusPrep.tsx` from
+Meeting Setup → `routes/corpus.py`) runs: add sources → **distill** into grounded,
+provenance-tagged answer-units (`lib/corpus/distiller.py`; backends: `local`
+on-device model = shipped default, `heuristic` floor, `cloud` offline-dev only) →
+**readiness score** (`lib/corpus/readiness.py`, local rater: answer-shapedness +
+retrieval confidence + term overlap; `POST /corpus/readiness`) → **activate**
+(`data/corpus_active.json`, own index DB, applies at next session start).
+Re-distills are incremental per content hash (`lib/corpus/incremental.py`).
+Held-out eval set: `tests/eval/corpus_questions.yaml` (21 questions — never tune
+the distiller against it). Cloud judge (`scripts/lab/judge.py`) stays offline for
+calibration.
+
 ### Key Design Decisions
 
 - **Turn-based transcript buffering**: Backend accumulates raw ASR chunks into speech turns via pause detection. Frontend receives coherent paragraphs, not fragmented chunks.
@@ -262,7 +280,9 @@ env var. Rate limits (429) handled via `max_retries` / `initial_backoff_s`. Use 
 - `low_confidence: true` marks a flagged best-effort speaker label (conference-room regime) — the UI shows a "~ best guess" badge.
 
 **`/ws/prompts`** — Intelligence results with display metadata:
-- Server → Client: `{"type": "prompt", "trigger_type": "question", "trigger_text": "...", "answer": "...", "confidence": 0.75, "method": "hybrid", "latency_ms": 480, "source": "deployment.md", "persistence": "persistent", "dismiss_ms": 0, "display_label": "ANSWER", "display_emoji": "💡"}`
+- Server → Client: `{"type": "prompt", "trigger_type": "question", "trigger_text": "...", "answer": "...", "confidence": 0.75, "method": "retrieval", "latency_ms": 480, "source": "deployment.md", "heading": "Part 1 > 1.3", "source_text": "full borrowable unit ...", "persistence": "persistent", "dismiss_ms": 0, "display_label": "ANSWER", "display_emoji": "💡"}`
+- The default live path is **retrieval-first** (F-705/D-08, `triggers.retrieval_first`): `method: "retrieval"`, `answer` = glanceable sentence(s) of the best borrowable unit, `source_text` = the full unit for expand-to-source, `heading` = provenance. LLM answers (`method: "hybrid"/...`) appear only from the legacy path (`retrieval_first: false`) or on-demand.
+- Client → Server (HTTP, not WS): `POST /prompts/generate {"trigger_text": "...", "trigger_type": "question"}` → `{"answer", "confidence", "method", "latency_ms", "source"}` — the demoted, user-gated generation path (D-02).
 - Dead-end results (`no_match`, `no_context`, `suppressed`, or empty answer) are filtered server-side and never sent to the client.
 
 When adding or changing a message shape, update this section in the same change — it is

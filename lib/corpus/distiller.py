@@ -109,6 +109,20 @@ def _distill_heuristic(heading: str, text: str, mode: str = "atomic") -> list[st
     return [_topic_prefix(heading, " ".join(picked))]
 
 
+def max_output_tokens(input_chars: int, consolidated: bool) -> int:
+    """Output budget for one cloud call, scaled to the input.
+
+    A consolidated unit restates everything borrowable in the section, so its
+    length tracks the input. A flat 900 truncated every topic-level unit (whole
+    Parts, up to MAX_TOPIC_CHARS) and every large section — the JSON came back
+    cut mid-string and the whole topic tier silently produced nothing. Budget
+    ~1 output token per 3 input chars, clamped to a sane floor/ceiling.
+    """
+    if not consolidated:
+        return 700  # atomic units are 1-5 short statements regardless of input
+    return max(900, min(4000, input_chars // 3))
+
+
 def _distill_cloud(heading: str, text: str, mode: str = "atomic") -> list[str]:
     """Cloud backend (offline/opt-in): Claude reshapes the RAW section into units.
 
@@ -129,11 +143,22 @@ def _distill_cloud(heading: str, text: str, mode: str = "atomic") -> list[str]:
     try:
         resp = cloud.get_client().messages.create(
             model=cloud.CLOUD_MODEL,
-            max_tokens=900 if consolidated else 700,
+            max_tokens=max_output_tokens(len(user), consolidated),
             system=system,
             output_config={"format": {"type": "json_schema", "schema": schema}},
             messages=[{"role": "user", "content": user}],
         )
+        if getattr(resp, "stop_reason", None) == "max_tokens":
+            # Structured output truncated mid-string: json.loads would raise an
+            # opaque "Unterminated string" and the section would look like a model
+            # failure. Name it for what it is — the budget, not the model.
+            logger.warning(
+                "cloud extract TRUNCATED at max_tokens on %r (input %d chars) — "
+                "raise the output budget; section dropped",
+                heading,
+                len(user),
+            )
+            return []
         txt = next(b.text for b in resp.content if b.type == "text")
         data = json.loads(txt)
         if consolidated:
@@ -242,11 +267,19 @@ def distill(
     # 2. Topic-level units — one consolidated answer per multi-section Part, so
     #    compound questions whose answer spans sub-sections (e.g. INT4 "how much"
     #    in 1.3 + "where degrades" in 1.9) get a single unit that covers both.
+    n_topics_failed = 0
     for part, secs in _group_by_part(doc.sections).items():
         if len(secs) < 2:
             continue  # single-section Part == its section unit; nothing to merge
         content = "\n\n".join(s.content for s in secs)[:MAX_TOPIC_CHARS]
-        for u in fn(part, content, "consolidated"):
+        units = fn(part, content, "consolidated")
+        if not units:
+            # Topic units are the compound-question lever; losing them all while
+            # the run still "succeeds" is exactly how the cloud truncation bug
+            # stayed invisible. Count them.
+            n_topics_failed += 1
+            continue
+        for u in units:
             n_units += 1
             n_topics += 1
             _emit(lines, src.name, f"Topic — {part}", u, f"{part} (topic)")
@@ -255,11 +288,18 @@ def distill(
     out.write_text("\n".join(lines), encoding="utf-8")
     if n_failed:
         logger.warning("%d substantive section(s) produced no units", n_failed)
+    if n_topics_failed:
+        logger.warning(
+            "%d topic-level unit(s) produced nothing — the compound-question lever "
+            "is missing from this corpus",
+            n_topics_failed,
+        )
     stats: dict[str, Any] = {
         "backend": backend,
         "mode": mode,
         "sections_used": n_sections,
         "topic_units": n_topics,
+        "topics_failed": n_topics_failed,
         "units": n_units,
         "sections_empty": n_failed,
         "out": str(out),

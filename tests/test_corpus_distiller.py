@@ -213,6 +213,42 @@ def test_local_backend_unavailable_fails_fast(monkeypatch: pytest.MonkeyPatch) -
         distiller.distill(Path("/x.md"), Path("/y.md"), backend="local")
 
 
+# --- cloud output budget (truncation bug) ----------------------------------
+def test_output_budget_scales_with_input_for_consolidated() -> None:
+    # A whole-Part topic unit (MAX_TOPIC_CHARS) needs far more than the old flat
+    # 900 — that truncated the JSON mid-string and killed every topic unit.
+    assert distiller.max_output_tokens(distiller.MAX_TOPIC_CHARS, consolidated=True) > 900
+    assert distiller.max_output_tokens(600, consolidated=True) == 900  # floor for small
+    assert distiller.max_output_tokens(10**6, consolidated=True) <= 4000  # ceiling
+
+
+def test_output_budget_flat_for_atomic() -> None:
+    # Atomic units are 1-5 short statements regardless of section size.
+    assert distiller.max_output_tokens(500, consolidated=False) == 700
+    assert distiller.max_output_tokens(distiller.MAX_TOPIC_CHARS, consolidated=False) == 700
+
+
+def test_cloud_truncation_returns_empty_not_a_json_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A max_tokens stop must be reported as truncation, not surface as a
+    JSONDecodeError on the half-written string."""
+
+    class _Resp:
+        stop_reason = "max_tokens"
+        content = [type("B", (), {"type": "text", "text": '{"answer": "half a sent'})()]
+
+    class _Messages:
+        def create(self, **kwargs: object) -> _Resp:
+            return _Resp()
+
+    monkeypatch.setattr(
+        distiller.cloud, "get_client", lambda: type("C", (), {"messages": _Messages()})()
+    )
+    text = " ".join(["word"] * 200)
+    assert distiller._distill_cloud("Part 1 — Big", text, "consolidated") == []
+
+
 # --- backend guard rails ---------------------------------------------------
 def test_distill_rejects_unknown_backend(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unknown distiller backend"):
@@ -234,3 +270,26 @@ def test_lab_wrapper_reexports_distiller() -> None:
 
     assert lab_distiller.distill is distiller.distill
     assert lab_distiller.MAX_UNIT_WORDS == distiller.MAX_UNIT_WORDS
+
+
+# --- CLI overwrite guard ---------------------------------------------------
+def test_cli_refuses_to_overwrite_a_different_backends_corpus(tmp_path: Path) -> None:
+    from scripts.lab.distiller import _guard_overwrite, _meta_path
+
+    out = tmp_path / "c.distilled.md"
+    out.write_text("cloud corpus", encoding="utf-8")
+    _meta_path(out).write_text('{"backend": "cloud", "units": 74}', encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        _guard_overwrite(out, "local", force=False)
+
+    _guard_overwrite(out, "local", force=True)  # --force is the escape hatch
+    _guard_overwrite(out, "cloud", force=False)  # same backend = ordinary re-run
+
+
+def test_cli_overwrite_guard_is_silent_without_provenance(tmp_path: Path) -> None:
+    from scripts.lab.distiller import _guard_overwrite
+
+    out = tmp_path / "c.distilled.md"
+    out.write_text("corpus with no meta", encoding="utf-8")
+    _guard_overwrite(out, "local", force=False)  # unknown provenance → don't block

@@ -21,6 +21,8 @@ Run the distiller first:  python -m scripts.lab.distiller <src.md> [--backend cl
 from __future__ import annotations
 
 import argparse
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +36,8 @@ from lib.rag_engine import RAGEngine
 from scripts.lab.pipeline import SAMPLE_SPANS, TOP_K
 
 DISTILLED_DIR = Path("data/distilled")
-DISTILLED_DB = Path("data/rag_distilled.db")
-ORIGINAL_DB = Path("data/rag_compare_orig.db")
+# NOTE: no module-level DB paths. Each _score() call indexes into its own temp
+# directory — shared fixed paths made concurrent runs corrupt each other.
 
 
 def _mk(docs_dir: Path, db: Path) -> RAGEngine:
@@ -70,14 +72,22 @@ def load_questions(path: Path) -> list[str]:
     return [str(q["text"]) for q in data["questions"]]
 
 
-def _score(docs_dir: Path, db: Path, questions: list[str], rater: Rater) -> dict[str, Any]:
-    for suffix in ("", "-wal", "-shm"):
-        Path(f"{db}{suffix}").unlink(missing_ok=True)
-    engine = _mk(docs_dir, db)
+def _score(docs_dir: Path, label: str, questions: list[str], rater: Rater) -> dict[str, Any]:
+    """Index `docs_dir` into a PRIVATE throwaway DB and score it.
+
+    The index must be built fresh (the corpus changes between runs), but it must
+    not live at a fixed shared path: this used to delete `data/rag_*.db*` and
+    rebuild in place, so two concurrent runs — or a background job and a terminal
+    — silently destroyed each other's SQLite files mid-query ("disk I/O error").
+    A per-run temp directory makes concurrent comparisons safe by construction.
+    """
+    tmp = Path(tempfile.mkdtemp(prefix=f"corpus_cmp_{label}_"))
+    engine = _mk(docs_dir, tmp / "index.db")
     try:
         return readiness(engine.retrieve, questions, rater=rater, top_k=TOP_K)
     finally:
         engine.close()
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main() -> None:
@@ -109,8 +119,8 @@ def main() -> None:
             print(f"(no credential — using local rater; {_judge.credential_hint()})")
 
     cfg = load_config()
-    orig = _score(get_docs_dir(cfg.paths.docs_dir), ORIGINAL_DB, questions, rater)
-    dist = _score(DISTILLED_DIR, DISTILLED_DB, questions, rater)
+    orig = _score(get_docs_dir(cfg.paths.docs_dir), "orig", questions, rater)
+    dist = _score(DISTILLED_DIR, "dist", questions, rater)
 
     print(f"\nRater: {rater_name}    Questions: {len(questions)}")
     print(f"{'QUESTION':<58}  {'ORIGINAL':<10}  DISTILLED")
